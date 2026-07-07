@@ -32,4 +32,4 @@ For the full time series, download `vcs-signals-recent.db` (rolling 400-day wind
 
 ## Caveats
 
-Star history is forward-only: GitHub restricted the list-stargazers endpoint in 2026, so `signals_series` for `stars` only begins at the point this pipeline started collecting. Figures are best-effort, not absolute.
+Star history is reconstructed from the GraphQL `stargazers` connection timestamps back to each repository's creation, then maintained forward daily; only the REST list-stargazers endpoint is restricted, not the GraphQL connection. Figures are best-effort, not absolute.

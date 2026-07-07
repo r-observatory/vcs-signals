@@ -424,7 +424,39 @@ build_signals_summary <- function(latest, series, repos, repo_packages, today) {
   do.call(rbind, rows)
 }
 
+# ---- historical star-series reconstruction ----------------------------------
+#' Reconstruct a repo's daily-cumulative star series from raw
+#' stargazers.starredAt timestamps (any order). One row per distinct UTC
+#' calendar day on which the repo gained a star, value = cumulative star
+#' count as of the end of that day, ordered ascending by date. Pure; sorts
+#' defensively so callers need not guarantee ASC input. Every distinct-day
+#' row is already a change point (cumulative strictly increases day over
+#' day), so the sparse/change-only invariant of signals_series holds by
+#' construction.
+#'
+#' @param repo_id    character scalar
+#' @param starred_at character vector of ISO-8601 starredAt timestamps
+#' @return data.frame(repo_id, date, metric, value) - metric is always "stars"
+reconstruct_star_series <- function(repo_id, starred_at) {
+  empty <- data.frame(repo_id = character(), date = character(), metric = character(),
+                      value = integer(), stringsAsFactors = FALSE)
+  if (is.null(starred_at) || length(starred_at) == 0) return(empty)
+
+  days <- sort(substr(starred_at, 1, 10))
+  counts <- table(days)          # names(counts) sorted ascending (ISO dates sort lexicographically)
+  dates <- names(counts)
+  data.frame(repo_id = rep(repo_id, length(dates)), date = dates, metric = "stars",
+             value = as.integer(cumsum(as.integer(counts))), stringsAsFactors = FALSE)
+}
+
 # ---- shard + manifest helpers ------------------------------------------------
+#' Even mod-N index slice: which rows (1-based) of an n-row table belong to
+#' shard i (0-based, 0 <= i < N). Used to split a roster across matrix jobs
+#' more evenly than a first-letter/name bucket would.
+shard_rows <- function(n, i, N) {
+  if (n == 0L || N <= 0L) return(integer(0))
+  which(((seq_len(n) - 1L) %% N) == i)
+}
 
 #' Extract all signals_series rows for a single year.
 #'

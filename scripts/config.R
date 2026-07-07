@@ -51,3 +51,7 @@ RECENT_WINDOW  <- 400L   # days of series kept in the recent shard
 REVISION_WINDOW<- 10L    # trailing days re-materialized each run (must be < RECENT_WINDOW)
 POINT_RESERVE  <- 1500L  # GraphQL points left unspent as headroom
 BATCH_DELAY_S  <- 0.35   # pause between GraphQL batches, to stay well under secondary rate limits
+
+# ---- historical star-history backfill ----
+STARGAZER_PAGE   <- 100L  # stargazers per GraphQL page
+BACKFILL_DELAY_S <- 0.8   # pause between stargazer pages: each page costs 1 GraphQL point, so this keeps a single token under the 5000-points/hour primary budget (~4500/hr)
