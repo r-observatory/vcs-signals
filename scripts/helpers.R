@@ -315,3 +315,52 @@ chunk <- function(x, n) {
   if (length(x) == 0) return(list())
   split(x, ceiling(seq_along(x) / n))
 }
+
+# ---- series schema + materialization ----------------------------------
+ensure_series_schema <- function(con) {
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS signals_series (
+    repo_id TEXT NOT NULL, date TEXT NOT NULL, metric TEXT NOT NULL, value INTEGER NOT NULL,
+    PRIMARY KEY (repo_id, date, metric))")
+  DBI::dbExecute(con, "CREATE INDEX IF NOT EXISTS idx_series_date ON signals_series(date)")
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS series_latest (
+    repo_id TEXT NOT NULL, metric TEXT NOT NULL, value INTEGER NOT NULL,
+    PRIMARY KEY (repo_id, metric))")
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_signals_summary (
+    package TEXT NOT NULL, origin TEXT NOT NULL, repo_id TEXT,
+    stars INTEGER, forks INTEGER, issues_open INTEGER, prs_open INTEGER,
+    commits_total INTEGER, releases_total INTEGER, last_commit_date TEXT,
+    license TEXT, topics TEXT, is_archived INTEGER, trend_30d REAL,
+    first_seen TEXT, last_seen TEXT, PRIMARY KEY (package, origin))")
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS pipeline_state (key TEXT PRIMARY KEY, value TEXT)")
+  invisible(TRUE)
+}
+
+gauges_to_long <- function(snapshot, repo_map) {
+  if (is.null(snapshot) || nrow(snapshot) == 0)
+    return(data.frame(repo_id = character(), metric = character(), value = integer(), stringsAsFactors = FALSE))
+  m <- merge(snapshot, repo_map[, c("node_id", "repo_id")], by = "node_id")
+  out <- list()
+  for (metric in FORWARD_METRICS) {
+    if (!metric %in% names(m)) next
+    v <- m[[metric]]
+    keep <- !is.na(v)
+    if (any(keep)) out[[metric]] <- data.frame(repo_id = m$repo_id[keep], metric = metric,
+                                               value = as.integer(v[keep]), stringsAsFactors = FALSE)
+  }
+  if (length(out) == 0)
+    return(data.frame(repo_id = character(), metric = character(), value = integer(), stringsAsFactors = FALSE))
+  do.call(rbind, out)
+}
+
+materialize_series <- function(prev_latest, snapshot_long, date) {
+  k <- function(rid, met) paste(rid, met, sep = "\r")
+  prev <- if (nrow(prev_latest)) setNames(as.integer(prev_latest$value), k(prev_latest$repo_id, prev_latest$metric)) else integer(0)
+  changed <- vapply(seq_len(nrow(snapshot_long)), function(i) {
+    pv <- prev[k(snapshot_long$repo_id[i], snapshot_long$metric[i])]
+    is.null(pv) || is.na(pv) || pv != snapshot_long$value[i]
+  }, logical(1))
+  r <- snapshot_long[changed, , drop = FALSE]
+  list(series_rows = data.frame(repo_id = r$repo_id, date = date, metric = r$metric,
+                                value = as.integer(r$value), stringsAsFactors = FALSE),
+       new_latest = snapshot_long)
+}
