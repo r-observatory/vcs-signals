@@ -40,3 +40,46 @@ build_resolve_query <- function(owners, names) {
     i - 1L, owners[i], names[i]), "")
   sprintf('query { %s }', paste(parts, collapse = "\n"))
 }
+
+# ---- response parsers ------------------------------------------------------
+.nn <- function(x, default) if (is.null(x)) default else x
+
+parse_gauges <- function(nodes) {
+  rows <- lapply(nodes, function(n) {
+    if (is.null(n)) return(NULL)
+    topics <- vapply(.nn(n$repositoryTopics$nodes, list()),
+                     function(t) .nn(t$topic$name, ""), "")
+    data.frame(
+      node_id = n$id, name_with_owner = n$nameWithOwner,
+      stars = .nn(n$stargazerCount, NA_integer_), forks = .nn(n$forkCount, NA_integer_),
+      watchers = .nn(n$watchers$totalCount, NA_integer_),
+      issues_open = .nn(n[["issues_open"]]$totalCount, NA_integer_),
+      issues_closed = .nn(n[["issues_closed"]]$totalCount, NA_integer_),
+      prs_open = .nn(n[["prs_open"]]$totalCount, NA_integer_),
+      prs_closed = .nn(n[["prs_closed"]]$totalCount, NA_integer_),
+      prs_merged = .nn(n[["mergedPRs"]]$totalCount, NA_integer_),
+      releases_total = .nn(n$releases$totalCount, NA_integer_),
+      size_kb = .nn(n$diskUsage, NA_integer_),
+      license = .nn(n$licenseInfo$spdxId, NA_character_),
+      topics = paste(topics, collapse = ","),
+      is_archived = as.integer(isTRUE(n$isArchived)),
+      is_fork = as.integer(isTRUE(n$isFork)),
+      is_mirror = as.integer(isTRUE(n$isMirror)),
+      created_at = .nn(n$createdAt, NA_character_),
+      pushed_at = .nn(n$pushedAt, NA_character_),
+      last_release_at = .nn(n$latestRelease$publishedAt, NA_character_),
+      stringsAsFactors = FALSE)
+  })
+  rows <- Filter(Negate(is.null), rows)
+  if (length(rows) == 0) return(rows_df_empty_gauges())
+  do.call(rbind, rows)
+}
+
+rows_df_empty_gauges <- function() {
+  data.frame(node_id = character(), name_with_owner = character(), stars = integer(),
+    forks = integer(), watchers = integer(), issues_open = integer(), issues_closed = integer(),
+    prs_open = integer(), prs_closed = integer(), prs_merged = integer(), releases_total = integer(),
+    size_kb = integer(), license = character(), topics = character(), is_archived = integer(),
+    is_fork = integer(), is_mirror = integer(), created_at = character(), pushed_at = character(),
+    last_release_at = character(), stringsAsFactors = FALSE)
+}
