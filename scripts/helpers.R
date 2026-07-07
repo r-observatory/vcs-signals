@@ -264,11 +264,13 @@ write_repo_tables <- function(con, repos_df, repo_packages_df, today) {
 update_repo_node_ids <- function(con, resolved) {
   if (is.null(resolved) || nrow(resolved) == 0) return(invisible(TRUE))
   DBI::dbBegin(con)
+  ok <- FALSE
+  on.exit(if (!ok) tryCatch(DBI::dbRollback(con), error = function(e) NULL), add = TRUE)
   DBI::dbExecute(con,
     "UPDATE repos SET node_id=?, owner=?, name=?, name_with_owner=?, status=? WHERE repo_id=?",
     params = list(resolved$node_id, resolved$owner, resolved$name,
                   resolved$name_with_owner, resolved$status, resolved$repo_id))
-  DBI::dbCommit(con)
+  DBI::dbCommit(con); ok <- TRUE
   invisible(TRUE)
 }
 
@@ -625,14 +627,28 @@ protect_history_pull <- function(io, dir) {
 #' Export, change-gate, upload, and heartbeat: the full publish step.
 #'
 #' Pulls prior history (protect_history_pull) so the change-gate has
-#' something to hash against, exports every year shard present in
-#' signals_series plus the recent window (with the non-series tables
-#' embedded) plus the summary shard, hashes all of them, and uploads only
-#' the shards whose content actually changed (or every shard when
-#' force_full is TRUE). A run with no changed shards still rewrites and
-#' uploads manifest.json, so the release always has a fresh heartbeat even
-#' when nothing else changed.
-publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE) {
+#' something to hash against, exports the touched year shard(s) plus the
+#' recent window (with the non-series tables embedded) plus the summary
+#' shard, hashes all of them, and uploads only the shards whose content
+#' actually changed (or every shard when force_full is TRUE). A run with no
+#' changed shards still rewrites and uploads manifest.json, so the release
+#' always has a fresh heartbeat even when nothing else changed.
+#'
+#' `touched_years` (character vector of "YYYY" strings) restricts which year
+#' shards are re-exported this run: forward-only collection only ever writes
+#' rows for the current year, but the working DB's signals_series also
+#' carries the prior calendar year's spillover (RECENT_WINDOW=400 days), so
+#' re-exporting every year present in the working DB - as force_full does -
+#' would truncate the prior year's shard down to just its spillover rows,
+#' overwriting the complete shard protect_history_pull just downloaded. When
+#' force_full is TRUE or touched_years is NULL (unspecified), every year
+#' present in the working DB is exported (current behavior, used by
+#' full-rebuild runs). Otherwise only the years in touched_years are
+#' exported; touched_years = character(0) (a heartbeat run with no new rows)
+#' exports no year shard at all. Untouched years' shard files are left as
+#' whatever protect_history_pull pulled down, so their hashes match
+#' prev_hashes and they are never re-uploaded.
+publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touched_years = NULL) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
   pulled <- protect_history_pull(io, out_dir)
@@ -641,8 +657,8 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE) {
     vapply(prev_names, function(nm) shard_hash(file.path(out_dir, nm)), character(1)),
     prev_names)
 
-  year_rows <- DBI::dbGetQuery(con, "SELECT DISTINCT substr(date, 1, 4) AS yr FROM signals_series ORDER BY yr")
-  years <- as.integer(year_rows$yr)
+  all_years <- DBI::dbGetQuery(con, "SELECT DISTINCT substr(date, 1, 4) AS yr FROM signals_series WHERE date IS NOT NULL ORDER BY yr")$yr
+  years <- as.integer(if (isTRUE(force_full) || is.null(touched_years)) all_years else touched_years)
 
   shard_names <- character(0)
   for (yr in years) {

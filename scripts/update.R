@@ -180,7 +180,15 @@ run_update <- function(io, out_dir, opts = list()) {
   }
 
   # ---- Stage 5: publish --------------------------------------------------
-  invisible(publish(io, con, out_dir, tag, source_kind = "live", force_full = force_full))
+  # touched_years is derived from mat$series_rows (the change-only rows just
+  # materialized into signals_series this run), never from the working DB's
+  # full signals_series - so a forward run only re-exports the current
+  # year's shard, and a heartbeat run (no changed rows) re-exports none,
+  # leaving prior years' shards untouched. See publish()'s touched_years
+  # documentation in scripts/helpers.R for why this matters.
+  touched_years <- unique(substr(mat$series_rows$date, 1, 4))
+  invisible(publish(io, con, out_dir, tag, source_kind = "live", force_full = force_full,
+                     touched_years = touched_years))
 }
 
 # ---- gh-release IO for the real run ----------------------------------------
