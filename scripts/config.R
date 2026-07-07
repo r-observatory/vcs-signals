@@ -54,4 +54,4 @@ BATCH_DELAY_S  <- 0.35   # pause between GraphQL batches, to stay well under sec
 
 # ---- historical star-history backfill ----
 STARGAZER_PAGE   <- 100L  # stargazers per GraphQL page
-BACKFILL_DELAY_S <- 0.3   # pause between stargazer pages, to stay well under secondary rate limits
+BACKFILL_DELAY_S <- 0.8   # pause between stargazer pages: each page costs 1 GraphQL point, so this keeps a single token under the 5000-points/hour primary budget (~4500/hr)
