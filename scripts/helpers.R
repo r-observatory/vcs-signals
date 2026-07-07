@@ -172,3 +172,57 @@ build_repo_index <- function(resolved_df) {
     origin = resolved_df$origin, resolved_from = resolved_df$resolved_from, stringsAsFactors = FALSE))
   list(repos = repos, repo_packages = repo_packages)
 }
+
+# ---- schema + persistence --------------------------------------------------
+ensure_repo_schema <- function(con) {
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS repos (
+    repo_id TEXT PRIMARY KEY, node_id TEXT, host TEXT NOT NULL, host_domain TEXT NOT NULL,
+    owner TEXT NOT NULL, name TEXT NOT NULL, name_with_owner TEXT NOT NULL,
+    supported INTEGER NOT NULL, n_packages INTEGER NOT NULL,
+    first_seen TEXT NOT NULL, last_seen TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active')")
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS repo_packages (
+    repo_id TEXT NOT NULL, package TEXT NOT NULL, origin TEXT NOT NULL, resolved_from TEXT NOT NULL,
+    PRIMARY KEY (repo_id, package, origin))")
+  DBI::dbExecute(con, "CREATE INDEX IF NOT EXISTS idx_rp_package ON repo_packages(package)")
+  DBI::dbExecute(con, "CREATE INDEX IF NOT EXISTS idx_repos_host ON repos(host)")
+  invisible(TRUE)
+}
+
+write_repo_tables <- function(con, repos_df, repo_packages_df, today) {
+  ensure_repo_schema(con)
+  existing <- DBI::dbGetQuery(con, "SELECT repo_id, status FROM repos")
+  DBI::dbBegin(con)
+  ok <- FALSE
+  on.exit(if (!ok) tryCatch(DBI::dbRollback(con), error = function(e) NULL), add = TRUE)
+  for (i in seq_len(nrow(repos_df))) {
+    r <- repos_df[i, ]
+    ex <- existing[existing$repo_id == r$repo_id, ]
+    if (nrow(ex) == 0) {
+      DBI::dbExecute(con, "INSERT INTO repos
+        (repo_id,node_id,host,host_domain,owner,name,name_with_owner,supported,n_packages,first_seen,last_seen,status)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        params = list(r$repo_id, NA_character_, r$host, r$host_domain, r$owner, r$name, r$name_with_owner,
+                      r$supported, r$n_packages, today, today, "active"))
+    } else {
+      new_status <- if (ex$status %in% c("gone", "moved")) ex$status else "active"
+      DBI::dbExecute(con, "UPDATE repos SET
+        host=?,host_domain=?,owner=?,name=?,name_with_owner=?,supported=?,n_packages=?,last_seen=?,status=?
+        WHERE repo_id=?",
+        params = list(r$host, r$host_domain, r$owner, r$name, r$name_with_owner, r$supported,
+                      r$n_packages, today, new_status, r$repo_id))
+    }
+  }
+  gone <- setdiff(existing$repo_id, repos_df$repo_id)
+  for (id in gone) {
+    DBI::dbExecute(con, "UPDATE repos SET status='retired' WHERE repo_id=? AND status NOT IN ('gone')",
+                   params = list(id))
+  }
+  DBI::dbExecute(con, "DELETE FROM repo_packages")
+  if (nrow(repo_packages_df) > 0) {
+    DBI::dbExecute(con, "INSERT INTO repo_packages (repo_id,package,origin,resolved_from) VALUES (?,?,?,?)",
+      params = list(repo_packages_df$repo_id, repo_packages_df$package,
+                    repo_packages_df$origin, repo_packages_df$resolved_from))
+  }
+  DBI::dbCommit(con); ok <- TRUE
+  invisible(TRUE)
+}
