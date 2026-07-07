@@ -142,6 +142,7 @@ collect_batched <- function(io, ids, batch_size, build_query, parse_nodes) {
   while (length(queue) > 0) {
     b <- queue[[1]]; queue <- queue[-1]
     res <- tryCatch(io$graphql(build_query(b)), error = function(e) list(.err = TRUE))
+    Sys.sleep(BATCH_DELAY_S)
     ok <- is.list(res) && is.null(res$.err) && is.null(res$errors) && !is.null(res$data)
     if (ok) {
       df <- parse_nodes(res$data$nodes)
@@ -164,7 +165,7 @@ collect_gauges <- function(io, node_ids) {
   list(snapshot = snapshot, deferred = unique(c(cheap$deferred, commit$deferred)))
 }
 
-# ---- node-id resolution stage ----------------------------------------
+# ---- node-id resolution stage ----------------------------------------------
 #' Resolve node ids for repos needing them, one CHEAP_BATCH-sized query at a
 #' time. A batch whose response is unusable (io$graphql throws, res$errors is
 #' non-null, or res$data is NULL - e.g. a rate limit or transient 502) is
@@ -181,6 +182,7 @@ resolve_node_ids <- function(io, repos_needing) {
     sub <- repos_needing[rowset, , drop = FALSE]
     res <- tryCatch(io$graphql(build_resolve_query(sub$owner, sub$name)),
                      error = function(e) list(.err = TRUE))
+    Sys.sleep(BATCH_DELAY_S)
     ok <- is.list(res) && is.null(res$.err) && is.null(res$errors) && !is.null(res$data)
     if (!ok) return(NULL)
     pr <- parse_resolve(res$data, nrow(sub))
@@ -203,7 +205,7 @@ resolve_node_ids <- function(io, repos_needing) {
   do.call(rbind, out)
 }
 
-# ---- rate-limit preflight ------------------------
+# ---- rate-limit preflight ---------------------------------------------------
 #' Remaining GraphQL rate-limit points, or Inf when the response carries no
 #' rateLimit field at all (transport error, or a fake io in existing tests
 #' that does not mock rateLimit - both treated as "unlimited", so this never

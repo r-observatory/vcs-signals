@@ -50,3 +50,4 @@ COMMIT_BATCH   <- 15L    # repos per commit-count query (history.totalCount 502s
 RECENT_WINDOW  <- 400L   # days of series kept in the recent shard
 REVISION_WINDOW<- 10L    # trailing days re-materialized each run (must be < RECENT_WINDOW)
 POINT_RESERVE  <- 1500L  # GraphQL points left unspent as headroom
+BATCH_DELAY_S  <- 0.5    # pause between GraphQL batches, to stay well under secondary rate limits

@@ -328,13 +328,13 @@ print_coverage <- function(input, resolved, idx) {
   invisible(NULL)
 }
 
-# ---- batching --------------------------------------------------------
+# ---- batching --------------------------------------------------------------
 chunk <- function(x, n) {
   if (length(x) == 0) return(list())
   split(x, ceiling(seq_along(x) / n))
 }
 
-# ---- series schema + materialization ----------------------------------
+# ---- series schema + materialization ----------------------------------------
 ensure_series_schema <- function(con) {
   DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS signals_series (
     repo_id TEXT NOT NULL, date TEXT NOT NULL, metric TEXT NOT NULL, value INTEGER NOT NULL,
@@ -424,7 +424,7 @@ build_signals_summary <- function(latest, series, repos, repo_packages, today) {
   do.call(rbind, rows)
 }
 
-# ---- shard + manifest helpers ------------
+# ---- shard + manifest helpers ------------------------------------------------
 
 #' Extract all signals_series rows for a single year.
 #'
@@ -527,11 +527,10 @@ write_manifest <- function(path, changed_shards, tag, summary) {
   writeLines(json, path)
 }
 
-# ---- publisher: change-gate, protect-history, heartbeat ---------------
-# Ported from the bioconductor-downloads safety kit (scripts/helpers.R and
-# scripts/update.R), adapted to this pipeline's shard names
-# (vcs-signals-<YYYY>.db, vcs-signals-recent.db, vcs-signals-summary.db) and
-# the signals_series schema (repo_id, date, metric, value).
+# ---- publisher: change-gate, protect-history, heartbeat --------------------
+# Handles this pipeline's shard names (vcs-signals-<YYYY>.db,
+# vcs-signals-recent.db, vcs-signals-summary.db) and the signals_series
+# schema (repo_id, date, metric, value).
 
 #' Content hash of a single shard file, for change detection across runs.
 #'

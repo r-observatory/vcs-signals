@@ -15,7 +15,7 @@ source("scripts/helpers.R")
 source("scripts/github.R")
 suppressPackageStartupMessages({ library(DBI); library(RSQLite) })
 
-# ---- acquisition (unchanged) -------------------------------------------
+# ---- acquisition ------------------------------------------------------------
 acquire_cran <- function() {
   pdb <- tools::CRAN_package_db()
   pdb <- pdb[!duplicated(pdb$Package), ]
@@ -140,12 +140,18 @@ run_update <- function(io, out_dir, opts = list()) {
     "SELECT repo_id, owner, name FROM repos WHERE host = 'github' AND node_id IS NULL AND status = 'active'")
   resolved_ids <- resolve_node_ids(io, needing)
   update_repo_node_ids(con, resolved_ids)
+  n_id_resolved <- sum(resolved_ids$status == "active")
+  n_id_gone <- sum(resolved_ids$status == "gone")
+  n_id_deferred <- nrow(needing) - nrow(resolved_ids)
+  cat(sprintf("node ids: %d resolved, %d deferred, %d gone\n", n_id_resolved, n_id_deferred, n_id_gone))
 
   # ---- Stage 3: forward gauge collection over active github repos -------
   repo_map <- DBI::dbGetQuery(con,
     "SELECT node_id, repo_id FROM repos WHERE host = 'github' AND status = 'active' AND node_id IS NOT NULL")
   gauges <- collect_gauges(io, repo_map$node_id)
   snapshot_long <- gauges_to_long(gauges$snapshot, repo_map)
+  n_gauges_collected <- if (!is.null(gauges$snapshot)) nrow(gauges$snapshot) else 0L
+  cat(sprintf("gauges: collected %d repos, %d deferred\n", n_gauges_collected, length(gauges$deferred)))
 
   # ---- Stage 4: materialize series + summary + go-live watermark --------
   # I4 floor: when this run collected nothing at all (every repo deferred -
