@@ -124,6 +124,31 @@ run_merge <- function(io, out_dir, parts_dir) {
   ensure_repo_schema(con)
   ensure_series_schema(con)
 
+  # Load the COMPLETE published history into the working DB, not just the
+  # recent-window tail seed_working_db pulled. protect_history_pull downloads
+  # the manifest, the recent shard, and every published year shard named in
+  # manifest$summary$years; each year shard's signals_series rows are folded in
+  # with INSERT OR IGNORE, so the recent-window overlap dedupes on the
+  # (repo_id, date, metric) primary key. Without this, publish() would re-export
+  # each touched year from an incomplete working DB and truncate forward rows -
+  # of ALL metrics (forks/issues/PRs/releases and the forward stars points) -
+  # that have aged out of the 400-day recent window. publish() re-pulls these
+  # same shards afterward (idempotent), so the redundant download is harmless;
+  # what matters is that this load happens before publish() re-exports.
+  protect_history_pull(io, out_dir)
+  year_shards <- list.files(out_dir, pattern = "^vcs-signals-[0-9]{4}\\.db$", full.names = TRUE)
+  for (ys in year_shards) {
+    ycon <- DBI::dbConnect(RSQLite::SQLite(), ys)
+    yrows <- tryCatch(
+      if (DBI::dbExistsTable(ycon, "signals_series")) DBI::dbReadTable(ycon, "signals_series") else NULL,
+      error = function(e) NULL)
+    DBI::dbDisconnect(ycon)
+    if (!is.null(yrows) && nrow(yrows) > 0)
+      DBI::dbExecute(con,
+        "INSERT OR IGNORE INTO signals_series (repo_id, date, metric, value) VALUES (?,?,?,?)",
+        params = list(yrows$repo_id, yrows$date, yrows$metric, yrows$value))
+  }
+
   parts <- list.files(parts_dir, pattern = "^vcs-signals-shard-.*\\.db$", full.names = TRUE)
   part_rows <- lapply(parts, function(p) {
     pcon <- DBI::dbConnect(RSQLite::SQLite(), p)
