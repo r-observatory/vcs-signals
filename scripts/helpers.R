@@ -226,3 +226,16 @@ write_repo_tables <- function(con, repos_df, repo_packages_df, today) {
   DBI::dbCommit(con); ok <- TRUE
   invisible(TRUE)
 }
+
+# ---- universe guard --------------------------------------------------------
+universe_guard <- function(prev_pkgs, prev_repos, curr_pkgs, curr_repos, threshold = 0.10) {
+  if (is.null(prev_pkgs) || is.na(prev_pkgs) || prev_pkgs == 0) return(invisible(TRUE))
+  if (curr_pkgs < prev_pkgs * (1 - threshold))
+    stop(sprintf("universe guard: resolved packages dropped %d -> %d (> %.0f%%); aborting",
+                 prev_pkgs, curr_pkgs, threshold * 100))
+  if (!is.null(prev_repos) && !is.na(prev_repos) && prev_repos > 0 &&
+      curr_repos < prev_repos * (1 - threshold))
+    stop(sprintf("universe guard: unique repos dropped %d -> %d (> %.0f%%); aborting",
+                 prev_repos, curr_repos, threshold * 100))
+  invisible(TRUE)
+}
