@@ -1,0 +1,7 @@
+*.db
+out/
+.Rhistory
+.RData
+.Rproj.user
+docs/superpowers/
+.superpowers/
