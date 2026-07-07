@@ -19,3 +19,20 @@ test_that("write_manifest preserves empty changed_shards as []", {
   txt <- paste(readLines(p), collapse = "")
   expect_match(txt, '"changed_shards"\\s*:\\s*\\[\\]')
 })
+
+test_that("export_summary_shard writes the three tables", {
+  p <- tempfile(fileext = ".db"); on.exit(unlink(p))
+  summ <- data.frame(package = "pkgA", origin = "cran", repo_id = "R", stars = 5L, forks = 1L,
+    issues_open = 0L, prs_open = 0L, commits_total = 10L, releases_total = 0L,
+    last_commit_date = "2026-07-01", license = "MIT", topics = "r", is_archived = 0L,
+    trend_30d = NA_real_, first_seen = "2026-07-06", last_seen = "2026-07-06", stringsAsFactors = FALSE)
+  repos <- data.frame(repo_id = "R", node_id = NA_character_, host = "github", host_domain = "github.com",
+    owner = "o", name = "n", name_with_owner = "o/n", supported = 1L, n_packages = 1L,
+    first_seen = "2026-07-06", last_seen = "2026-07-06", status = "active", stringsAsFactors = FALSE)
+  rp <- data.frame(repo_id = "R", package = "pkgA", origin = "cran", resolved_from = "url", stringsAsFactors = FALSE)
+  export_summary_shard(p, summ, repos, rp)
+  c2 <- DBI::dbConnect(RSQLite::SQLite(), p); on.exit(DBI::dbDisconnect(c2), add = TRUE)
+  expect_equal(DBI::dbGetQuery(c2, "SELECT COUNT(*) n FROM vcs_signals_summary")$n, 1)
+  expect_equal(DBI::dbGetQuery(c2, "SELECT COUNT(*) n FROM repos")$n, 1)
+  expect_equal(DBI::dbGetQuery(c2, "SELECT COUNT(*) n FROM repo_packages")$n, 1)
+})

@@ -428,8 +428,8 @@ extract_year_rows <- function(con, year) {
 #' Extract the rolling N-day window of signals_series rows.
 #'
 #' @param con         SQLite connection
-#' @param today       Date — reference "now"
-#' @param window_days integer — how many days back, inclusive of cutoff
+#' @param today       Date - reference "now"
+#' @param window_days integer - how many days back, inclusive of cutoff
 #' @return data.frame(repo_id, date, metric, value)
 extract_recent_rows <- function(con, today, window_days) {
   cutoff <- format(today - as.integer(window_days), "%Y-%m-%d")
@@ -476,7 +476,7 @@ export_series_shard <- function(path, rows) {
 }
 
 #' Write a minimal SQLite file containing the vcs_signals_summary, repos,
-#' and repo_packages tables — the published "summary" shard.
+#' and repo_packages tables - the published "summary" shard.
 export_summary_shard <- function(path, summary_df, repos_df, repo_packages_df) {
   if (file.exists(path)) unlink(path)
 
@@ -497,7 +497,7 @@ export_summary_shard <- function(path, summary_df, repos_df, repo_packages_df) {
 
 #' Write the manifest.json describing which shards changed this run.
 #'
-#' Empty arrays are preserved (jsonlite default is to drop them — we force them).
+#' Empty arrays are preserved (jsonlite default is to drop them - we force them).
 write_manifest <- function(path, changed_shards, tag, summary) {
   obj <- list(
     tag            = tag,
