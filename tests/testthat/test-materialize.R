@@ -19,3 +19,11 @@ test_that("materialize_series emits only changed/new metrics", {
   expect_true(all(out$series_rows$date == "2026-07-06"))
   expect_equal(nrow(out$new_latest), 3)                  # new_latest is the full snapshot
 })
+
+test_that("materialize_series returns an empty frame when nothing changed", {
+  prev <- data.frame(repo_id = "R", metric = c("stars", "forks"), value = c(10L, 2L), stringsAsFactors = FALSE)
+  snap <- data.frame(repo_id = "R", metric = c("stars", "forks"), value = c(10L, 2L), stringsAsFactors = FALSE)
+  out <- materialize_series(prev, snap, "2026-07-06")
+  expect_equal(nrow(out$series_rows), 0)          # no crash, empty frame
+  expect_equal(nrow(out$new_latest), 2)           # new_latest still the full snapshot
+})
