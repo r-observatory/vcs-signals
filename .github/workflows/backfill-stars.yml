@@ -60,3 +60,10 @@ jobs:
           VCS_OUT: out
           VCS_PARTS: out
         run: Rscript scripts/backfill.R merge
+      - name: Refresh release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -f out/release_notes.md ]; then
+            gh release edit current --repo ${{ github.repository }} --notes-file out/release_notes.md
+          fi

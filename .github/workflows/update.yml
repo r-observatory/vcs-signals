@@ -46,3 +46,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FORCE_FULL_REBUILD: ${{ inputs.force_full_rebuild }}
         run: Rscript scripts/update.R out/
+      - name: Refresh release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -f out/release_notes.md ]; then
+            gh release edit current --repo ${{ github.repository }} --notes-file out/release_notes.md
+          fi

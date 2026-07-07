@@ -84,15 +84,21 @@ run_fetch_shard <- function(io, out_dir, roster_path, i, N, delay = BACKFILL_DEL
   mine <- roster[shard_rows(nrow(roster), i, N), , drop = FALSE]
   message(sprintf("fetch shard %d/%d: %d of %d repos", i, N, nrow(mine), nrow(roster)))
 
-  acc <- list(); n_ok <- 0L; n_skipped <- 0L
-  for (k in seq_len(nrow(mine))) {
+  acc <- list(); n_ok <- 0L; n_skipped <- 0L; n_rows <- 0L
+  total <- nrow(mine)
+  for (k in seq_len(total)) {
+    if (k %% 500L == 0L)
+      message(sprintf("fetch shard %d/%d: %d/%d repos processed (%d fetched, %d skipped, %d series rows so far)",
+                      i, N, k, total, n_ok, n_skipped, n_rows))
     if (delay > 0) Sys.sleep(delay)   # per-repo pacing on top of per-page
     starred_at <- tryCatch(paginate_stargazers(io, mine$owner[k], mine$name[k], delay = delay),
                           error = function(e) NULL)
     if (is.null(starred_at)) { n_skipped <- n_skipped + 1L; next }
     n_ok <- n_ok + 1L
     if (length(starred_at) == 0) next
-    acc[[length(acc) + 1L]] <- reconstruct_star_series(mine$repo_id[k], starred_at)
+    series <- reconstruct_star_series(mine$repo_id[k], starred_at)
+    acc[[length(acc) + 1L]] <- series
+    n_rows <- n_rows + nrow(series)
   }
   rows <- if (length(acc)) do.call(rbind, acc) else
     data.frame(repo_id = character(), date = character(), metric = character(),

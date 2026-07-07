@@ -655,6 +655,35 @@ protect_history_pull <- function(io, dir) {
   invisible(NULL)
 }
 
+#' Human-readable release notes for the rolling release: coverage, the asset
+#' layout, and what changed in the most recent run. GitHub-flavored markdown.
+build_release_notes <- function(summary, changed_shards, tag) {
+  fmt  <- function(n) format(as.integer(n), big.mark = ",", scientific = FALSE)
+  yrs  <- suppressWarnings(as.integer(unlist(summary$years)))
+  yrs  <- yrs[!is.na(yrs)]
+  yr_range     <- if (length(yrs)) sprintf("%d to %d", min(yrs), max(yrs)) else "none yet"
+  data_through <- if (is.null(summary$data_through)) "n/a" else summary$data_through
+  changed      <- if (length(changed_shards)) paste0("`", changed_shards, "`", collapse = ", ") else "none this run"
+  paste0(
+    "# vcs-signals (", tag, ")\n\n",
+    "VCS social signals for CRAN and Bioconductor package repositories, refreshed daily.\n\n",
+    "## Coverage\n\n",
+    "- Packages: ", fmt(summary$packages), "\n",
+    "- Repositories: ", fmt(summary$repos), "\n",
+    "- Data through: ", data_through, "\n",
+    "- Years present: ", yr_range, "\n",
+    "- Metrics: stars, forks, open issues, open pull requests, releases; plus topics, license, and archived state\n\n",
+    "## Assets\n\n",
+    "- `vcs-signals-summary.db` - one row per package with current values (table `vcs_signals_summary`)\n",
+    "- `vcs-signals-recent.db` - rolling 400-day series window plus the summary\n",
+    "- `vcs-signals-<YYYY>.db` - per-year change-only time series (table `signals_series`: repo_id, date, metric, value)\n",
+    "- `manifest.json` - freshness fields and the per-run change list\n\n",
+    "## Most recent run\n\n",
+    "- Changed shards: ", changed, "\n\n",
+    "## Access\n\n",
+    "```\ngh release download ", tag, " --repo r-observatory/vcs-signals --pattern \"vcs-signals-summary.db\"\n```\n")
+}
+
 #' Export, change-gate, upload, and heartbeat: the full publish step.
 #'
 #' Pulls prior history (protect_history_pull) so the change-gate has
@@ -751,6 +780,9 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
 
   write_manifest(manifest_path, changed, tag, summary_block)
   io$upload(manifest_path)
+
+  writeLines(build_release_notes(summary_block, changed, tag),
+             file.path(out_dir, "release_notes.md"))
 
   invisible(list(changed_shards = changed, shards = shard_names))
 }

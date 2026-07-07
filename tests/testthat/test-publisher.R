@@ -71,3 +71,25 @@ test_that("publish with touched_years leaves the untouched prior-year shard inta
   DBI::dbDisconnect(chk)
   expect_equal(n_2025, 2L)
 })
+
+test_that("build_release_notes reports coverage, changed shards, and access", {
+  notes <- build_release_notes(
+    list(packages = 15726, repos = 15588, data_through = "2026-07-07",
+         years = as.list(2008:2026)),
+    c("vcs-signals-2026.db", "vcs-signals-summary.db"), "current")
+  expect_true(grepl("Packages: 15,726", notes))
+  expect_true(grepl("Repositories: 15,588", notes))
+  expect_true(grepl("Data through: 2026-07-07", notes))
+  expect_true(grepl("2008 to 2026", notes))
+  expect_true(grepl("`vcs-signals-2026.db`", notes))
+  expect_true(grepl("gh release download current", notes))
+})
+
+test_that("build_release_notes tolerates an empty-year heartbeat", {
+  notes <- build_release_notes(
+    list(packages = 0, repos = 0, data_through = NULL, years = list()),
+    character(0), "current")
+  expect_true(grepl("none yet", notes))
+  expect_true(grepl("none this run", notes))
+  expect_true(grepl("Data through: n/a", notes))
+})
