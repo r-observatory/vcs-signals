@@ -360,7 +360,7 @@ materialize_series <- function(prev_latest, snapshot_long, date) {
     is.null(pv) || is.na(pv) || pv != snapshot_long$value[i]
   }, logical(1))
   r <- snapshot_long[changed, , drop = FALSE]
-  list(series_rows = data.frame(repo_id = r$repo_id, date = date, metric = r$metric,
+  list(series_rows = data.frame(repo_id = r$repo_id, date = rep(date, nrow(r)), metric = r$metric,
                                 value = as.integer(r$value), stringsAsFactors = FALSE),
        new_latest = snapshot_long)
 }
