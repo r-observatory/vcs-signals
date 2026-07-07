@@ -239,3 +239,33 @@ universe_guard <- function(prev_pkgs, prev_repos, curr_pkgs, curr_repos, thresho
                  prev_repos, curr_repos, threshold * 100))
   invisible(TRUE)
 }
+
+# ---- orchestration helpers (pure) -----------------------------------------
+resolve_all <- function(input) {
+  rows <- list()
+  for (i in seq_len(nrow(input))) {
+    r <- resolve_repo_for_package(input$url_raw[i], input$bugreports_raw[i])
+    if (!is.null(r)) { r$package <- input$package[i]; r$origin <- input$origin[i]
+      rows[[length(rows) + 1L]] <- r }
+  }
+  if (length(rows) == 0)
+    return(data.frame(host = character(), host_domain = character(), owner = character(),
+      name = character(), resolved_from = character(), package = character(),
+      origin = character(), stringsAsFactors = FALSE))
+  do.call(rbind, rows)
+}
+
+print_coverage <- function(input, resolved, idx) {
+  cat("=== vcs-signals SP1 coverage (candidate repos: parsed, unvalidated) ===\n")
+  for (org in c("cran", "bioc")) {
+    tot <- sum(input$origin == org)
+    res <- sum(resolved$origin == org)
+    cat(sprintf("  %-5s: %d packages, %d resolved (%.1f%%)\n", org, tot, res, 100 * res / max(tot, 1)))
+  }
+  cat(sprintf("  unique repos: %d\n", nrow(idx$repos)))
+  hb <- table(idx$repos$host)
+  if (length(hb)) cat("  by host:", paste(sprintf("%s=%d", names(hb), as.integer(hb)), collapse = ", "), "\n")
+  rf <- table(idx$repo_packages$resolved_from)
+  if (length(rf)) cat("  resolved_from:", paste(sprintf("%s=%d", names(rf), as.integer(rf)), collapse = ", "), "\n")
+  invisible(NULL)
+}
