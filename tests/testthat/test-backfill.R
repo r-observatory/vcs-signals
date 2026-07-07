@@ -33,12 +33,49 @@ test_that("run_fetch_shard skips a repo whose pagination errors, without failing
                   list(starredAt = "2021-01-02T00:00:00Z"))))))
   })
 
-  shard_path <- run_fetch_shard(io, out_dir, roster_path, 0, 1)
+  shard_path <- run_fetch_shard(io, out_dir, roster_path, 0, 1, delay = 0)
   con <- DBI::dbConnect(RSQLite::SQLite(), shard_path); on.exit(DBI::dbDisconnect(con))
   rows <- DBI::dbGetQuery(con, "SELECT * FROM signals_series")
   expect_equal(unique(rows$repo_id), "github.com/a/ok")     # "bad" repo skipped, not fatal
   rows <- rows[order(rows$date), ]
   expect_equal(rows$value, c(1L, 2L))                       # two distinct days, cumulative 1 then 2
+})
+
+test_that("run_fetch_shard skips a repo whose page carries GraphQL errors, writing no truncated curve", {
+  # Repo "trunc" returns a clean page 1 (has_next TRUE) then an in-body error
+  # on page 2 (HTTP 200 with data$repository$stargazers null AND errors present):
+  # GitHub's common transient / secondary-limit shape. The repo must be skipped
+  # entirely, not persisted as a curve that plateaus after page 1. Repo "ok" in
+  # the same shard is still processed.
+  out_dir <- tempfile("out"); dir.create(out_dir)
+  roster <- data.frame(repo_id = c("github.com/a/ok", "github.com/t/trunc"),
+                       owner = c("a", "t"), name = c("ok", "trunc"),
+                       stars = c(1L, 200L), done = c(0L, 0L), stringsAsFactors = FALSE)
+  roster_path <- file.path(out_dir, "vcs-signals-roster.db")
+  write_roster(roster_path, roster)
+
+  trunc_calls <- new.env(); trunc_calls$n <- 0L
+  io <- list(graphql = function(query) {
+    if (grepl('name: "trunc"', query, fixed = TRUE)) {
+      trunc_calls$n <- trunc_calls$n + 1L
+      if (trunc_calls$n == 1L)
+        return(list(data = list(repository = list(stargazers = list(
+          pageInfo = list(endCursor = "C1", hasNextPage = TRUE),
+          edges = list(list(starredAt = "2019-01-01T00:00:00Z")))))))
+      # page 2: in-body error, stargazers null
+      return(list(data = list(repository = list(stargazers = NULL)),
+                  errors = list(list(message = "SECONDARY_RATE_LIMIT"))))
+    }
+    list(data = list(repository = list(stargazers = list(
+      pageInfo = list(endCursor = NULL, hasNextPage = FALSE),
+      edges = list(list(starredAt = "2021-01-01T00:00:00Z"))))))
+  })
+
+  shard_path <- run_fetch_shard(io, out_dir, roster_path, 0, 1, delay = 0)
+  con <- DBI::dbConnect(RSQLite::SQLite(), shard_path); on.exit(DBI::dbDisconnect(con))
+  rows <- DBI::dbGetQuery(con, "SELECT * FROM signals_series")
+  expect_equal(unique(rows$repo_id), "github.com/a/ok")     # truncating repo skipped entirely
+  expect_equal(nrow(rows[rows$repo_id == "github.com/t/trunc", ]), 0)  # no partial curve persisted
 })
 
 test_that("run_merge folds in backfill without truncating aged-out forward year-shard data or series_latest", {

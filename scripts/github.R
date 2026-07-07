@@ -163,18 +163,33 @@ default_io <- function(token) {
 }
 
 #' Page through a repo's full stargazers connection (ASC by starredAt),
-#' looping the `after` cursor until `hasNextPage` is FALSE, pausing `delay`
-#' between pages. Returns character(0) for a repo with no stargazers.
+#' looping the `after` cursor until `hasNextPage` is FALSE. Sleeps `delay`
+#' after every request (each page, including the last) for rate-limit pacing.
+#' Returns character(0) for a repo with genuinely no stargazers.
+#'
+#' Errors (rather than silently truncating) on any response that carries
+#' `errors` or a null `data` - GitHub commonly returns HTTP 200 with
+#' `{"data":{"repository":{"stargazers":null}},"errors":[...]}` on a transient
+#' fault or in-body secondary-limit for a large connection, which
+#' parse_stargazers alone would read as a clean end-of-pages and yield a
+#' truncated curve. Same gate collect_batched/resolve_node_ids use. Also
+#' stops on a malformed page that claims a next page but gives no cursor,
+#' which would otherwise re-fetch page 1 forever. The caller's per-repo
+#' tryCatch turns any of these into a skip (repo left for a re-run), never a
+#' persisted partial curve.
 paginate_stargazers <- function(io, owner, name, delay = BACKFILL_DELAY_S) {
   starred_at <- character(0)
   after <- NULL
   repeat {
     resp <- io$graphql(build_stargazers_query(owner, name, after))
+    if (!is.null(resp$errors) || is.null(resp$data)) stop("stargazers page error")
+    if (delay > 0) Sys.sleep(delay)
     parsed <- parse_stargazers(resp)
     starred_at <- c(starred_at, parsed$starred_at)
     if (!isTRUE(parsed$has_next)) break
+    if (is.na(parsed$end_cursor) || !nzchar(parsed$end_cursor))
+      stop("stargazers page claims a next page but returned no cursor")
     after <- parsed$end_cursor
-    Sys.sleep(delay)
   }
   starred_at
 }

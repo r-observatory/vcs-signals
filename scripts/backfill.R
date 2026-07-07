@@ -78,7 +78,7 @@ run_enumerate <- function(io, out_dir) {
 #' each repo's historical daily-cumulative star series. A repo whose
 #' pagination errors (rate limit, transient 502, repo gone) is skipped this
 #' run - left for a re-run - rather than aborting the whole shard.
-run_fetch_shard <- function(io, out_dir, roster_path, i, N) {
+run_fetch_shard <- function(io, out_dir, roster_path, i, N, delay = BACKFILL_DELAY_S) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   roster <- load_roster(roster_path)
   mine <- roster[shard_rows(nrow(roster), i, N), , drop = FALSE]
@@ -86,7 +86,8 @@ run_fetch_shard <- function(io, out_dir, roster_path, i, N) {
 
   acc <- list(); n_ok <- 0L; n_skipped <- 0L
   for (k in seq_len(nrow(mine))) {
-    starred_at <- tryCatch(paginate_stargazers(io, mine$owner[k], mine$name[k]),
+    if (delay > 0) Sys.sleep(delay)   # per-repo pacing on top of per-page
+    starred_at <- tryCatch(paginate_stargazers(io, mine$owner[k], mine$name[k], delay = delay),
                           error = function(e) NULL)
     if (is.null(starred_at)) { n_skipped <- n_skipped + 1L; next }
     n_ok <- n_ok + 1L

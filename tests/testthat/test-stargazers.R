@@ -56,3 +56,33 @@ test_that("paginate_stargazers returns character(0) for a repo with no stargazer
     pageInfo = list(endCursor = NULL, hasNextPage = FALSE), edges = list())))))
   expect_equal(paginate_stargazers(io, "o", "n", delay = 0), character(0))
 })
+
+test_that("paginate_stargazers errors when a mid-pagination page carries GraphQL errors (no silent truncation)", {
+  pages <- list(
+    list(data = list(repository = list(stargazers = list(
+      pageInfo = list(endCursor = "C1", hasNextPage = TRUE),
+      edges = list(list(starredAt = "2019-01-01T00:00:00Z")))))),
+    # HTTP-200-with-errors shape: data present but stargazers null AND errors set
+    list(data = list(repository = list(stargazers = NULL)),
+         errors = list(list(message = "SECONDARY_RATE_LIMIT"))))
+  calls <- new.env(); calls$n <- 0L
+  io <- list(graphql = function(query) { calls$n <- calls$n + 1L; pages[[calls$n]] })
+  expect_error(paginate_stargazers(io, "o", "n", delay = 0), "stargazers page error")
+})
+
+test_that("paginate_stargazers errors on a null-data response instead of degrading to empty", {
+  io <- list(graphql = function(query) list(data = NULL, errors = list(list(message = "BAD_CREDENTIALS"))))
+  expect_error(paginate_stargazers(io, "o", "n", delay = 0), "stargazers page error")
+})
+
+test_that("paginate_stargazers stops (does not loop forever) when has_next is TRUE but the cursor is null", {
+  io <- list(graphql = function(query) list(data = list(repository = list(stargazers = list(
+    pageInfo = list(endCursor = NULL, hasNextPage = TRUE),
+    edges = list(list(starredAt = "2019-01-01T00:00:00Z")))))))
+  expect_error(paginate_stargazers(io, "o", "n", delay = 0), "no cursor")
+})
+
+test_that("a repository-null response with NO errors still degrades to empty (repo gone / private)", {
+  io <- list(graphql = function(query) list(data = list(repository = NULL)))
+  expect_equal(paginate_stargazers(io, "o", "n", delay = 0), character(0))
+})
