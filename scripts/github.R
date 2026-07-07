@@ -163,3 +163,30 @@ collect_gauges <- function(io, node_ids) {
     snapshot <- merge(snapshot, commit$records, by = "node_id", all.x = TRUE)
   list(snapshot = snapshot, deferred = unique(c(cheap$deferred, commit$deferred)))
 }
+
+# ---- node-id resolution stage (SP2) ----------------------------------------
+resolve_node_ids <- function(io, repos_needing) {
+  if (nrow(repos_needing) == 0)
+    return(data.frame(repo_id = character(), node_id = character(), owner = character(),
+      name = character(), name_with_owner = character(), status = character(), stringsAsFactors = FALSE))
+  idx <- chunk(seq_len(nrow(repos_needing)), CHEAP_BATCH)
+  out <- lapply(idx, function(rowset) {
+    sub <- repos_needing[rowset, , drop = FALSE]
+    res <- io$graphql(build_resolve_query(sub$owner, sub$name))
+    pr <- parse_resolve(res$data, nrow(sub))
+    do.call(rbind, lapply(seq_len(nrow(sub)), function(j) {
+      r <- pr[pr$idx == (j - 1L), ]
+      if (is.na(r$node_id)) {
+        data.frame(repo_id = sub$repo_id[j], node_id = NA_character_, owner = sub$owner[j],
+          name = sub$name[j], name_with_owner = paste(sub$owner[j], sub$name[j], sep = "/"),
+          status = "gone", stringsAsFactors = FALSE)
+      } else {
+        parts <- strsplit(r$name_with_owner, "/", fixed = TRUE)[[1]]
+        data.frame(repo_id = sub$repo_id[j], node_id = r$node_id,
+          owner = parts[1], name = paste(parts[-1], collapse = "/"),
+          name_with_owner = r$name_with_owner, status = "active", stringsAsFactors = FALSE)
+      }
+    }))
+  })
+  do.call(rbind, out)
+}
