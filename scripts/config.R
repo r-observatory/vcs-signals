@@ -45,9 +45,9 @@ RELEASE_REPO     <- "r-observatory/vcs-signals"
 FORWARD_METRICS  <- c("stars", "forks", "watchers", "issues_open", "issues_closed",
                       "prs_open", "prs_closed", "prs_merged", "commits_total",
                       "releases_total", "size_kb")
-CHEAP_BATCH    <- 40L    # repos per cheap-gauge GraphQL query
-COMMIT_BATCH   <- 15L    # repos per commit-count query (history.totalCount 502s at 40)
+CHEAP_BATCH    <- 25L    # repos per cheap-gauge GraphQL query (small enough to stay under GitHub's execution-time limit)
+COMMIT_BATCH   <- 8L     # repos per commit-count query (history.totalCount is expensive server-side and times out in larger batches)
 RECENT_WINDOW  <- 400L   # days of series kept in the recent shard
 REVISION_WINDOW<- 10L    # trailing days re-materialized each run (must be < RECENT_WINDOW)
 POINT_RESERVE  <- 1500L  # GraphQL points left unspent as headroom
-BATCH_DELAY_S  <- 0.5    # pause between GraphQL batches, to stay well under secondary rate limits
+BATCH_DELAY_S  <- 0.35   # pause between GraphQL batches, to stay well under secondary rate limits
