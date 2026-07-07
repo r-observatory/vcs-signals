@@ -508,3 +508,169 @@ write_manifest <- function(path, changed_shards, tag, summary) {
   json <- jsonlite::toJSON(obj, auto_unbox = TRUE, pretty = TRUE, null = "null")
   writeLines(json, path)
 }
+
+# ---- SP2 publisher: change-gate, protect-history, heartbeat ---------------
+# Ported from the bioconductor-downloads safety kit (scripts/helpers.R and
+# scripts/update.R), adapted to this pipeline's shard names
+# (vcs-signals-<YYYY>.db, vcs-signals-recent.db, vcs-signals-summary.db) and
+# the signals_series schema (repo_id, date, metric, value).
+
+#' Content hash of a single shard file, for change detection across runs.
+#'
+#' Base R only (no digest dependency): tools::md5sum(path). Returns NA when
+#' the file does not exist, so a missing shard never crashes the change-gate.
+shard_hash <- function(path) {
+  if (!file.exists(path)) return(NA_character_)
+  unname(tools::md5sum(path))
+}
+
+#' Which shard basenames (present in curr_hashes) are added or modified
+#' relative to prev_hashes. A name absent from prev, or present with a
+#' different hash, counts as changed; an unchanged name is omitted so a
+#' no-op run uploads nothing but the manifest.
+changed_shards <- function(prev_hashes, curr_hashes) {
+  nm <- names(curr_hashes)
+  if (is.null(nm)) return(character(0))
+  keep <- vapply(nm, function(n) {
+    prior <- unname(prev_hashes[n])
+    is.na(prior) || !identical(prior, unname(curr_hashes[n]))
+  }, logical(1))
+  nm[keep]
+}
+
+#' Pull the prior release's manifest, recent shard, and year shards into
+#' `dir`, so the change-gate has something to hash against and accumulated
+#' history is never silently discarded by a bad run. A no-op (returns
+#' character(0)) when no release exists yet (first ever run). Once the
+#' release exists, every listed asset is required: if any cannot be
+#' downloaded, stop() rather than proceed with a partial or empty history.
+#' The set of year shards to pull is read back from the manifest's own
+#' summary$years (written by publish() on every prior run), since this
+#' pipeline keeps no separate shard-coverage registry.
+protect_history_pull <- function(io, dir) {
+  if (!isTRUE(io$release_exists())) return(character(0))
+
+  pull_or_stop <- function(pattern) {
+    ok <- isTRUE(io$download(pattern, dir))
+    if (!ok) stop(sprintf(
+      "release 'current' exists but %s could not be downloaded; aborting to protect accumulated history",
+      pattern))
+    pattern
+  }
+
+  pulled <- character(0)
+  pulled <- c(pulled, pull_or_stop("manifest.json"))
+  pulled <- c(pulled, pull_or_stop("vcs-signals-recent.db"))
+
+  manifest_path <- file.path(dir, "manifest.json")
+  manifest <- tryCatch(
+    jsonlite::fromJSON(manifest_path, simplifyVector = FALSE),
+    error = function(e) NULL)
+  years <- tryCatch(as.integer(unlist(manifest$summary$years)), error = function(e) integer(0))
+  years <- years[!is.na(years)]
+
+  for (yr in years) {
+    pulled <- c(pulled, pull_or_stop(sprintf("vcs-signals-%04d.db", yr)))
+  }
+
+  # The summary shard holds no irreplaceable accumulated history (it is
+  # fully rebuilt from the working DB every run), so its pull is
+  # best-effort: on failure it is simply left out of `pulled`, which makes
+  # the change-gate treat it as added (re-uploaded) this run, not fatal.
+  if (isTRUE(io$download("vcs-signals-summary.db", dir))) {
+    pulled <- c(pulled, "vcs-signals-summary.db")
+  }
+
+  pulled
+}
+
+#' Copy the working DB's non-series tables into the just-exported recent
+#' shard: vcs_signals_summary, repos, repo_packages, series_latest, and
+#' pipeline_state. Mirrors bioconductor-downloads' embed_summary, extended
+#' to the extra tables this pipeline's recent shard carries.
+.embed_recent_tables <- function(con, recent_path) {
+  rcon <- DBI::dbConnect(RSQLite::SQLite(), recent_path)
+  on.exit(DBI::dbDisconnect(rcon), add = TRUE)
+  ensure_series_schema(rcon)
+  ensure_repo_schema(rcon)
+
+  copy_table <- function(name) {
+    DBI::dbExecute(rcon, sprintf("DELETE FROM %s", name))
+    if (DBI::dbExistsTable(con, name)) {
+      df <- DBI::dbReadTable(con, name)
+      if (nrow(df) > 0) DBI::dbWriteTable(rcon, name, df, append = TRUE)
+    }
+  }
+  for (nm in c("vcs_signals_summary", "repos", "repo_packages",
+               "series_latest", "pipeline_state")) copy_table(nm)
+  invisible(NULL)
+}
+
+#' Export, change-gate, upload, and heartbeat: the full publish step.
+#'
+#' Pulls prior history (protect_history_pull) so the change-gate has
+#' something to hash against, exports every year shard present in
+#' signals_series plus the recent window (with the non-series tables
+#' embedded) plus the summary shard, hashes all of them, and uploads only
+#' the shards whose content actually changed (or every shard when
+#' force_full is TRUE). A run with no changed shards still rewrites and
+#' uploads manifest.json, so the release always has a fresh heartbeat even
+#' when nothing else changed.
+publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE) {
+  dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+  pulled <- protect_history_pull(io, out_dir)
+  prev_names <- setdiff(pulled, "manifest.json")
+  prev_hashes <- stats::setNames(
+    vapply(prev_names, function(nm) shard_hash(file.path(out_dir, nm)), character(1)),
+    prev_names)
+
+  year_rows <- DBI::dbGetQuery(con, "SELECT DISTINCT substr(date, 1, 4) AS yr FROM signals_series ORDER BY yr")
+  years <- as.integer(year_rows$yr)
+
+  shard_names <- character(0)
+  for (yr in years) {
+    shard <- sprintf("vcs-signals-%04d.db", yr)
+    export_series_shard(file.path(out_dir, shard), extract_year_rows(con, yr))
+    shard_names <- c(shard_names, shard)
+  }
+
+  today <- Sys.Date()
+  recent_shard <- "vcs-signals-recent.db"
+  recent_path <- file.path(out_dir, recent_shard)
+  recent_rows <- extract_recent_rows(con, today, RECENT_WINDOW)
+  export_series_shard(recent_path, recent_rows)
+  .embed_recent_tables(con, recent_path)
+  shard_names <- c(shard_names, recent_shard)
+
+  summary_df <- if (DBI::dbExistsTable(con, "vcs_signals_summary")) DBI::dbReadTable(con, "vcs_signals_summary") else data.frame()
+  repos_df   <- if (DBI::dbExistsTable(con, "repos")) DBI::dbReadTable(con, "repos") else data.frame()
+  rp_df      <- if (DBI::dbExistsTable(con, "repo_packages")) DBI::dbReadTable(con, "repo_packages") else data.frame()
+
+  summary_shard <- "vcs-signals-summary.db"
+  export_summary_shard(file.path(out_dir, summary_shard), summary_df, repos_df, rp_df)
+  shard_names <- c(shard_names, summary_shard)
+
+  curr_hashes <- stats::setNames(
+    vapply(shard_names, function(nm) shard_hash(file.path(out_dir, nm)), character(1)),
+    shard_names)
+
+  changed <- if (isTRUE(force_full)) shard_names else changed_shards(prev_hashes, curr_hashes)
+
+  for (nm in changed) io$upload(file.path(out_dir, nm))
+
+  data_through <- if (nrow(recent_rows) > 0) max(recent_rows$date) else NULL
+  summary_block <- list(
+    source_kind  = source_kind,
+    last_checked = format(today),
+    data_through = data_through,
+    years        = as.list(years),
+    packages     = nrow(summary_df),
+    repos        = nrow(repos_df))
+
+  manifest_path <- file.path(out_dir, "manifest.json")
+  write_manifest(manifest_path, changed, tag, summary_block)
+  io$upload(manifest_path)
+
+  invisible(list(changed_shards = changed, shards = shard_names))
+}
