@@ -43,7 +43,7 @@ SUPPORTED_HOSTS <- c("github")
 GRAPHQL_ENDPOINT <- "https://api.github.com/graphql"
 RELEASE_REPO     <- "r-observatory/vcs-signals"
 FORWARD_METRICS  <- c("stars", "forks", "watchers", "issues_open", "issues_closed",
-                      "prs_open", "prs_closed", "prs_merged", "commits_total",
+                      "prs_open", "prs_closed", "prs_merged",
                       "releases_total", "size_kb")
 CHEAP_BATCH    <- 25L    # repos per cheap-gauge GraphQL query (small enough to stay under GitHub's execution-time limit)
 COMMIT_BATCH   <- 8L     # repos per commit-count query (history.totalCount is expensive server-side and times out in larger batches)

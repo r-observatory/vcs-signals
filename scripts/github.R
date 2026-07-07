@@ -161,12 +161,11 @@ collect_batched <- function(io, ids, batch_size, build_query, parse_nodes) {
 }
 
 collect_gauges <- function(io, node_ids) {
+  # Daily forward pass = the fast cheap gauges only. Commit count (history.totalCount)
+  # is too slow to fetch for every repo daily, so it is collected on the weekly heavy
+  # pass. build_commit_query / parse_commits remain for that pass to use.
   cheap <- collect_batched(io, node_ids, CHEAP_BATCH, build_gauge_query, parse_gauges)
-  commit <- collect_batched(io, node_ids, COMMIT_BATCH, build_commit_query, parse_commits)
-  snapshot <- cheap$records
-  if (!is.null(snapshot) && !is.null(commit$records))
-    snapshot <- merge(snapshot, commit$records, by = "node_id", all.x = TRUE)
-  list(snapshot = snapshot, deferred = unique(c(cheap$deferred, commit$deferred)))
+  list(snapshot = cheap$records, deferred = cheap$deferred)
 }
 
 # ---- node-id resolution stage ----------------------------------------------
