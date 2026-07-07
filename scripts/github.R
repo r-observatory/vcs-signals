@@ -165,14 +165,24 @@ collect_gauges <- function(io, node_ids) {
 }
 
 # ---- node-id resolution stage (SP2) ----------------------------------------
+#' Resolve node ids for repos needing them, one CHEAP_BATCH-sized query at a
+#' time. A batch whose response is unusable (io$graphql throws, res$errors is
+#' non-null, or res$data is NULL - e.g. a rate limit or transient 502) is
+#' DEFERRED: it contributes no rows at all, so update_repo_node_ids never
+#' touches those repos and they stay node_id=NULL/status='active' for retry
+#' on the next run. Only a genuinely successful batch is parsed, where a
+#' per-alias null (repo actually gone/renamed-away) becomes status='gone'.
 resolve_node_ids <- function(io, repos_needing) {
-  if (nrow(repos_needing) == 0)
-    return(data.frame(repo_id = character(), node_id = character(), owner = character(),
-      name = character(), name_with_owner = character(), status = character(), stringsAsFactors = FALSE))
+  empty <- data.frame(repo_id = character(), node_id = character(), owner = character(),
+    name = character(), name_with_owner = character(), status = character(), stringsAsFactors = FALSE)
+  if (nrow(repos_needing) == 0) return(empty)
   idx <- chunk(seq_len(nrow(repos_needing)), CHEAP_BATCH)
   out <- lapply(idx, function(rowset) {
     sub <- repos_needing[rowset, , drop = FALSE]
-    res <- io$graphql(build_resolve_query(sub$owner, sub$name))
+    res <- tryCatch(io$graphql(build_resolve_query(sub$owner, sub$name)),
+                     error = function(e) list(.err = TRUE))
+    ok <- is.list(res) && is.null(res$.err) && is.null(res$errors) && !is.null(res$data)
+    if (!ok) return(NULL)
     pr <- parse_resolve(res$data, nrow(sub))
     do.call(rbind, lapply(seq_len(nrow(sub)), function(j) {
       r <- pr[pr$idx == (j - 1L), ]
@@ -188,5 +198,19 @@ resolve_node_ids <- function(io, repos_needing) {
       }
     }))
   })
+  out <- Filter(Negate(is.null), out)
+  if (length(out) == 0) return(empty)
   do.call(rbind, out)
+}
+
+# ---- rate-limit preflight (SP2 whole-branch fix I3) ------------------------
+#' Remaining GraphQL rate-limit points, or Inf when the response carries no
+#' rateLimit field at all (transport error, or a fake io in existing tests
+#' that does not mock rateLimit - both treated as "unlimited", so this never
+#' makes an unrelated test start skipping stages it didn't intend to skip).
+graphql_rate_remaining <- function(io) {
+  res <- tryCatch(io$graphql("query { rateLimit { remaining resetAt } }"), error = function(e) NULL)
+  rem <- res$data$rateLimit$remaining
+  if (is.null(rem)) return(Inf)
+  as.integer(rem)
 }

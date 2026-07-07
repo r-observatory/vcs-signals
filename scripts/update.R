@@ -70,7 +70,12 @@ seed_working_db <- function(io, out_dir, working_path) {
   on.exit(DBI::dbDisconnect(wcon), add = TRUE)
   ensure_repo_schema(wcon)
   ensure_series_schema(wcon)
-  for (nm in c("repos", "repo_packages", "series_latest", "pipeline_state", "signals_series")) {
+  # vcs_signals_summary is included so that I4's stage-4 carry-forward has a
+  # prior summary row to read for a repo not collected this run: it is
+  # embedded into the published recent shard by .embed_recent_tables, so it
+  # must be seeded back the same way the other four tables are.
+  for (nm in c("repos", "repo_packages", "series_latest", "pipeline_state",
+               "signals_series", "vcs_signals_summary")) {
     if (DBI::dbExistsTable(pcon, nm)) {
       df <- DBI::dbReadTable(pcon, nm)
       if (nrow(df) > 0) DBI::dbWriteTable(wcon, nm, df, append = TRUE)
@@ -118,6 +123,18 @@ run_update <- function(io, out_dir, opts = list()) {
   write_repo_tables(con, idx$repos, idx$repo_packages, today_s)
   print_coverage(input, resolved, idx)
 
+  # ---- Rate-limit preflight (I3): below-reserve skips resolve + collection
+  # + materialization entirely, publishing a clean heartbeat instead of
+  # spending down points on a run that cannot safely complete. -------------
+  rl <- graphql_rate_remaining(io)
+  if (rl < POINT_RESERVE) {
+    message(sprintf(
+      "graphql rate remaining (%s) below reserve (%d); skipping node-id resolution and collection this run",
+      rl, POINT_RESERVE))
+    return(invisible(publish(io, con, out_dir, tag, source_kind = "live",
+                              force_full = force_full, touched_years = character(0))))
+  }
+
   # ---- Stage 2: node-id resolution + lifecycle (rename, gone) ------------
   needing <- DBI::dbGetQuery(con,
     "SELECT repo_id, owner, name FROM repos WHERE host = 'github' AND node_id IS NULL AND status = 'active'")
@@ -131,71 +148,120 @@ run_update <- function(io, out_dir, opts = list()) {
   snapshot_long <- gauges_to_long(gauges$snapshot, repo_map)
 
   # ---- Stage 4: materialize series + summary + go-live watermark --------
-  prev_latest <- DBI::dbGetQuery(con, "SELECT repo_id, metric, value FROM series_latest")
-  mat <- materialize_series(prev_latest, snapshot_long, today_s)
+  # I4 floor: when this run collected nothing at all (every repo deferred -
+  # a sustained outage, or the last surviving repo 502ing on every retry),
+  # gauges$snapshot is NULL/empty. Skip every stage-4 write outright (no
+  # series_latest/vcs_signals_summary rebuild) and fall through to a
+  # publish() heartbeat, rather than rebuild from an empty snapshot and
+  # publish an all-NA dataset over the top of good accumulated history.
+  if (!is.null(gauges$snapshot) && nrow(gauges$snapshot) > 0) {
+    prev_latest <- DBI::dbGetQuery(con, "SELECT repo_id, metric, value FROM series_latest")
+    mat <- materialize_series(prev_latest, snapshot_long, today_s)
 
-  if (nrow(mat$series_rows) > 0) {
-    DBI::dbExecute(con,
-      "INSERT OR REPLACE INTO signals_series (repo_id, date, metric, value) VALUES (?,?,?,?)",
-      params = list(mat$series_rows$repo_id, mat$series_rows$date,
-                    mat$series_rows$metric, mat$series_rows$value))
-  }
-  DBI::dbExecute(con, "DELETE FROM series_latest")
-  if (nrow(mat$new_latest) > 0) {
-    DBI::dbExecute(con, "INSERT INTO series_latest (repo_id, metric, value) VALUES (?,?,?)",
-      params = list(mat$new_latest$repo_id, mat$new_latest$metric, mat$new_latest$value))
-  }
+    if (nrow(mat$series_rows) > 0) {
+      DBI::dbExecute(con,
+        "INSERT OR REPLACE INTO signals_series (repo_id, date, metric, value) VALUES (?,?,?,?)",
+        params = list(mat$series_rows$repo_id, mat$series_rows$date,
+                      mat$series_rows$metric, mat$series_rows$value))
+    }
+    # Upsert, never a blanket delete: a repo not collected this run (deferred,
+    # rate-limited, still 502ing) keeps its prior series_latest value instead
+    # of vanishing from the published snapshot. materialize_series() above
+    # was still called with prev_latest (the pre-upsert values).
+    if (nrow(mat$new_latest) > 0) {
+      DBI::dbExecute(con,
+        "INSERT OR REPLACE INTO series_latest (repo_id, metric, value) VALUES (?,?,?)",
+        params = list(mat$new_latest$repo_id, mat$new_latest$metric, mat$new_latest$value))
+    }
 
-  repos_all <- DBI::dbReadTable(con, "repos")
-  rp_all <- DBI::dbReadTable(con, "repo_packages")
-  series_all <- DBI::dbGetQuery(con, "SELECT repo_id, date, metric, value FROM signals_series")
+    repos_all <- DBI::dbReadTable(con, "repos")
+    rp_all <- DBI::dbReadTable(con, "repo_packages")
+    series_all <- DBI::dbGetQuery(con, "SELECT repo_id, date, metric, value FROM signals_series")
 
-  # Descriptive repo attributes (license/topics/is_archived/last_commit_date)
-  # are not columns on the SP1 repos table (that schema is frozen per the
-  # SP2 design); they come from this run's gauge snapshot instead, joined
-  # onto repo_id via repo_map. A repo deferred this run (502, still pending)
-  # simply carries NA descriptive attributes until it is next collected.
-  attrs <- data.frame(repo_id = character(), license = character(), topics = character(),
-                      is_archived = integer(), last_commit_date = character(), stringsAsFactors = FALSE)
-  if (!is.null(gauges$snapshot) && nrow(gauges$snapshot) > 0 && nrow(repo_map) > 0) {
-    sn <- merge(gauges$snapshot, repo_map, by = "node_id")
-    pick <- function(col, default) if (col %in% names(sn)) sn[[col]] else rep(default, nrow(sn))
-    attrs <- data.frame(repo_id = sn$repo_id,
-                        license = pick("license", NA_character_),
-                        topics = pick("topics", NA_character_),
-                        is_archived = as.integer(pick("is_archived", NA_integer_)),
-                        last_commit_date = pick("last_commit_date", NA_character_),
-                        stringsAsFactors = FALSE)
-  }
-  repo_attrs <- merge(repos_all[, c("repo_id", "first_seen", "last_seen")], attrs,
-                      by = "repo_id", all.x = TRUE)
+    # Descriptive repo attributes (license/topics/is_archived/last_commit_date)
+    # are not columns on the SP1 repos table (that schema is frozen per the
+    # SP2 design). For a repo collected this run they come from this run's
+    # gauge snapshot, joined onto repo_id via repo_map; for a repo NOT
+    # collected this run they are carried forward from the prior
+    # vcs_signals_summary row (read here, before that table is rebuilt
+    # below), so a deferred repo keeps its last-known descriptive attributes
+    # instead of going NA. A repo with neither (never collected) gets NA.
+    attrs <- data.frame(repo_id = character(), license = character(), topics = character(),
+                        is_archived = integer(), last_commit_date = character(), stringsAsFactors = FALSE)
+    if (nrow(repo_map) > 0) {
+      sn <- merge(gauges$snapshot, repo_map, by = "node_id")
+      pick <- function(col, default) if (col %in% names(sn)) sn[[col]] else rep(default, nrow(sn))
+      attrs <- data.frame(repo_id = sn$repo_id,
+                          license = pick("license", NA_character_),
+                          topics = pick("topics", NA_character_),
+                          is_archived = as.integer(pick("is_archived", NA_integer_)),
+                          last_commit_date = pick("last_commit_date", NA_character_),
+                          stringsAsFactors = FALSE)
+    }
+    prev_summary_attrs <- DBI::dbGetQuery(con,
+      "SELECT repo_id, license, topics, is_archived, last_commit_date
+         FROM vcs_signals_summary WHERE repo_id IS NOT NULL")
+    if (nrow(prev_summary_attrs) > 0) {
+      prev_summary_attrs <- prev_summary_attrs[!duplicated(prev_summary_attrs$repo_id), ]
+      prev_summary_attrs <- prev_summary_attrs[!(prev_summary_attrs$repo_id %in% attrs$repo_id), ]
+      prev_summary_attrs$is_archived <- as.integer(prev_summary_attrs$is_archived)
+    }
+    combined_attrs <- rbind(attrs, prev_summary_attrs)
+    repo_attrs <- merge(repos_all[, c("repo_id", "first_seen", "last_seen")], combined_attrs,
+                        by = "repo_id", all.x = TRUE)
 
-  summary_df <- build_signals_summary(mat$new_latest, series_all, repo_attrs, rp_all, today_s)
-  DBI::dbExecute(con, "DELETE FROM vcs_signals_summary")
-  if (nrow(summary_df) > 0) DBI::dbWriteTable(con, "vcs_signals_summary", summary_df, append = TRUE)
+    # Built from the FULL post-upsert series_latest (every repo, including
+    # ones deferred this run), not just this run's snapshot, so a deferred
+    # repo keeps its numeric values in the summary too.
+    latest_all <- DBI::dbGetQuery(con, "SELECT repo_id, metric, value FROM series_latest")
+    summary_df <- build_signals_summary(latest_all, series_all, repo_attrs, rp_all, today_s)
+    DBI::dbExecute(con, "DELETE FROM vcs_signals_summary")
+    if (nrow(summary_df) > 0) DBI::dbWriteTable(con, "vcs_signals_summary", summary_df, append = TRUE)
 
-  go_live <- DBI::dbGetQuery(con, "SELECT value FROM pipeline_state WHERE key = 'go_live'")
-  if (nrow(go_live) == 0) {
-    DBI::dbExecute(con, "INSERT INTO pipeline_state (key, value) VALUES ('go_live', ?)", params = list(today_s))
+    go_live <- DBI::dbGetQuery(con, "SELECT value FROM pipeline_state WHERE key = 'go_live'")
+    if (nrow(go_live) == 0) {
+      DBI::dbExecute(con, "INSERT INTO pipeline_state (key, value) VALUES ('go_live', ?)", params = list(today_s))
+    }
+
+    # touched_years is derived from mat$series_rows (the change-only rows
+    # just materialized into signals_series this run), never from the
+    # working DB's full signals_series - so a forward run only re-exports
+    # the current year's shard. See publish()'s touched_years documentation
+    # in scripts/helpers.R for why this matters.
+    touched_years <- unique(substr(mat$series_rows$date, 1, 4))
+  } else {
+    message("stage-4 floor: collection returned nothing this run; skipping series/summary rebuild, publishing heartbeat")
+    touched_years <- character(0)
   }
 
   # ---- Stage 5: publish --------------------------------------------------
-  # touched_years is derived from mat$series_rows (the change-only rows just
-  # materialized into signals_series this run), never from the working DB's
-  # full signals_series - so a forward run only re-exports the current
-  # year's shard, and a heartbeat run (no changed rows) re-exports none,
-  # leaving prior years' shards untouched. See publish()'s touched_years
-  # documentation in scripts/helpers.R for why this matters.
-  touched_years <- unique(substr(mat$series_rows$date, 1, 4))
   invisible(publish(io, con, out_dir, tag, source_kind = "live", force_full = force_full,
                      touched_years = touched_years))
 }
 
 # ---- gh-release IO for the real run ----------------------------------------
+#' Whether the "current" (or `tag`) release exists on `repo` - fail CLOSED.
+#'
+#' A plain exit-status check cannot distinguish "release not found" from any
+#' other `gh` failure (auth expired, rate limited, network blip, GitHub
+#' outage), and this function's FALSE answer is read by both
+#' protect_history_pull and seed_working_db as "no prior release, start
+#' cold" - which would silently clobber accumulated history if returned for
+#' a merely-transient error. So: exit 0 -> TRUE; exit non-zero AND the
+#' captured output names a genuine not-found -> FALSE; any other non-zero
+#' exit -> stop(), aborting the run rather than guessing.
 gh_release_exists <- function(repo, tag = "current") {
-  st <- suppressWarnings(system2("gh", c("release", "view", tag, "--repo", repo),
-                                 stdout = FALSE, stderr = FALSE))
-  identical(as.integer(st), 0L)
+  out <- suppressWarnings(system2("gh", c("release", "view", tag, "--repo", repo),
+                                  stdout = TRUE, stderr = TRUE))
+  status <- attr(out, "status")
+  status <- if (is.null(status)) 0L else as.integer(status)
+  if (identical(status, 0L)) return(TRUE)
+  text <- paste(out, collapse = "\n")
+  not_found <- grepl("release not found", text, ignore.case = TRUE) ||
+    grepl("not found", text, ignore.case = TRUE) ||
+    grepl("HTTP 404", text, ignore.case = TRUE)
+  if (not_found) return(FALSE)
+  stop(sprintf("gh release view failed ambiguously, aborting to avoid clobbering history: %s", text))
 }
 
 gh_release_download <- function(repo, pattern, dir, tag = "current") {
