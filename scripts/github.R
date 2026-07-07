@@ -114,3 +114,52 @@ parse_commits <- function(nodes) {
                       last_commit_date = character(), stringsAsFactors = FALSE))
   do.call(rbind, rows)
 }
+
+# ---- transport (not unit-tested) ------------------------------------------
+gh_graphql <- function(token, query) {
+  body <- jsonlite::toJSON(list(query = query), auto_unbox = TRUE)
+  tmp <- tempfile()
+  on.exit(unlink(tmp), add = TRUE)
+  writeLines(body, tmp)
+  args <- c("-sS", "-X", "POST",
+            "-H", paste("Authorization: bearer", token),
+            "-H", "Content-Type: application/json",
+            "--data", paste0("@", tmp), GRAPHQL_ENDPOINT)
+  out <- suppressWarnings(system2("curl", args, stdout = TRUE, stderr = TRUE))
+  status <- attr(out, "status")
+  if (!is.null(status) && status != 0) stop(sprintf("curl failed (%s)", status))
+  jsonlite::fromJSON(paste(out, collapse = "\n"), simplifyVector = FALSE)
+}
+
+default_io <- function(token) {
+  list(graphql = function(query) gh_graphql(token, query))
+}
+
+# ---- batched collection with the 502/partial failure contract -------------
+collect_batched <- function(io, ids, batch_size, build_query, parse_nodes) {
+  records <- list(); deferred <- character(0)
+  queue <- unname(chunk(ids, batch_size))
+  while (length(queue) > 0) {
+    b <- queue[[1]]; queue <- queue[-1]
+    res <- tryCatch(io$graphql(build_query(b)), error = function(e) list(.err = TRUE))
+    ok <- is.list(res) && is.null(res$.err) && is.null(res$errors) && !is.null(res$data)
+    if (ok) {
+      df <- parse_nodes(res$data$nodes)
+      if (!is.null(df) && nrow(df) > 0) records[[length(records) + 1L]] <- df
+    } else if (length(b) > 1) {
+      queue <- c(unname(chunk(b, ceiling(length(b) / 2))), queue)   # halve and retry
+    } else {
+      deferred <- c(deferred, b)                                     # single repo still failing
+    }
+  }
+  list(records = if (length(records)) do.call(rbind, records) else NULL, deferred = deferred)
+}
+
+collect_gauges <- function(io, node_ids) {
+  cheap <- collect_batched(io, node_ids, CHEAP_BATCH, build_gauge_query, parse_gauges)
+  commit <- collect_batched(io, node_ids, COMMIT_BATCH, build_commit_query, parse_commits)
+  snapshot <- cheap$records
+  if (!is.null(snapshot) && !is.null(commit$records))
+    snapshot <- merge(snapshot, commit$records, by = "node_id", all.x = TRUE)
+  list(snapshot = snapshot, deferred = unique(c(cheap$deferred, commit$deferred)))
+}
