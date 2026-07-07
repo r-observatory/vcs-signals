@@ -147,3 +147,28 @@ resolve_repo_for_package <- function(url_raw, bugreports_raw) {
   p <- if (length(gh) > 0) gh[[1]] else direct[[1]]
   .as_repo_row(p, p$resolved_from)
 }
+
+# ---- repo index ------------------------------------------------------------
+build_repo_index <- function(resolved_df) {
+  empty_repos <- data.frame(repo_id = character(), host = character(), host_domain = character(),
+    owner = character(), name = character(), name_with_owner = character(),
+    supported = integer(), n_packages = integer(), stringsAsFactors = FALSE)
+  empty_rp <- data.frame(repo_id = character(), package = character(), origin = character(),
+    resolved_from = character(), stringsAsFactors = FALSE)
+  if (is.null(resolved_df) || nrow(resolved_df) == 0) return(list(repos = empty_repos, repo_packages = empty_rp))
+
+  slug <- repo_slug(resolved_df$host_domain, resolved_df$owner, resolved_df$name)
+  first <- !duplicated(slug)
+  repos <- data.frame(
+    repo_id = slug[first], host = resolved_df$host[first], host_domain = resolved_df$host_domain[first],
+    owner = resolved_df$owner[first], name = resolved_df$name[first],
+    name_with_owner = paste(resolved_df$owner[first], resolved_df$name[first], sep = "/"),
+    supported = as.integer(resolved_df$host[first] %in% SUPPORTED_HOSTS),
+    stringsAsFactors = FALSE)
+  pk <- paste(resolved_df$package, resolved_df$origin, sep = "\r")
+  n <- tapply(pk, slug, function(v) length(unique(v)))
+  repos$n_packages <- as.integer(n[repos$repo_id])
+  repo_packages <- unique(data.frame(repo_id = slug, package = resolved_df$package,
+    origin = resolved_df$origin, resolved_from = resolved_df$resolved_from, stringsAsFactors = FALSE))
+  list(repos = repos, repo_packages = repo_packages)
+}
