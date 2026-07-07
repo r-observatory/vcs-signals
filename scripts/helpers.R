@@ -95,3 +95,10 @@ parse_pages_url <- function(u) {
   name <- if (length(segs) >= 1) sub("\\.git$", "", segs[1]) else paste0(owner, ".github.io")
   list(host = "github", host_domain = "github.com", owner = owner, name = name)
 }
+
+# ---- mirror exclusion ------------------------------------------------------
+is_mirror <- function(host, owner, name, host_domain) {
+  if (!is.null(host_domain) && host_domain %in% MIRROR_DOMAINS) return(TRUE)
+  if (!is.null(host) && host == "github" && tolower(owner) %in% MIRROR_GITHUB_OWNERS) return(TRUE)
+  FALSE
+}
