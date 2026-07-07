@@ -9,13 +9,9 @@ concurrency:
 env:
   TZ: UTC
 jobs:
-  backfill:
+  enumerate:
     runs-on: ubuntu-latest
-    # Each stargazer page costs 1 GraphQL point, so one token is capped near the
-    # 5000-points/hour primary budget (~1.4 requests/second). The whole roster is
-    # ~16k pages, so the reconstruct step runs a few hours serially; parallel
-    # sharding on a single token would only exhaust the shared budget faster.
-    timeout-minutes: 350
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
       - uses: r-lib/actions/setup-r@v2
@@ -44,21 +40,81 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VCS_OUT: out
         run: Rscript scripts/backfill.R enumerate
-      - name: Reconstruct star history
+      - uses: actions/upload-artifact@v4
+        with:
+          name: roster
+          path: out/vcs-signals-roster.db
+
+  fetch:
+    needs: enumerate
+    runs-on: ubuntu-latest
+    # ~11k repos over 12 shards is well under this timeout per shard. A single
+    # token caps throughput near the 5000-points/hour budget, so the shards run
+    # one at a time (max-parallel 1) rather than sharing the budget and tripping
+    # the secondary rate limit.
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: |
+            any::DBI
+            any::RSQLite
+            any::jsonlite
+            any::testthat
+      - uses: actions/download-artifact@v4
+        with:
+          name: roster
+          path: roster
+      - name: Reconstruct star history (shard ${{ matrix.shard }} of 12)
         env:
           VCS_SIGNALS_TOKEN: ${{ secrets.VCS_SIGNALS_TOKEN }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VCS_OUT: out
-          VCS_ROSTER: out
-          VCS_SHARD_I: "0"
-          VCS_SHARD_N: "1"
+          VCS_ROSTER: roster
+          VCS_SHARD_I: ${{ matrix.shard }}
+          VCS_SHARD_N: "12"
         run: Rscript scripts/backfill.R fetch
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shard-${{ matrix.shard }}
+          path: out/vcs-signals-shard-*.db
+          if-no-files-found: ignore
+
+  merge:
+    needs: fetch
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: |
+            any::DBI
+            any::RSQLite
+            any::jsonlite
+            any::testthat
+      - uses: actions/download-artifact@v4
+        with:
+          path: parts
+          pattern: shard-*
+          merge-multiple: true
       - name: Merge and publish
         env:
           VCS_SIGNALS_TOKEN: ${{ secrets.VCS_SIGNALS_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VCS_OUT: out
-          VCS_PARTS: out
+          VCS_PARTS: parts
         run: Rscript scripts/backfill.R merge
       - name: Refresh release notes
         env:

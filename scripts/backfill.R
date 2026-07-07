@@ -90,7 +90,6 @@ run_fetch_shard <- function(io, out_dir, roster_path, i, N, delay = BACKFILL_DEL
     if (k %% 500L == 0L)
       message(sprintf("fetch shard %d/%d: %d/%d repos processed (%d fetched, %d skipped, %d series rows so far)",
                       i, N, k, total, n_ok, n_skipped, n_rows))
-    if (delay > 0) Sys.sleep(delay)   # per-repo pacing on top of per-page
     starred_at <- tryCatch(paginate_stargazers(io, mine$owner[k], mine$name[k], delay = delay),
                           error = function(e) NULL)
     if (is.null(starred_at)) { n_skipped <- n_skipped + 1L; next }
