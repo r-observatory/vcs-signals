@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 # scripts/update.R - vcs-signals orchestration.
 # run_update(io, out_dir, opts) drives five ordered stages behind an injected
-# io: (1) SP1 resolve, (2) node-id resolution + lifecycle, (3) forward gauge
+# io: (1) resolve, (2) node-id resolution + lifecycle, (3) forward gauge
 # collection, (4) series/summary materialization + go-live watermark, (5)
 # publish. main() builds the real io (network acquisition, GitHub GraphQL,
 # gh-release download/upload) and calls run_update(); the hermetic test
@@ -15,7 +15,7 @@ source("scripts/helpers.R")
 source("scripts/github.R")
 suppressPackageStartupMessages({ library(DBI); library(RSQLite) })
 
-# ---- SP1 acquisition (unchanged) -------------------------------------------
+# ---- acquisition ------------------------------------------------------------
 acquire_cran <- function() {
   pdb <- tools::CRAN_package_db()
   pdb <- pdb[!duplicated(pdb$Package), ]
@@ -108,8 +108,8 @@ run_update <- function(io, out_dir, opts = list()) {
   ensure_repo_schema(con)
   ensure_series_schema(con)
 
-  # ---- Stage 1: SP1 resolve (acquire -> resolve_all -> build_repo_index ->
-  # write_repo_tables), guarded by the SP1 universe guard against a
+  # ---- Stage 1: resolve (acquire -> resolve_all -> build_repo_index ->
+  # write_repo_tables), guarded by the universe guard against a
   # catastrophic drop in resolved packages/repos. -------------------------
   input <- io$acquire()
   resolved <- resolve_all(input)
@@ -140,12 +140,18 @@ run_update <- function(io, out_dir, opts = list()) {
     "SELECT repo_id, owner, name FROM repos WHERE host = 'github' AND node_id IS NULL AND status = 'active'")
   resolved_ids <- resolve_node_ids(io, needing)
   update_repo_node_ids(con, resolved_ids)
+  n_id_resolved <- sum(resolved_ids$status == "active")
+  n_id_gone <- sum(resolved_ids$status == "gone")
+  n_id_deferred <- nrow(needing) - nrow(resolved_ids)
+  cat(sprintf("node ids: %d resolved, %d deferred, %d gone\n", n_id_resolved, n_id_deferred, n_id_gone))
 
   # ---- Stage 3: forward gauge collection over active github repos -------
   repo_map <- DBI::dbGetQuery(con,
     "SELECT node_id, repo_id FROM repos WHERE host = 'github' AND status = 'active' AND node_id IS NOT NULL")
   gauges <- collect_gauges(io, repo_map$node_id)
   snapshot_long <- gauges_to_long(gauges$snapshot, repo_map)
+  n_gauges_collected <- if (!is.null(gauges$snapshot)) nrow(gauges$snapshot) else 0L
+  cat(sprintf("gauges: collected %d repos, %d deferred\n", n_gauges_collected, length(gauges$deferred)))
 
   # ---- Stage 4: materialize series + summary + go-live watermark --------
   # I4 floor: when this run collected nothing at all (every repo deferred -
@@ -179,8 +185,8 @@ run_update <- function(io, out_dir, opts = list()) {
     series_all <- DBI::dbGetQuery(con, "SELECT repo_id, date, metric, value FROM signals_series")
 
     # Descriptive repo attributes (license/topics/is_archived/last_commit_date)
-    # are not columns on the SP1 repos table (that schema is frozen per the
-    # SP2 design). For a repo collected this run they come from this run's
+    # are not columns on the repos table (that schema is frozen per the
+    # design). For a repo collected this run they come from this run's
     # gauge snapshot, joined onto repo_id via repo_map; for a repo NOT
     # collected this run they are carried forward from the prior
     # vcs_signals_summary row (read here, before that table is rebuilt

@@ -1,4 +1,4 @@
-# scripts/helpers.R - pure resolver + repo-model helpers for vcs-signals SP1.
+# scripts/helpers.R - pure resolver + repo-model helpers for vcs-signals.
 # Depends on constants from scripts/config.R. No network. The only side effect is write_repo_tables (SQLite).
 # Functions are added task-by-task below.
 
@@ -303,7 +303,7 @@ resolve_all <- function(input) {
 }
 
 print_coverage <- function(input, resolved, idx) {
-  cat("=== vcs-signals SP1 coverage (candidate repos: parsed, unvalidated) ===\n")
+  cat("=== vcs-signals coverage (candidate repos: parsed, unvalidated) ===\n")
   for (org in c("cran", "bioc")) {
     tot <- sum(input$origin == org)
     res <- sum(resolved$origin == org)
@@ -328,13 +328,13 @@ print_coverage <- function(input, resolved, idx) {
   invisible(NULL)
 }
 
-# ---- SP2 batching --------------------------------------------------------
+# ---- batching --------------------------------------------------------------
 chunk <- function(x, n) {
   if (length(x) == 0) return(list())
   split(x, ceiling(seq_along(x) / n))
 }
 
-# ---- SP2 series schema + materialization ----------------------------------
+# ---- series schema + materialization ----------------------------------------
 ensure_series_schema <- function(con) {
   DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS signals_series (
     repo_id TEXT NOT NULL, date TEXT NOT NULL, metric TEXT NOT NULL, value INTEGER NOT NULL,
@@ -424,7 +424,7 @@ build_signals_summary <- function(latest, series, repos, repo_packages, today) {
   do.call(rbind, rows)
 }
 
-# ---- SP2 shard + manifest helpers (ported from cran-downloads) ------------
+# ---- shard + manifest helpers ------------------------------------------------
 
 #' Extract all signals_series rows for a single year.
 #'
@@ -527,11 +527,10 @@ write_manifest <- function(path, changed_shards, tag, summary) {
   writeLines(json, path)
 }
 
-# ---- SP2 publisher: change-gate, protect-history, heartbeat ---------------
-# Ported from the bioconductor-downloads safety kit (scripts/helpers.R and
-# scripts/update.R), adapted to this pipeline's shard names
-# (vcs-signals-<YYYY>.db, vcs-signals-recent.db, vcs-signals-summary.db) and
-# the signals_series schema (repo_id, date, metric, value).
+# ---- publisher: change-gate, protect-history, heartbeat --------------------
+# Handles this pipeline's shard names (vcs-signals-<YYYY>.db,
+# vcs-signals-recent.db, vcs-signals-summary.db) and the signals_series
+# schema (repo_id, date, metric, value).
 
 #' Content hash of a single shard file, for change detection across runs.
 #'
