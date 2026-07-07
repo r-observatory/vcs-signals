@@ -256,6 +256,22 @@ write_repo_tables <- function(con, repos_df, repo_packages_df, today) {
   invisible(TRUE)
 }
 
+#' Persist resolve_node_ids' lifecycle frame (repo_id, node_id, owner, name,
+#' name_with_owner, status) onto the repos dimension: an UPSERT keyed on the
+#' frozen repo_id (never re-derived), covering both a fresh id attachment, a
+#' rename (owner/name/name_with_owner updated), and a gone repo (node_id
+#' NA, status='gone').
+update_repo_node_ids <- function(con, resolved) {
+  if (is.null(resolved) || nrow(resolved) == 0) return(invisible(TRUE))
+  DBI::dbBegin(con)
+  DBI::dbExecute(con,
+    "UPDATE repos SET node_id=?, owner=?, name=?, name_with_owner=?, status=? WHERE repo_id=?",
+    params = list(resolved$node_id, resolved$owner, resolved$name,
+                  resolved$name_with_owner, resolved$status, resolved$repo_id))
+  DBI::dbCommit(con)
+  invisible(TRUE)
+}
+
 # ---- universe guard --------------------------------------------------------
 universe_guard <- function(prev_pkgs, prev_repos, curr_pkgs, curr_repos, threshold = 0.10) {
   if (is.null(prev_pkgs) || is.na(prev_pkgs) || prev_pkgs == 0) return(invisible(TRUE))

@@ -1,0 +1,13 @@
+{ "data": { "nodes": [
+  { "id": "R_a", "nameWithOwner": "tidyverse/ggplot2", "stargazerCount": 6959, "forkCount": 2132,
+    "watchers": { "totalCount": 295 },
+    "issues_open": { "totalCount": 88 }, "issues_closed": { "totalCount": 3500 },
+    "prs_open": { "totalCount": 12 }, "prs_closed": { "totalCount": 400 }, "mergedPRs": { "totalCount": 1885 },
+    "releases": { "totalCount": 40 },
+    "latestRelease": { "tagName": "v3.5.0", "publishedAt": "2026-01-10T00:00:00Z", "isPrerelease": false },
+    "licenseInfo": { "spdxId": "MIT" },
+    "repositoryTopics": { "nodes": [ { "topic": { "name": "r" } }, { "topic": { "name": "ggplot2" } } ] },
+    "isArchived": false, "isFork": false, "isMirror": false, "isDisabled": false,
+    "createdAt": "2008-05-25T00:00:00Z", "pushedAt": "2026-07-01T00:00:00Z", "updatedAt": "2026-07-05T00:00:00Z",
+    "diskUsage": 41000, "primaryLanguage": { "name": "R" } }
+] } }
