@@ -1,0 +1,40 @@
+name: update
+on:
+  schedule:
+    - cron: "30 6 * * *"
+  workflow_dispatch:
+    inputs:
+      force_full_rebuild:
+        type: boolean
+        default: false
+permissions:
+  contents: write
+concurrency:
+  group: vcs-signals-update
+  cancel-in-progress: false
+env:
+  TZ: UTC
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: |
+            any::DBI
+            any::RSQLite
+            any::jsonlite
+            any::testthat
+      - name: Run tests
+        run: Rscript tests/testthat.R
+      - name: Run update
+        env:
+          VCS_SIGNALS_TOKEN: ${{ secrets.VCS_SIGNALS_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE_FULL_REBUILD: ${{ inputs.force_full_rebuild }}
+        run: Rscript scripts/update.R out/
