@@ -34,6 +34,16 @@ build_commit_query <- function(node_ids) {
   } } }', ids)
 }
 
+build_stargazers_query <- function(owner, name, after = NULL) {
+  after_arg <- if (is.null(after) || is.na(after)) "null" else sprintf('"%s"', after)
+  sprintf('query { repository(owner: "%s", name: "%s") {
+    stargazers(first: %d, orderBy: {field: STARRED_AT, direction: ASC}, after: %s) {
+      pageInfo { endCursor hasNextPage }
+      edges { starredAt }
+    }
+  } }', owner, name, STARGAZER_PAGE, after_arg)
+}
+
 build_resolve_query <- function(owners, names) {
   parts <- vapply(seq_along(owners), function(i) sprintf(
     'r%d: repository(owner: "%s", name: "%s", followRenames: true) { id nameWithOwner isArchived isFork isMirror isDisabled createdAt }',
@@ -82,6 +92,19 @@ rows_df_empty_gauges <- function() {
     size_kb = integer(), license = character(), topics = character(), is_archived = integer(),
     is_fork = integer(), is_mirror = integer(), created_at = character(), pushed_at = character(),
     last_release_at = character(), stringsAsFactors = FALSE)
+}
+
+#' Extract starredAt timestamps + pagination state from one stargazers query
+#' response. Degrades to an empty, has_next=FALSE result when the
+#' `stargazers` node itself is null (e.g. repository not found).
+parse_stargazers <- function(resp) {
+  sg <- resp$data$repository$stargazers
+  if (is.null(sg)) return(list(starred_at = character(0), end_cursor = NA_character_, has_next = FALSE))
+  edges <- .nn(sg$edges, list())
+  starred_at <- vapply(edges, function(e) .nn(e$starredAt, NA_character_), character(1))
+  list(starred_at = starred_at,
+       end_cursor = .nn(sg$pageInfo$endCursor, NA_character_),
+       has_next = isTRUE(sg$pageInfo$hasNextPage))
 }
 
 parse_resolve <- function(data, n) {
@@ -137,6 +160,23 @@ gh_graphql <- function(token, query) {
 
 default_io <- function(token) {
   list(graphql = function(query) gh_graphql(token, query))
+}
+
+#' Page through a repo's full stargazers connection (ASC by starredAt),
+#' looping the `after` cursor until `hasNextPage` is FALSE, pausing `delay`
+#' between pages. Returns character(0) for a repo with no stargazers.
+paginate_stargazers <- function(io, owner, name, delay = BACKFILL_DELAY_S) {
+  starred_at <- character(0)
+  after <- NULL
+  repeat {
+    resp <- io$graphql(build_stargazers_query(owner, name, after))
+    parsed <- parse_stargazers(resp)
+    starred_at <- c(starred_at, parsed$starred_at)
+    if (!isTRUE(parsed$has_next)) break
+    after <- parsed$end_cursor
+    Sys.sleep(delay)
+  }
+  starred_at
 }
 
 # ---- batched collection with the 502/partial failure contract -------------
