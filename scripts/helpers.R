@@ -364,3 +364,38 @@ materialize_series <- function(prev_latest, snapshot_long, date) {
                                 value = as.integer(r$value), stringsAsFactors = FALSE),
        new_latest = snapshot_long)
 }
+
+build_signals_summary <- function(latest, series, repos, repo_packages, today) {
+  val <- function(rid, met) {
+    v <- latest$value[latest$repo_id == rid & latest$metric == met]
+    if (length(v)) as.integer(v[1]) else NA_integer_
+  }
+  trend30 <- function(rid) {
+    s <- series[series$repo_id == rid & series$metric == "stars", ]
+    if (nrow(s) < 2) return(NA_real_)
+    s <- s[order(s$date), ]
+    cutoff <- as.character(as.Date(today) - 30)
+    prior <- s$value[s$date <= cutoff]
+    base <- if (length(prior)) prior[length(prior)] else s$value[1]
+    now <- s$value[nrow(s)]
+    if (is.na(base) || base == 0) return(NA_real_)
+    (now - base) / base * 100
+  }
+  rows <- lapply(seq_len(nrow(repo_packages)), function(i) {
+    rid <- repo_packages$repo_id[i]
+    ra <- repos[repos$repo_id == rid, ]
+    data.frame(package = repo_packages$package[i], origin = repo_packages$origin[i], repo_id = rid,
+      stars = val(rid, "stars"), forks = val(rid, "forks"), issues_open = val(rid, "issues_open"),
+      prs_open = val(rid, "prs_open"), commits_total = val(rid, "commits_total"),
+      releases_total = val(rid, "releases_total"),
+      last_commit_date = if (nrow(ra)) ra$last_commit_date[1] else NA_character_,
+      license = if (nrow(ra)) ra$license[1] else NA_character_,
+      topics = if (nrow(ra)) ra$topics[1] else NA_character_,
+      is_archived = if (nrow(ra)) as.integer(ra$is_archived[1]) else NA_integer_,
+      trend_30d = trend30(rid),
+      first_seen = if (nrow(ra)) ra$first_seen[1] else NA_character_,
+      last_seen = if (nrow(ra)) ra$last_seen[1] else NA_character_,
+      stringsAsFactors = FALSE)
+  })
+  do.call(rbind, rows)
+}
