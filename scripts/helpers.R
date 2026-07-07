@@ -691,16 +691,30 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
 
   for (nm in changed) io$upload(file.path(out_dir, nm))
 
+  # I6: the manifest's years list is a UNION of the prior manifest's years
+  # (read back here, before it is overwritten below) with the years touched
+  # this run, so the manifest stays a complete index of every published year
+  # shard rather than shrinking to just this run's touched year(s) - matters
+  # most for a heartbeat run, whose own `years` is empty. No prior manifest
+  # (first-ever run) just means this run's years stand alone.
+  manifest_path <- file.path(out_dir, "manifest.json")
+  prior_years <- integer(0)
+  if (file.exists(manifest_path)) {
+    prior_manifest <- tryCatch(jsonlite::fromJSON(manifest_path, simplifyVector = FALSE),
+                               error = function(e) NULL)
+    prior_years <- tryCatch(as.integer(unlist(prior_manifest$summary$years)), error = function(e) integer(0))
+    prior_years <- prior_years[!is.na(prior_years)]
+  }
+
   data_through <- if (nrow(recent_rows) > 0) max(recent_rows$date) else NULL
   summary_block <- list(
     source_kind  = source_kind,
     last_checked = format(today),
     data_through = data_through,
-    years        = as.list(years),
+    years        = as.list(sort(unique(c(prior_years, years)))),
     packages     = nrow(summary_df),
     repos        = nrow(repos_df))
 
-  manifest_path <- file.path(out_dir, "manifest.json")
   write_manifest(manifest_path, changed, tag, summary_block)
   io$upload(manifest_path)
 

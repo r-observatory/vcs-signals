@@ -20,3 +20,14 @@ test_that("build_resolve_query aliases each repo and follows renames", {
   expect_match(q, 'r1: repository\\(owner: "r-lib", name: "scales", followRenames: true\\)')
   expect_match(q, "nameWithOwner")
 })
+
+test_that("graphql_rate_remaining reads the remaining points, and defaults to Inf when absent", {
+  io <- list(graphql = function(query) list(data = list(rateLimit = list(remaining = 250, resetAt = "x"))))
+  expect_equal(graphql_rate_remaining(io), 250L)
+
+  io_absent <- list(graphql = function(query) list(data = list(nodes = list())))
+  expect_equal(graphql_rate_remaining(io_absent), Inf)
+
+  io_err <- list(graphql = function(query) stop("network error"))
+  expect_equal(graphql_rate_remaining(io_err), Inf)
+})
