@@ -1,0 +1,5 @@
+{ "data": {
+  "r0": { "id": "R_a", "nameWithOwner": "tidyverse/ggplot2", "isArchived": false, "isFork": false, "isMirror": false, "createdAt": "2008-05-25T00:00:00Z" },
+  "r1": null,
+  "r2": { "id": "R_c", "nameWithOwner": "new-owner/renamed", "isArchived": false, "isFork": false, "isMirror": false, "createdAt": "2015-01-01T00:00:00Z" }
+} }

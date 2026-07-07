@@ -83,3 +83,34 @@ rows_df_empty_gauges <- function() {
     is_fork = integer(), is_mirror = integer(), created_at = character(), pushed_at = character(),
     last_release_at = character(), stringsAsFactors = FALSE)
 }
+
+parse_resolve <- function(data, n) {
+  do.call(rbind, lapply(seq_len(n) - 1L, function(i) {
+    r <- data[[sprintf("r%d", i)]]
+    data.frame(idx = i,
+      node_id = if (is.null(r)) NA_character_ else r$id,
+      name_with_owner = if (is.null(r)) NA_character_ else r$nameWithOwner,
+      is_archived = if (is.null(r)) NA_integer_ else as.integer(isTRUE(r$isArchived)),
+      is_fork = if (is.null(r)) NA_integer_ else as.integer(isTRUE(r$isFork)),
+      is_mirror = if (is.null(r)) NA_integer_ else as.integer(isTRUE(r$isMirror)),
+      created_at = if (is.null(r)) NA_character_ else .nn(r$createdAt, NA_character_),
+      stringsAsFactors = FALSE)
+  }))
+}
+
+parse_commits <- function(nodes) {
+  rows <- lapply(nodes, function(n) {
+    if (is.null(n)) return(NULL)
+    tgt <- n$defaultBranchRef$target
+    total <- .nn(tgt$history$totalCount, NA_integer_)
+    last <- NA_character_
+    ln <- tgt$last$nodes
+    if (!is.null(ln) && length(ln) >= 1) last <- .nn(ln[[1]]$committedDate, NA_character_)
+    data.frame(node_id = n$id, commits_total = total, last_commit_date = last, stringsAsFactors = FALSE)
+  })
+  rows <- Filter(Negate(is.null), rows)
+  if (length(rows) == 0)
+    return(data.frame(node_id = character(), commits_total = integer(),
+                      last_commit_date = character(), stringsAsFactors = FALSE))
+  do.call(rbind, rows)
+}
