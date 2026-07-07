@@ -117,18 +117,22 @@ parse_commits <- function(nodes) {
 
 # ---- transport (not unit-tested) ------------------------------------------
 gh_graphql <- function(token, query) {
-  body <- jsonlite::toJSON(list(query = query), auto_unbox = TRUE)
-  tmp <- tempfile()
-  on.exit(unlink(tmp), add = TRUE)
-  writeLines(body, tmp)
-  args <- c("-sS", "-X", "POST",
-            "-H", paste("Authorization: bearer", token),
-            "-H", "Content-Type: application/json",
-            "--data", paste0("@", tmp), GRAPHQL_ENDPOINT)
-  out <- suppressWarnings(system2("curl", args, stdout = TRUE, stderr = TRUE))
-  status <- attr(out, "status")
-  if (!is.null(status) && status != 0) stop(sprintf("curl failed (%s)", status))
-  jsonlite::fromJSON(paste(out, collapse = "\n"), simplifyVector = FALSE)
+  # Route through gh (handles auth, TLS, and JSON cleanly). The query is passed via
+  # a JSON request-body file (--input), never on the command line, so system2's shell
+  # invocation cannot mangle its braces. The token is set via the environment (restored
+  # afterward so release ops keep theirs); only stdout is captured and parsed.
+  old <- Sys.getenv("GH_TOKEN", unset = NA)
+  Sys.setenv(GH_TOKEN = token)
+  bf <- tempfile(fileext = ".json")
+  on.exit({
+    unlink(bf)
+    if (is.na(old)) Sys.unsetenv("GH_TOKEN") else Sys.setenv(GH_TOKEN = old)
+  }, add = TRUE)
+  writeLines(jsonlite::toJSON(list(query = query), auto_unbox = TRUE), bf)
+  out <- suppressWarnings(system2("gh", c("api", "graphql", "--input", bf), stdout = TRUE))
+  txt <- paste(out, collapse = "\n")
+  if (!nzchar(trimws(txt))) stop("gh api graphql returned no output")
+  jsonlite::fromJSON(txt, simplifyVector = FALSE)
 }
 
 default_io <- function(token) {

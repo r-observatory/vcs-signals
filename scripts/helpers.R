@@ -650,7 +650,10 @@ protect_history_pull <- function(io, dir) {
 publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touched_years = NULL) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
-  pulled <- protect_history_pull(io, out_dir)
+  # A full rebuild re-exports and re-uploads every shard, so there is no prior
+  # state to protect; skip the pull (which would abort on a freshly-created,
+  # asset-less release).
+  pulled <- if (isTRUE(force_full)) character(0) else protect_history_pull(io, out_dir)
   prev_names <- setdiff(pulled, "manifest.json")
   prev_hashes <- stats::setNames(
     vapply(prev_names, function(nm) shard_hash(file.path(out_dir, nm)), character(1)),
