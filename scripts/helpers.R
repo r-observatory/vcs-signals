@@ -102,3 +102,48 @@ is_mirror <- function(host, owner, name, host_domain) {
   if (!is.null(host) && host == "github" && tolower(owner) %in% MIRROR_GITHUB_OWNERS) return(TRUE)
   FALSE
 }
+
+# ---- slug + per-package resolution ----------------------------------------
+repo_slug <- function(host_domain, owner, name) {
+  tolower(paste(host_domain, owner, name, sep = "/"))
+}
+
+.as_repo_row <- function(p, resolved_from) {
+  data.frame(host = p$host, host_domain = p$host_domain, owner = p$owner,
+             name = p$name, resolved_from = resolved_from, stringsAsFactors = FALSE)
+}
+
+resolve_repo_for_package <- function(url_raw, bugreports_raw) {
+  gather <- function(field, tag) {
+    out <- list()
+    for (u in split_urls(field)) {
+      p <- parse_vcs_url(u)
+      if (!is.null(p) && !is_mirror(p$host, p$owner, p$name, p$host_domain)) {
+        p$resolved_from <- tag; out[[length(out) + 1L]] <- p
+      }
+    }
+    out
+  }
+  url_c <- gather(url_raw, "url")
+  bug_c <- gather(bugreports_raw, "bugreports")
+  direct <- c(url_c, bug_c)
+
+  if (length(direct) == 0) {
+    pages <- c(lapply(split_urls(url_raw), parse_pages_url),
+               lapply(split_urls(bugreports_raw), parse_pages_url))
+    pages <- Filter(function(p) !is.null(p) && !is_mirror(p$host, p$owner, p$name, p$host_domain), pages)
+    if (length(pages) == 0) return(NULL)
+    return(.as_repo_row(pages[[1]], "pages"))
+  }
+
+  url_slugs <- vapply(url_c, function(p) repo_slug(p$host_domain, p$owner, p$name), "")
+  bug_slugs <- vapply(bug_c, function(p) repo_slug(p$host_domain, p$owner, p$name), "")
+  both <- intersect(url_slugs, bug_slugs)
+  if (length(both) > 0) {
+    p <- url_c[[which(url_slugs == both[1])[1]]]
+    return(.as_repo_row(p, "both"))
+  }
+  gh <- Filter(function(p) p$host == "github", direct)
+  p <- if (length(gh) > 0) gh[[1]] else direct[[1]]
+  .as_repo_row(p, p$resolved_from)
+}
