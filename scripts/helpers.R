@@ -366,6 +366,12 @@ materialize_series <- function(prev_latest, snapshot_long, date) {
 }
 
 build_signals_summary <- function(latest, series, repos, repo_packages, today) {
+  if (nrow(repo_packages) == 0)
+    return(data.frame(package = character(), origin = character(), repo_id = character(),
+      stars = integer(), forks = integer(), issues_open = integer(), prs_open = integer(),
+      commits_total = integer(), releases_total = integer(), last_commit_date = character(),
+      license = character(), topics = character(), is_archived = integer(), trend_30d = double(),
+      first_seen = character(), last_seen = character(), stringsAsFactors = FALSE))
   val <- function(rid, met) {
     v <- latest$value[latest$repo_id == rid & latest$metric == met]
     if (length(v)) as.integer(v[1]) else NA_integer_

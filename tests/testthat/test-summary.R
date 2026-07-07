@@ -14,3 +14,12 @@ test_that("build_signals_summary fans repo out to packages with metric values", 
   expect_equal(a$stars, 100L); expect_equal(a$commits_total, 400L); expect_equal(a$license, "MIT")
   expect_equal(a$trend_30d, 25)     # (100-80)/80*100
 })
+
+test_that("build_signals_summary returns a typed empty frame for empty repo_packages", {
+  empty_rp <- data.frame(repo_id = character(), package = character(), origin = character(), stringsAsFactors = FALSE)
+  s <- build_signals_summary(data.frame(repo_id=character(), metric=character(), value=integer()),
+                             data.frame(repo_id=character(), date=character(), metric=character(), value=integer()),
+                             data.frame(repo_id=character()), empty_rp, "2026-07-06")
+  expect_equal(nrow(s), 0)
+  expect_true(all(c("package", "origin", "stars", "trend_30d") %in% names(s)))
+})
