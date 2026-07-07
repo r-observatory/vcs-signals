@@ -38,3 +38,15 @@ MIRROR_DOMAINS       <- c("git.bioconductor.org")
 
 # Hosts we have an adapter for in v1.
 SUPPORTED_HOSTS <- c("github")
+
+# ---- SP2: GitHub forward-gauge collection + publishing ----
+GRAPHQL_ENDPOINT <- "https://api.github.com/graphql"
+RELEASE_REPO     <- "r-observatory/vcs-signals"
+FORWARD_METRICS  <- c("stars", "forks", "watchers", "issues_open", "issues_closed",
+                      "prs_open", "prs_closed", "prs_merged", "commits_total",
+                      "releases_total", "size_kb")
+CHEAP_BATCH    <- 40L    # repos per cheap-gauge GraphQL query
+COMMIT_BATCH   <- 15L    # repos per commit-count query (history.totalCount 502s at 40)
+RECENT_WINDOW  <- 400L   # days of series kept in the recent shard
+REVISION_WINDOW<- 10L    # trailing days re-materialized each run (must be < RECENT_WINDOW)
+POINT_RESERVE  <- 1500L  # GraphQL points left unspent as headroom

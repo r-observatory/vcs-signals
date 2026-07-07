@@ -1,0 +1,7 @@
+{ "data": { "nodes": [
+  { "id": "R_a", "nameWithOwner": "tidyverse/ggplot2",
+    "defaultBranchRef": { "target": { "history": { "totalCount": 6200 },
+      "last": { "nodes": [ { "committedDate": "2026-07-01T10:00:00Z" } ] } } } },
+  { "id": "R_b", "nameWithOwner": "someone/empty", "defaultBranchRef": null },
+  null
+] } }
