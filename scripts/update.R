@@ -47,10 +47,9 @@ main <- function(out_dir) {
     c0 <- DBI::dbConnect(RSQLite::SQLite(), db_path)
     if (DBI::dbExistsTable(c0, "repos"))
       prev_repos <- DBI::dbGetQuery(c0, "SELECT COUNT(*) n FROM repos WHERE status IN ('active','moved')")$n
+    # The package || origin concat below assumes the current two-origin vocabulary (cran/bioc).
+    # A future third origin could collide and would need an explicit delimiter here.
     if (DBI::dbExistsTable(c0, "repo_packages"))
-      # package || origin concatenation assumes the current two-origin vocabulary (cran/bioc);
-      # a future third origin with overlapping (package, origin) concat values would need a
-      # delimiter here to avoid collisions.
       prev_pkgs <- DBI::dbGetQuery(c0, "SELECT COUNT(DISTINCT package || origin) n FROM repo_packages")$n
     DBI::dbDisconnect(c0)
   }
