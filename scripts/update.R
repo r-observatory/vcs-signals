@@ -258,7 +258,6 @@ gh_release_exists <- function(repo, tag = "current") {
   if (identical(status, 0L)) return(TRUE)
   text <- paste(out, collapse = "\n")
   not_found <- grepl("release not found", text, ignore.case = TRUE) ||
-    grepl("not found", text, ignore.case = TRUE) ||
     grepl("HTTP 404", text, ignore.case = TRUE)
   if (not_found) return(FALSE)
   stop(sprintf("gh release view failed ambiguously, aborting to avoid clobbering history: %s", text))
