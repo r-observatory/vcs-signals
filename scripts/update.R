@@ -48,6 +48,9 @@ main <- function(out_dir) {
     if (DBI::dbExistsTable(c0, "repos"))
       prev_repos <- DBI::dbGetQuery(c0, "SELECT COUNT(*) n FROM repos WHERE status IN ('active','moved')")$n
     if (DBI::dbExistsTable(c0, "repo_packages"))
+      # package || origin concatenation assumes the current two-origin vocabulary (cran/bioc);
+      # a future third origin with overlapping (package, origin) concat values would need a
+      # delimiter here to avoid collisions.
       prev_pkgs <- DBI::dbGetQuery(c0, "SELECT COUNT(DISTINCT package || origin) n FROM repo_packages")$n
     DBI::dbDisconnect(c0)
   }

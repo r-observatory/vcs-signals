@@ -1,6 +1,6 @@
 # scripts/helpers.R - pure resolver + repo-model helpers for vcs-signals.
-# Depends on constants from scripts/config.R. No network. The only side effect is
-# write_repo_tables (SQLite). Functions are added task-by-task below.
+# Depends on constants from scripts/config.R. No network. The only side effect is write_repo_tables (SQLite).
+# Functions are added task-by-task below.
 
 # ---- URL splitting ---------------------------------------------------------
 split_urls <- function(field) {
@@ -39,9 +39,12 @@ split_urls <- function(field) {
   segs[nzchar(segs)]
 }
 
-# ---- VCS URL parsing -------------------------------------------------------
-parse_vcs_url <- function(u) {
-  if (is.null(u) || length(u) == 0 || is.na(u) || !nzchar(trimws(u))) return(NULL)
+# Shared scheme/ssh/bare-domain normalization: given a raw candidate URL string,
+# returns list(domain, path) with domain lowercased and www-stripped, or
+# list(domain = NA_character_, path = "") if it cannot be normalized to a domain.
+.url_domain_path <- function(u) {
+  empty <- list(domain = NA_character_, path = "")
+  if (is.null(u) || length(u) == 0 || is.na(u) || !nzchar(trimws(u))) return(empty)
   s <- sub(">+$", "", sub("^<+", "", trimws(u)))
   ssh <- regmatches(s, regexec("^git@([^:]+):(.+)$", s))[[1]]
   if (length(ssh) == 3) {
@@ -50,12 +53,23 @@ parse_vcs_url <- function(u) {
     s <- sub("^git\\+", "", s, ignore.case = TRUE)
     if (grepl("^//", s)) s <- paste0("https:", s)
     if (!grepl("^[a-z0-9+.-]+://", s, ignore.case = TRUE)) {
-      if (grepl("^[a-z0-9.-]+\\.[a-z]{2,}(/|$)", tolower(s))) s <- paste0("https://", s) else return(NULL)
+      if (grepl("^[a-z0-9.-]+\\.[a-z]{2,}(/|$)", tolower(s))) s <- paste0("https://", s) else return(empty)
     }
     dp <- .domain_of(s); domain <- dp$domain; path <- dp$path
   }
-  if (is.na(domain) || !nzchar(domain)) return(NULL)
+  if (is.na(domain) || !nzchar(domain)) return(empty)
   domain <- sub("^www\\.", "", tolower(domain))
+  list(domain = domain, path = path)
+}
+
+# Domain-only accessor shared by parse_vcs_url and classify_url.
+.url_domain <- function(u) .url_domain_path(u)$domain
+
+# ---- VCS URL parsing -------------------------------------------------------
+parse_vcs_url <- function(u) {
+  dp <- .url_domain_path(u)
+  domain <- dp$domain; path <- dp$path
+  if (is.na(domain) || !nzchar(domain)) return(NULL)
   if (endsWith(domain, PAGES_SUFFIX)) return(NULL)            # pages handled by parse_pages_url
 
   host <- unname(KNOWN_FORGES[domain])
@@ -101,6 +115,21 @@ is_mirror <- function(host, owner, name, host_domain) {
   if (!is.null(host_domain) && host_domain %in% MIRROR_DOMAINS) return(TRUE)
   if (!is.null(host) && host == "github" && tolower(owner) %in% MIRROR_GITHUB_OWNERS) return(TRUE)
   FALSE
+}
+
+# ---- URL classification (for coverage reporting) ---------------------------
+# One of "repo" (parsed and not a mirror), "mirror" (parsed but a read-only
+# mirror), "denied" (rejected by the non-repo denylist), or "other" (anything
+# else: malformed, non-VCS, NA/empty).
+classify_url <- function(u) {
+  p <- parse_vcs_url(u)
+  if (!is.null(p)) {
+    if (is_mirror(p$host, p$owner, p$name, p$host_domain)) return("mirror")
+    return("repo")
+  }
+  domain <- .url_domain(u)
+  if (!is.na(domain) && .is_denied(domain)) return("denied")
+  "other"
 }
 
 # ---- slug + per-package resolution ----------------------------------------
@@ -267,5 +296,16 @@ print_coverage <- function(input, resolved, idx) {
   if (length(hb)) cat("  by host:", paste(sprintf("%s=%d", names(hb), as.integer(hb)), collapse = ", "), "\n")
   rf <- table(idx$repo_packages$resolved_from)
   if (length(rf)) cat("  resolved_from:", paste(sprintf("%s=%d", names(rf), as.integer(rf)), collapse = ", "), "\n")
+
+  denied_n <- 0L; mirror_n <- 0L
+  for (i in seq_len(nrow(input))) {
+    cands <- c(split_urls(input$url_raw[i]), split_urls(input$bugreports_raw[i]))
+    if (length(cands) == 0) next
+    cls <- vapply(cands, classify_url, character(1))
+    denied_n <- denied_n + sum(cls == "denied")
+    mirror_n <- mirror_n + sum(cls == "mirror")
+  }
+  cat(sprintf("  candidates dropped (denylist): %d\n", denied_n))
+  cat(sprintf("  candidates excluded (mirror): %d\n", mirror_n))
   invisible(NULL)
 }
