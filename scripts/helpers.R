@@ -79,3 +79,19 @@ parse_vcs_url <- function(u) {
   if (!nzchar(owner) || !nzchar(name)) return(NULL)
   list(host = host, host_domain = domain, owner = owner, name = name)
 }
+
+# ---- github.io pages last-resort ------------------------------------------
+parse_pages_url <- function(u) {
+  if (is.null(u) || length(u) == 0 || is.na(u) || !nzchar(trimws(u))) return(NULL)
+  s <- sub(">+$", "", sub("^<+", "", trimws(u)))
+  if (!grepl("^[a-z0-9+.-]+://", s, ignore.case = TRUE)) {
+    if (grepl("^[a-z0-9.-]+\\.[a-z]{2,}(/|$)", tolower(s))) s <- paste0("https://", s) else return(NULL)
+  }
+  dp <- .domain_of(s); domain <- dp$domain
+  if (is.na(domain) || !endsWith(domain, PAGES_SUFFIX)) return(NULL)
+  owner <- sub("\\.github\\.io$", "", domain)
+  if (!nzchar(owner)) return(NULL)
+  segs <- .path_segs(dp$path)
+  name <- if (length(segs) >= 1) sub("\\.git$", "", segs[1]) else paste0(owner, ".github.io")
+  list(host = "github", host_domain = "github.com", owner = owner, name = name)
+}
