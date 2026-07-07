@@ -309,3 +309,9 @@ print_coverage <- function(input, resolved, idx) {
   cat(sprintf("  candidates excluded (mirror): %d\n", mirror_n))
   invisible(NULL)
 }
+
+# ---- SP2 batching --------------------------------------------------------
+chunk <- function(x, n) {
+  if (length(x) == 0) return(list())
+  split(x, ceiling(seq_along(x) / n))
+}
