@@ -405,3 +405,106 @@ build_signals_summary <- function(latest, series, repos, repo_packages, today) {
   })
   do.call(rbind, rows)
 }
+
+# ---- SP2 shard + manifest helpers (ported from cran-downloads) ------------
+
+#' Extract all signals_series rows for a single year.
+#'
+#' @param con  SQLite connection (working DB with signals_series table)
+#' @param year integer
+#' @return data.frame(repo_id, date, metric, value)
+extract_year_rows <- function(con, year) {
+  year_prefix <- sprintf("%04d", as.integer(year))
+  DBI::dbGetQuery(
+    con,
+    "SELECT repo_id, date, metric, value
+       FROM signals_series
+      WHERE substr(date, 1, 4) = ?
+      ORDER BY repo_id, date, metric",
+    params = list(year_prefix)
+  )
+}
+
+#' Extract the rolling N-day window of signals_series rows.
+#'
+#' @param con         SQLite connection
+#' @param today       Date — reference "now"
+#' @param window_days integer — how many days back, inclusive of cutoff
+#' @return data.frame(repo_id, date, metric, value)
+extract_recent_rows <- function(con, today, window_days) {
+  cutoff <- format(today - as.integer(window_days), "%Y-%m-%d")
+  DBI::dbGetQuery(
+    con,
+    "SELECT repo_id, date, metric, value
+       FROM signals_series
+      WHERE date >= ?
+      ORDER BY repo_id, date, metric",
+    params = list(cutoff)
+  )
+}
+
+#' Write the given rows into a fresh SQLite file at `path`.
+#'
+#' Overwrites any existing file. Always creates the signals_series table
+#' with the canonical schema and idx_series_date index. Runs VACUUM at end
+#' so the file is minimal.
+export_series_shard <- function(path, rows) {
+  if (file.exists(path)) unlink(path)
+
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+
+  DBI::dbExecute(con, "PRAGMA journal_mode=DELETE")  # no WAL in published shards
+
+  DBI::dbExecute(con, "CREATE TABLE signals_series (
+    repo_id TEXT NOT NULL, date TEXT NOT NULL, metric TEXT NOT NULL, value INTEGER NOT NULL,
+    PRIMARY KEY (repo_id, date, metric))")
+  DBI::dbExecute(con, "CREATE INDEX idx_series_date ON signals_series(date)")
+
+  if (nrow(rows) > 0) {
+    DBI::dbBegin(con)
+    DBI::dbExecute(
+      con,
+      "INSERT INTO signals_series (repo_id, date, metric, value) VALUES (?, ?, ?, ?)",
+      params = list(rows$repo_id, rows$date, rows$metric, rows$value)
+    )
+    DBI::dbCommit(con)
+  }
+
+  DBI::dbExecute(con, "VACUUM")
+  invisible(NULL)
+}
+
+#' Write a minimal SQLite file containing the vcs_signals_summary, repos,
+#' and repo_packages tables — the published "summary" shard.
+export_summary_shard <- function(path, summary_df, repos_df, repo_packages_df) {
+  if (file.exists(path)) unlink(path)
+
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+
+  DBI::dbExecute(con, "PRAGMA journal_mode=DELETE")
+  ensure_series_schema(con)
+  ensure_repo_schema(con)
+
+  if (nrow(summary_df) > 0) DBI::dbWriteTable(con, "vcs_signals_summary", summary_df, append = TRUE)
+  if (nrow(repos_df) > 0) DBI::dbWriteTable(con, "repos", repos_df, append = TRUE)
+  if (nrow(repo_packages_df) > 0) DBI::dbWriteTable(con, "repo_packages", repo_packages_df, append = TRUE)
+
+  DBI::dbExecute(con, "VACUUM")
+  invisible(NULL)
+}
+
+#' Write the manifest.json describing which shards changed this run.
+#'
+#' Empty arrays are preserved (jsonlite default is to drop them — we force them).
+write_manifest <- function(path, changed_shards, tag, summary) {
+  obj <- list(
+    tag            = tag,
+    generated_at   = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
+    changed_shards = as.list(changed_shards),
+    summary        = summary
+  )
+  json <- jsonlite::toJSON(obj, auto_unbox = TRUE, pretty = TRUE, null = "null")
+  writeLines(json, path)
+}
