@@ -62,6 +62,6 @@ BACKFILL_DELAY_S <- 0.8   # pause between connection pages: each page costs 1 Gr
 METRIC_CONNECTIONS <- list(
   stars    = list(conn = "stargazers", order = "STARRED_AT", sel = "edges", ts = "starredAt"),
   forks    = list(conn = "forks",      order = "CREATED_AT",  sel = "nodes", ts = "createdAt"),
-  releases = list(conn = "releases",   order = "CREATED_AT",  sel = "nodes", ts = "createdAt")
+  releases_total = list(conn = "releases", order = "CREATED_AT", sel = "nodes", ts = "createdAt")
 )
-BACKFILL_METRICS <- c("stars", "forks", "releases")  # default metric set for a backfill run
+BACKFILL_METRICS <- c("stars", "forks", "releases_total")  # default metric set for a backfill run

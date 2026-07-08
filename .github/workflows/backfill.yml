@@ -3,9 +3,13 @@ on:
   workflow_dispatch:
     inputs:
       metrics:
-        description: "Comma-separated metrics to backfill (stars, forks, releases)"
+        description: "Comma-separated metrics to backfill (stars, forks, releases_total)"
         required: false
-        default: "stars,forks,releases"
+        default: "stars,forks,releases_total"
+      purge:
+        description: "Comma-separated metrics to delete during merge (e.g. releases)"
+        required: false
+        default: ""
 permissions:
   contents: write
 concurrency:
@@ -121,6 +125,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VCS_OUT: out
           VCS_PARTS: parts
+          VCS_PURGE_METRICS: ${{ inputs.purge }}
         run: Rscript scripts/backfill.R merge
       - name: Refresh release notes
         env:
