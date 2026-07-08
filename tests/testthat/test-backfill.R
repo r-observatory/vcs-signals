@@ -78,7 +78,7 @@ test_that("run_fetch_shard skips a repo whose page carries GraphQL errors, writi
   expect_equal(nrow(rows[rows$repo_id == "github.com/t/trunc", ]), 0)  # no partial curve persisted
 })
 
-test_that("run_fetch_shard(metrics=c(\"forks\",\"releases\")) writes rows for both requested metrics and none for stars", {
+test_that("run_fetch_shard(metrics=c(\"forks\",\"releases_total\")) writes rows for both requested metrics and none for stars", {
   out_dir <- tempfile("out"); dir.create(out_dir)
   roster <- data.frame(repo_id = "github.com/a/ok", owner = "a", name = "ok",
                        stars = 2L, done = 0L, stringsAsFactors = FALSE)
@@ -98,12 +98,12 @@ test_that("run_fetch_shard(metrics=c(\"forks\",\"releases\")) writes rows for bo
     stop("unexpected metric in query")
   })
 
-  shard_path <- run_fetch_shard(io, out_dir, roster_path, 0, 1, delay = 0, metrics = c("forks", "releases"))
+  shard_path <- run_fetch_shard(io, out_dir, roster_path, 0, 1, delay = 0, metrics = c("forks", "releases_total"))
   con <- DBI::dbConnect(RSQLite::SQLite(), shard_path); on.exit(DBI::dbDisconnect(con))
   rows <- DBI::dbGetQuery(con, "SELECT * FROM signals_series")
-  expect_setequal(unique(rows$metric), c("forks", "releases"))   # requested metrics only, no stars
+  expect_setequal(unique(rows$metric), c("forks", "releases_total"))   # requested metrics only, no stars
   expect_equal(sort(rows$value[rows$metric == "forks"]), c(1L, 2L))
-  expect_equal(rows$value[rows$metric == "releases"], 1L)
+  expect_equal(rows$value[rows$metric == "releases_total"], 1L)
 })
 
 test_that("run_fetch_shard skips only the erroring metric, still writing rows for the other requested metric", {
@@ -122,10 +122,10 @@ test_that("run_fetch_shard skips only the erroring metric, still writing rows fo
     stop("unexpected metric in query")
   })
 
-  shard_path <- run_fetch_shard(io, out_dir, roster_path, 0, 1, delay = 0, metrics = c("forks", "releases"))
+  shard_path <- run_fetch_shard(io, out_dir, roster_path, 0, 1, delay = 0, metrics = c("forks", "releases_total"))
   con <- DBI::dbConnect(RSQLite::SQLite(), shard_path); on.exit(DBI::dbDisconnect(con))
   rows <- DBI::dbGetQuery(con, "SELECT * FROM signals_series")
-  expect_equal(unique(rows$metric), "releases")   # forks metric errored and was skipped, releases still written
+  expect_equal(unique(rows$metric), "releases_total")   # forks metric errored and was skipped, releases still written
   expect_equal(rows$value, 1L)
 })
 
@@ -205,4 +205,54 @@ test_that("run_merge folds in backfill without truncating aged-out forward year-
 
   latest <- DBI::dbGetQuery(rec_con, "SELECT value FROM series_latest WHERE repo_id='R' AND metric='stars'")
   expect_equal(latest$value, 42)   # series_latest untouched by the merge
+})
+
+test_that("run_merge(purge_metrics=c(\"releases\")) deletes those rows from the published history and re-exports the year without them", {
+  out_dir <- tempfile("out"); dir.create(out_dir)
+  parts_dir <- tempfile("parts"); dir.create(parts_dir)   # no backfill rows this run
+  released <- tempfile("released"); dir.create(released)
+
+  today <- format(Sys.Date())
+  old_year <- substr(format(Sys.Date() - 1200), 1, 4)
+  fwd_date <- paste0(old_year, "-06-15")
+
+  # Recent shard: a single current stars point, series_latest embedded.
+  recent_path <- file.path(released, "vcs-signals-recent.db")
+  export_series_shard(recent_path,
+    data.frame(repo_id = "R", date = today, metric = "stars", value = 7L, stringsAsFactors = FALSE))
+  rcon <- DBI::dbConnect(RSQLite::SQLite(), recent_path)
+  ensure_repo_schema(rcon); ensure_series_schema(rcon)
+  DBI::dbExecute(rcon, "INSERT INTO series_latest VALUES ('R','stars',7)")
+  DBI::dbDisconnect(rcon)
+
+  # Aged-out year shard carrying a stars row to keep AND a mis-named "releases"
+  # row to purge, both in the same year.
+  year_rows <- data.frame(repo_id = c("R", "R"), date = c(fwd_date, fwd_date),
+                          metric = c("stars", "releases"), value = c(50L, 3L),
+                          stringsAsFactors = FALSE)
+  export_series_shard(file.path(released, sprintf("vcs-signals-%s.db", old_year)), year_rows)
+
+  jsonlite::write_json(list(summary = list(years = list(as.integer(old_year)))),
+                        file.path(released, "manifest.json"), auto_unbox = TRUE)
+
+  io <- list(
+    release_exists = function() TRUE,
+    download = function(pattern, dir) {
+      src <- file.path(released, pattern)
+      if (!file.exists(src)) return(FALSE)
+      file.copy(src, file.path(dir, pattern), overwrite = TRUE)
+      TRUE
+    },
+    upload = function(path) invisible(NULL))
+
+  run_merge(io, out_dir, parts_dir, purge_metrics = c("releases"))
+
+  # The purged year shard was re-exported: the "releases" rows are gone, the
+  # stars row survives.
+  yr_con <- DBI::dbConnect(RSQLite::SQLite(), file.path(out_dir, sprintf("vcs-signals-%s.db", old_year)))
+  on.exit(DBI::dbDisconnect(yr_con))
+  yr_rows <- DBI::dbGetQuery(yr_con, "SELECT metric, value FROM signals_series")
+  expect_equal(nrow(yr_rows), 1)
+  expect_equal(yr_rows$metric, "stars")
+  expect_equal(yr_rows$value, 50L)
 })

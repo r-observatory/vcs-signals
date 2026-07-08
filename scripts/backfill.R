@@ -131,7 +131,7 @@ run_fetch_shard <- function(io, out_dir, roster_path, i, N, delay = BACKFILL_DEL
 #' touched by the backfilled rows are re-exported (touched_years), so every
 #' other published year shard - and the untouched portion of the recent
 #' shard - are left exactly as protect_history_pull downloaded them.
-run_merge <- function(io, out_dir, parts_dir) {
+run_merge <- function(io, out_dir, parts_dir, purge_metrics = character(0)) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   working_path <- file.path(out_dir, "_backfill_working.db")
   seed_working_db(io, out_dir, working_path)
@@ -166,6 +166,18 @@ run_merge <- function(io, out_dir, parts_dir) {
         params = list(yrows$repo_id, yrows$date, yrows$metric, yrows$value))
   }
 
+  # Purge mis-named or retired metrics from the complete working history, and
+  # remember the years they spanned so those shards are re-exported without them.
+  purged_years <- character(0)
+  if (length(purge_metrics) > 0) {
+    ph <- paste(sprintf("'%s'", purge_metrics), collapse = ", ")
+    purged_years <- DBI::dbGetQuery(con, sprintf(
+      "SELECT DISTINCT substr(date, 1, 4) AS yr FROM signals_series WHERE metric IN (%s)", ph))$yr
+    DBI::dbExecute(con, sprintf("DELETE FROM signals_series WHERE metric IN (%s)", ph))
+    message(sprintf("merge: purged metric(s) %s across %d year(s)",
+                    paste(purge_metrics, collapse = ","), length(purged_years)))
+  }
+
   parts <- list.files(parts_dir, pattern = "^vcs-signals-shard-.*\\.db$", full.names = TRUE)
   part_rows <- lapply(parts, function(p) {
     pcon <- DBI::dbConnect(RSQLite::SQLite(), p)
@@ -189,7 +201,7 @@ run_merge <- function(io, out_dir, parts_dir) {
     after <- DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM signals_series")$n
     n_inserted <- after - before
   }
-  touched_years <- unique(substr(backfill_rows$date, 1, 4))
+  touched_years <- unique(c(substr(backfill_rows$date, 1, 4), purged_years))
   message(sprintf("merge: %d shard partials, %d backfilled rows (%d newly inserted), %d year(s) touched",
                   length(parts), nrow(backfill_rows), n_inserted, length(touched_years)))
 
@@ -219,7 +231,9 @@ main <- function(mode, out_dir) {
       stop(sprintf("fetch: unknown metric(s) in VCS_METRICS: %s", paste(unknown, collapse = ", ")))
     run_fetch_shard(io, out_dir, file.path(roster_dir, "vcs-signals-roster.db"), i, N, metrics = metrics)
   } else if (mode == "merge") {
-    run_merge(io, out_dir, Sys.getenv("VCS_PARTS", "parts"))
+    purge <- trimws(strsplit(Sys.getenv("VCS_PURGE_METRICS", ""), ",")[[1]])
+    purge <- purge[nzchar(purge)]
+    run_merge(io, out_dir, Sys.getenv("VCS_PARTS", "parts"), purge_metrics = purge)
   } else {
     stop("usage: backfill.R [enumerate|fetch|merge]")
   }

@@ -65,10 +65,10 @@ test_that("reconstruct_cumulative_series yields ascending cumulative rows for fo
   expect_equal(out$value, c(2L, 3L))
 })
 
-test_that("reconstruct_cumulative_series yields ascending cumulative rows for releases", {
+test_that("reconstruct_cumulative_series yields ascending cumulative rows for releases_total", {
   out <- reconstruct_cumulative_series("R", c(
-    "2019-05-01T00:00:00Z", "2020-03-15T00:00:00Z"), "releases")
+    "2019-05-01T00:00:00Z", "2020-03-15T00:00:00Z"), "releases_total")
   expect_equal(out$date, c("2019-05-01", "2020-03-15"))
-  expect_equal(out$metric, c("releases", "releases"))
+  expect_equal(out$metric, c("releases_total", "releases_total"))
   expect_equal(out$value, c(1L, 2L))
 })

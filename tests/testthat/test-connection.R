@@ -18,7 +18,7 @@ test_that("build_connection_query embeds the forks connection/order/selection (n
 })
 
 test_that("build_connection_query embeds the releases connection/order/selection (nodes)", {
-  q <- build_connection_query("tidyverse", "ggplot2", "releases")
+  q <- build_connection_query("tidyverse", "ggplot2", "releases_total")
   expect_match(q, "releases\\(")
   expect_match(q, "CREATED_AT")
   expect_match(q, "nodes \\{ createdAt \\}")
@@ -64,7 +64,7 @@ test_that("parse_connection extracts timestamps from a nodes-shaped (releases) r
   resp <- list(data = list(repository = list(releases = list(
     pageInfo = list(endCursor = NA, hasNextPage = FALSE),
     nodes = list(list(createdAt = "2022-01-01T00:00:00Z"))))))
-  out <- parse_connection(resp, "releases")
+  out <- parse_connection(resp, "releases_total")
   expect_equal(out$timestamps, "2022-01-01T00:00:00Z")
   expect_false(out$has_next)
 })
@@ -132,7 +132,7 @@ test_that("paginate_connection loops after cursors until has_next is FALSE (fork
 test_that("paginate_connection returns character(0) for a repo with no items on the connection", {
   io <- list(graphql = function(query) list(data = list(repository = list(releases = list(
     pageInfo = list(endCursor = NULL, hasNextPage = FALSE), nodes = list())))))
-  expect_equal(paginate_connection(io, "o", "n", "releases", delay = 0), character(0))
+  expect_equal(paginate_connection(io, "o", "n", "releases_total", delay = 0), character(0))
 })
 
 test_that("paginate_connection errors when a mid-pagination page carries GraphQL errors (no silent truncation)", {
@@ -164,7 +164,7 @@ test_that("paginate_connection stops (does not loop forever) when has_next is TR
 test_that("a repository-null response with NO errors still degrades to empty (repo gone / private)", {
   io <- list(graphql = function(query) list(data = list(repository = NULL)))
   expect_equal(paginate_connection(io, "o", "n", "stars", delay = 0), character(0))
-  expect_equal(paginate_connection(io, "o", "n", "releases", delay = 0), character(0))
+  expect_equal(paginate_connection(io, "o", "n", "releases_total", delay = 0), character(0))
 })
 
 test_that("paginate_stargazers wrapper behaves identically to paginate_connection(..., \"stars\")", {
