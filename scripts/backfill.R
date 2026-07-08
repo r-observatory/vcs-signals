@@ -1,17 +1,20 @@
 #!/usr/bin/env Rscript
-# scripts/backfill.R - sharded historical star-series backfill for vcs-signals.
+# scripts/backfill.R - sharded historical cumulative-series backfill for
+# vcs-signals (stars, forks, releases).
 #
 # Three sub-commands, wired together by CI:
 #   enumerate -> build the GitHub repo roster from the published summary (one job)
-#   fetch     -> paginate stargazers for one even mod-N shard of the roster (matrix job)
+#   fetch     -> paginate the requested metrics for one even mod-N shard of the
+#                roster (matrix job)
 #   merge     -> fold every shard partial's reconstructed rows into the published
 #                series and republish (one job)
 #
-# Reconstruction (reconstruct_star_series, scripts/helpers.R) and the query
-# builder/parser/paginator (build_stargazers_query/parse_stargazers/
-# paginate_stargazers, scripts/github.R) are pure/thin and unit-tested; only
-# the three run_* orchestrators below touch the network or disk, behind an
-# injected io, mirroring scripts/update.R's run_update().
+# Reconstruction (reconstruct_cumulative_series, scripts/helpers.R) and the
+# query builder/parser/paginator (build_connection_query/parse_connection/
+# paginate_connection, scripts/github.R) are pure/thin and unit-tested, driven
+# by METRIC_CONNECTIONS (scripts/config.R); only the three run_* orchestrators
+# below touch the network or disk, behind an injected io, mirroring
+# scripts/update.R's run_update().
 if (!exists("STARGAZER_PAGE"))      source("scripts/config.R")
 if (!exists("ensure_series_schema")) source("scripts/helpers.R")
 if (!exists("build_gauge_query"))    source("scripts/github.R")
@@ -57,7 +60,8 @@ run_enumerate <- function(io, out_dir) {
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   rows <- DBI::dbGetQuery(con,
     "SELECT repo_id, MAX(stars) AS stars FROM vcs_signals_summary
-      WHERE repo_id LIKE 'github.com/%' AND stars > 0 GROUP BY repo_id")
+      WHERE repo_id LIKE 'github.com/%'
+        AND (stars > 0 OR forks > 0 OR releases_total > 0) GROUP BY repo_id")
 
   parts <- strsplit(rows$repo_id, "/", fixed = TRUE)
   roster <- data.frame(
@@ -74,30 +78,36 @@ run_enumerate <- function(io, out_dir) {
 }
 
 # ---- fetch ----------------------------------------------------------------------
-#' Paginate stargazers for one even mod-N shard of the roster and reconstruct
-#' each repo's historical daily-cumulative star series. A repo whose
-#' pagination errors (rate limit, transient 502, repo gone) is skipped this
-#' run - left for a re-run - rather than aborting the whole shard.
-run_fetch_shard <- function(io, out_dir, roster_path, i, N, delay = BACKFILL_DELAY_S) {
+#' Paginate the requested metrics for one even mod-N shard of the roster and
+#' reconstruct each repo's historical daily-cumulative series per metric. For
+#' each repo, every metric in `metrics` is fetched independently: a metric
+#' whose pagination errors (rate limit, transient 502, repo gone) is skipped
+#' this run for that metric only - left for a re-run - rather than aborting
+#' the whole repo or the whole shard.
+run_fetch_shard <- function(io, out_dir, roster_path, i, N, delay = BACKFILL_DELAY_S,
+                            metrics = BACKFILL_METRICS) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   roster <- load_roster(roster_path)
   mine <- roster[shard_rows(nrow(roster), i, N), , drop = FALSE]
-  message(sprintf("fetch shard %d/%d: %d of %d repos", i, N, nrow(mine), nrow(roster)))
+  message(sprintf("fetch shard %d/%d: %d of %d repos, metrics: %s",
+                  i, N, nrow(mine), nrow(roster), paste(metrics, collapse = ",")))
 
   acc <- list(); n_ok <- 0L; n_skipped <- 0L; n_rows <- 0L
   total <- nrow(mine)
   for (k in seq_len(total)) {
     if (k %% 500L == 0L)
-      message(sprintf("fetch shard %d/%d: %d/%d repos processed (%d fetched, %d skipped, %d series rows so far)",
+      message(sprintf("fetch shard %d/%d: %d/%d repos processed (%d metric-fetches ok, %d skipped, %d series rows so far)",
                       i, N, k, total, n_ok, n_skipped, n_rows))
-    starred_at <- tryCatch(paginate_stargazers(io, mine$owner[k], mine$name[k], delay = delay),
-                          error = function(e) NULL)
-    if (is.null(starred_at)) { n_skipped <- n_skipped + 1L; next }
-    n_ok <- n_ok + 1L
-    if (length(starred_at) == 0) next
-    series <- reconstruct_star_series(mine$repo_id[k], starred_at)
-    acc[[length(acc) + 1L]] <- series
-    n_rows <- n_rows + nrow(series)
+    for (metric in metrics) {
+      timestamps <- tryCatch(paginate_connection(io, mine$owner[k], mine$name[k], metric, delay = delay),
+                            error = function(e) NULL)
+      if (is.null(timestamps)) { n_skipped <- n_skipped + 1L; next }
+      n_ok <- n_ok + 1L
+      if (length(timestamps) == 0) next
+      series <- reconstruct_cumulative_series(mine$repo_id[k], timestamps, metric)
+      acc[[length(acc) + 1L]] <- series
+      n_rows <- n_rows + nrow(series)
+    }
   }
   rows <- if (length(acc)) do.call(rbind, acc) else
     data.frame(repo_id = character(), date = character(), metric = character(),
@@ -105,17 +115,18 @@ run_fetch_shard <- function(io, out_dir, roster_path, i, N, delay = BACKFILL_DEL
 
   shard_path <- file.path(out_dir, sprintf("vcs-signals-shard-%d.db", i))
   export_series_shard(shard_path, rows)
-  message(sprintf("fetch shard %d/%d: %d repos fetched, %d skipped, %d series rows",
+  message(sprintf("fetch shard %d/%d: %d metric-fetches ok, %d skipped, %d series rows",
                   i, N, n_ok, n_skipped, nrow(rows)))
   shard_path
 }
 
 # ---- merge ------------------------------------------------------------------------
-#' Fold every shard partial's reconstructed stars rows into the published
-#' series and republish. Only historical stars rows are inserted (INSERT OR
-#' IGNORE keyed on repo_id/date/metric): a backfilled row can never collide
-#' with a same-day row for any other metric, and if it collides with today's
-#' forward stars point the existing (forward) value wins untouched.
+#' Fold every shard partial's reconstructed rows (whatever metrics that run
+#' fetched - stars, forks, releases, or any subset) into the published series
+#' and republish. Rows are inserted with INSERT OR IGNORE keyed on
+#' repo_id/date/metric: a backfilled row can never collide with a same-day
+#' row for a different metric, and if it collides with today's forward point
+#' for the same metric the existing (forward) value wins untouched.
 #' series_latest is never written here. Only the distinct years actually
 #' touched by the backfilled rows are re-exported (touched_years), so every
 #' other published year shard - and the untouched portion of the recent
@@ -202,7 +213,11 @@ main <- function(mode, out_dir) {
     if (is.na(i) || is.na(N) || N < 1L || i < 0L || i >= N)
       stop("fetch: VCS_SHARD_I must be in [0, VCS_SHARD_N)")
     roster_dir <- Sys.getenv("VCS_ROSTER", out_dir)
-    run_fetch_shard(io, out_dir, file.path(roster_dir, "vcs-signals-roster.db"), i, N)
+    metrics <- trimws(strsplit(Sys.getenv("VCS_METRICS", paste(BACKFILL_METRICS, collapse = ",")), ",")[[1]])
+    unknown <- setdiff(metrics, names(METRIC_CONNECTIONS))
+    if (length(unknown) > 0)
+      stop(sprintf("fetch: unknown metric(s) in VCS_METRICS: %s", paste(unknown, collapse = ", ")))
+    run_fetch_shard(io, out_dir, file.path(roster_dir, "vcs-signals-roster.db"), i, N, metrics = metrics)
   } else if (mode == "merge") {
     run_merge(io, out_dir, Sys.getenv("VCS_PARTS", "parts"))
   } else {

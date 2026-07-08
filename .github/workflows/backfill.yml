@@ -1,6 +1,11 @@
-name: backfill-stars
+name: backfill
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      metrics:
+        description: "Comma-separated metrics to backfill (stars, forks, releases)"
+        required: false
+        default: "stars,forks,releases"
 permissions:
   contents: write
 concurrency:
@@ -74,13 +79,14 @@ jobs:
         with:
           name: roster
           path: roster
-      - name: Reconstruct star history (shard ${{ matrix.shard }} of 12)
+      - name: Reconstruct history (shard ${{ matrix.shard }} of 12)
         env:
           VCS_SIGNALS_TOKEN: ${{ secrets.VCS_SIGNALS_TOKEN }}
           VCS_OUT: out
           VCS_ROSTER: roster
           VCS_SHARD_I: ${{ matrix.shard }}
           VCS_SHARD_N: "12"
+          VCS_METRICS: ${{ inputs.metrics }}
         run: Rscript scripts/backfill.R fetch
       - uses: actions/upload-artifact@v7
         with:

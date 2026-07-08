@@ -424,29 +424,36 @@ build_signals_summary <- function(latest, series, repos, repo_packages, today) {
   do.call(rbind, rows)
 }
 
-# ---- historical star-series reconstruction ----------------------------------
-#' Reconstruct a repo's daily-cumulative star series from raw
-#' stargazers.starredAt timestamps (any order). One row per distinct UTC
-#' calendar day on which the repo gained a star, value = cumulative star
-#' count as of the end of that day, ordered ascending by date. Pure; sorts
-#' defensively so callers need not guarantee ASC input. Every distinct-day
-#' row is already a change point (cumulative strictly increases day over
-#' day), so the sparse/change-only invariant of signals_series holds by
-#' construction.
+# ---- historical cumulative-series reconstruction -----------------------------
+#' Reconstruct a repo's daily-cumulative series from raw creation timestamps
+#' for a cumulative connection metric (stars/forks/releases), in any order.
+#' One row per distinct UTC calendar day on which the repo gained an item,
+#' value = cumulative count as of the end of that day, ordered ascending by
+#' date. Pure; sorts defensively so callers need not guarantee ASC input.
+#' Every distinct-day row is already a change point (cumulative strictly
+#' increases day over day), so the sparse/change-only invariant of
+#' signals_series holds by construction.
 #'
 #' @param repo_id    character scalar
-#' @param starred_at character vector of ISO-8601 starredAt timestamps
-#' @return data.frame(repo_id, date, metric, value) - metric is always "stars"
-reconstruct_star_series <- function(repo_id, starred_at) {
+#' @param timestamps character vector of ISO-8601 timestamps (starredAt for
+#'   stars, createdAt for forks/releases)
+#' @param metric     character scalar stamped onto every row
+#' @return data.frame(repo_id, date, metric, value)
+reconstruct_cumulative_series <- function(repo_id, timestamps, metric) {
   empty <- data.frame(repo_id = character(), date = character(), metric = character(),
                       value = integer(), stringsAsFactors = FALSE)
-  if (is.null(starred_at) || length(starred_at) == 0) return(empty)
+  if (is.null(timestamps) || length(timestamps) == 0) return(empty)
 
-  days <- sort(substr(starred_at, 1, 10))
+  days <- sort(substr(timestamps, 1, 10))
   counts <- table(days)          # names(counts) sorted ascending (ISO dates sort lexicographically)
   dates <- names(counts)
-  data.frame(repo_id = rep(repo_id, length(dates)), date = dates, metric = "stars",
+  data.frame(repo_id = rep(repo_id, length(dates)), date = dates, metric = metric,
              value = as.integer(cumsum(as.integer(counts))), stringsAsFactors = FALSE)
+}
+
+#' Thin wrapper preserving the stars-only reconstruction for existing callers.
+reconstruct_star_series <- function(repo_id, starred_at) {
+  reconstruct_cumulative_series(repo_id, starred_at, "stars")
 }
 
 # ---- shard + manifest helpers ------------------------------------------------

@@ -78,6 +78,57 @@ test_that("run_fetch_shard skips a repo whose page carries GraphQL errors, writi
   expect_equal(nrow(rows[rows$repo_id == "github.com/t/trunc", ]), 0)  # no partial curve persisted
 })
 
+test_that("run_fetch_shard(metrics=c(\"forks\",\"releases\")) writes rows for both requested metrics and none for stars", {
+  out_dir <- tempfile("out"); dir.create(out_dir)
+  roster <- data.frame(repo_id = "github.com/a/ok", owner = "a", name = "ok",
+                       stars = 2L, done = 0L, stringsAsFactors = FALSE)
+  roster_path <- file.path(out_dir, "vcs-signals-roster.db")
+  write_roster(roster_path, roster)
+
+  io <- list(graphql = function(query) {
+    if (grepl("forks\\(", query))
+      return(list(data = list(repository = list(forks = list(
+        pageInfo = list(endCursor = NULL, hasNextPage = FALSE),
+        nodes = list(list(createdAt = "2021-01-01T00:00:00Z"),
+                    list(createdAt = "2021-01-02T00:00:00Z")))))))
+    if (grepl("releases\\(", query))
+      return(list(data = list(repository = list(releases = list(
+        pageInfo = list(endCursor = NULL, hasNextPage = FALSE),
+        nodes = list(list(createdAt = "2021-03-01T00:00:00Z")))))))
+    stop("unexpected metric in query")
+  })
+
+  shard_path <- run_fetch_shard(io, out_dir, roster_path, 0, 1, delay = 0, metrics = c("forks", "releases"))
+  con <- DBI::dbConnect(RSQLite::SQLite(), shard_path); on.exit(DBI::dbDisconnect(con))
+  rows <- DBI::dbGetQuery(con, "SELECT * FROM signals_series")
+  expect_setequal(unique(rows$metric), c("forks", "releases"))   # requested metrics only, no stars
+  expect_equal(sort(rows$value[rows$metric == "forks"]), c(1L, 2L))
+  expect_equal(rows$value[rows$metric == "releases"], 1L)
+})
+
+test_that("run_fetch_shard skips only the erroring metric, still writing rows for the other requested metric", {
+  out_dir <- tempfile("out"); dir.create(out_dir)
+  roster <- data.frame(repo_id = "github.com/a/ok", owner = "a", name = "ok",
+                       stars = 2L, done = 0L, stringsAsFactors = FALSE)
+  roster_path <- file.path(out_dir, "vcs-signals-roster.db")
+  write_roster(roster_path, roster)
+
+  io <- list(graphql = function(query) {
+    if (grepl("forks\\(", query)) stop("502")
+    if (grepl("releases\\(", query))
+      return(list(data = list(repository = list(releases = list(
+        pageInfo = list(endCursor = NULL, hasNextPage = FALSE),
+        nodes = list(list(createdAt = "2021-03-01T00:00:00Z")))))))
+    stop("unexpected metric in query")
+  })
+
+  shard_path <- run_fetch_shard(io, out_dir, roster_path, 0, 1, delay = 0, metrics = c("forks", "releases"))
+  con <- DBI::dbConnect(RSQLite::SQLite(), shard_path); on.exit(DBI::dbDisconnect(con))
+  rows <- DBI::dbGetQuery(con, "SELECT * FROM signals_series")
+  expect_equal(unique(rows$metric), "releases")   # forks metric errored and was skipped, releases still written
+  expect_equal(rows$value, 1L)
+})
+
 test_that("run_merge folds in backfill without truncating aged-out forward year-shard data or series_latest", {
   out_dir <- tempfile("out"); dir.create(out_dir)
   parts_dir <- tempfile("parts"); dir.create(parts_dir)

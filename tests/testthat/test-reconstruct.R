@@ -44,3 +44,31 @@ test_that("column types are character/character/character/integer", {
   expect_type(out$metric, "character")
   expect_type(out$value, "integer")
 })
+
+test_that("reconstruct_star_series wrapper matches reconstruct_cumulative_series(..., \"stars\")", {
+  starred_at <- c("2020-01-01T00:00:00Z", "2020-01-02T00:00:00Z", "2020-01-02T05:00:00Z")
+  expect_identical(reconstruct_star_series("R", starred_at),
+                   reconstruct_cumulative_series("R", starred_at, "stars"))
+})
+
+test_that("reconstruct_cumulative_series returns zero rows for empty input regardless of metric", {
+  out <- reconstruct_cumulative_series("R", character(0), "forks")
+  expect_equal(nrow(out), 0)
+  expect_equal(names(out), c("repo_id", "date", "metric", "value"))
+})
+
+test_that("reconstruct_cumulative_series yields ascending cumulative rows for forks", {
+  out <- reconstruct_cumulative_series("R", c(
+    "2020-01-01T00:00:00Z", "2020-01-01T05:00:00Z", "2021-06-02T00:00:00Z"), "forks")
+  expect_equal(out$date, c("2020-01-01", "2021-06-02"))
+  expect_equal(out$metric, c("forks", "forks"))
+  expect_equal(out$value, c(2L, 3L))
+})
+
+test_that("reconstruct_cumulative_series yields ascending cumulative rows for releases", {
+  out <- reconstruct_cumulative_series("R", c(
+    "2019-05-01T00:00:00Z", "2020-03-15T00:00:00Z"), "releases")
+  expect_equal(out$date, c("2019-05-01", "2020-03-15"))
+  expect_equal(out$metric, c("releases", "releases"))
+  expect_equal(out$value, c(1L, 2L))
+})
