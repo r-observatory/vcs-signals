@@ -17,7 +17,11 @@ test_that("shard_rows handles the empty-roster case", {
   expect_equal(shard_rows(0, 0, 4), integer(0))
 })
 
-test_that("run_fetch_shard skips a repo whose pagination errors, without failing the whole shard", {
+test_that("run_fetch_shard skips a repo whose continuation fetch errors, without failing the whole shard", {
+  # Both repos fit in one batched chunk (batch_size default 20). Repo "ok"'s
+  # batched first page is already complete (has_next FALSE); repo "bad"'s
+  # batched first page reports has_next TRUE, so its continuation fetch is
+  # attempted separately and errors - only "bad" is skipped.
   out_dir <- tempfile("out"); dir.create(out_dir)
   roster <- data.frame(repo_id = c("github.com/a/ok", "github.com/b/bad"),
                        owner = c("a", "b"), name = c("ok", "bad"),
@@ -26,11 +30,18 @@ test_that("run_fetch_shard skips a repo whose pagination errors, without failing
   write_roster(roster_path, roster)
 
   io <- list(graphql = function(query) {
+    if (grepl("r0:", query, fixed = TRUE)) {
+      return(list(data = list(
+        r0 = list(stargazers = list(
+          pageInfo = list(endCursor = NULL, hasNextPage = FALSE),
+          edges = list(list(starredAt = "2021-01-01T00:00:00Z"),
+                      list(starredAt = "2021-01-02T00:00:00Z")))),
+        r1 = list(stargazers = list(
+          pageInfo = list(endCursor = "C1", hasNextPage = TRUE),
+          edges = list(list(starredAt = "2021-03-01T00:00:00Z")))))))
+    }
     if (grepl('name: "bad"', query, fixed = TRUE)) stop("502")
-    list(data = list(repository = list(stargazers = list(
-      pageInfo = list(endCursor = NULL, hasNextPage = FALSE),
-      edges = list(list(starredAt = "2021-01-01T00:00:00Z"),
-                  list(starredAt = "2021-01-02T00:00:00Z"))))))
+    stop("unexpected query")
   })
 
   shard_path <- run_fetch_shard(io, out_dir, roster_path, 0, 1, delay = 0)
@@ -41,12 +52,13 @@ test_that("run_fetch_shard skips a repo whose pagination errors, without failing
   expect_equal(rows$value, c(1L, 2L))                       # two distinct days, cumulative 1 then 2
 })
 
-test_that("run_fetch_shard skips a repo whose page carries GraphQL errors, writing no truncated curve", {
-  # Repo "trunc" returns a clean page 1 (has_next TRUE) then an in-body error
-  # on page 2 (HTTP 200 with data$repository$stargazers null AND errors present):
-  # GitHub's common transient / secondary-limit shape. The repo must be skipped
-  # entirely, not persisted as a curve that plateaus after page 1. Repo "ok" in
-  # the same shard is still processed.
+test_that("run_fetch_shard skips a repo whose continuation page carries GraphQL errors, writing no truncated curve", {
+  # Repo "trunc"'s batched first page reports has_next TRUE, then its
+  # continuation page returns an in-body error (HTTP 200 with
+  # data$repository$stargazers null AND errors present): GitHub's common
+  # transient / secondary-limit shape. The repo must be skipped entirely, not
+  # persisted as a curve that plateaus after page 1. Repo "ok" in the same
+  # chunk is still processed.
   out_dir <- tempfile("out"); dir.create(out_dir)
   roster <- data.frame(repo_id = c("github.com/a/ok", "github.com/t/trunc"),
                        owner = c("a", "t"), name = c("ok", "trunc"),
@@ -54,21 +66,19 @@ test_that("run_fetch_shard skips a repo whose page carries GraphQL errors, writi
   roster_path <- file.path(out_dir, "vcs-signals-roster.db")
   write_roster(roster_path, roster)
 
-  trunc_calls <- new.env(); trunc_calls$n <- 0L
   io <- list(graphql = function(query) {
-    if (grepl('name: "trunc"', query, fixed = TRUE)) {
-      trunc_calls$n <- trunc_calls$n + 1L
-      if (trunc_calls$n == 1L)
-        return(list(data = list(repository = list(stargazers = list(
+    if (grepl("r0:", query, fixed = TRUE)) {
+      return(list(data = list(
+        r0 = list(stargazers = list(
+          pageInfo = list(endCursor = NULL, hasNextPage = FALSE),
+          edges = list(list(starredAt = "2021-01-01T00:00:00Z")))),
+        r1 = list(stargazers = list(
           pageInfo = list(endCursor = "C1", hasNextPage = TRUE),
           edges = list(list(starredAt = "2019-01-01T00:00:00Z")))))))
-      # page 2: in-body error, stargazers null
-      return(list(data = list(repository = list(stargazers = NULL)),
-                  errors = list(list(message = "SECONDARY_RATE_LIMIT"))))
     }
-    list(data = list(repository = list(stargazers = list(
-      pageInfo = list(endCursor = NULL, hasNextPage = FALSE),
-      edges = list(list(starredAt = "2021-01-01T00:00:00Z"))))))
+    # continuation query for "trunc": in-body error, stargazers null
+    list(data = list(repository = list(stargazers = NULL)),
+        errors = list(list(message = "SECONDARY_RATE_LIMIT")))
   })
 
   shard_path <- run_fetch_shard(io, out_dir, roster_path, 0, 1, delay = 0)
@@ -78,7 +88,7 @@ test_that("run_fetch_shard skips a repo whose page carries GraphQL errors, writi
   expect_equal(nrow(rows[rows$repo_id == "github.com/t/trunc", ]), 0)  # no partial curve persisted
 })
 
-test_that("run_fetch_shard(metrics=c(\"forks\",\"releases_total\")) writes rows for both requested metrics and none for stars", {
+test_that("run_fetch_shard(metrics=c(\"forks\",\"releases_total\")) writes rows for both requested cumulative metrics through the batched path, and none for stars", {
   out_dir <- tempfile("out"); dir.create(out_dir)
   roster <- data.frame(repo_id = "github.com/a/ok", owner = "a", name = "ok",
                        stars = 2L, done = 0L, stringsAsFactors = FALSE)
@@ -87,12 +97,12 @@ test_that("run_fetch_shard(metrics=c(\"forks\",\"releases_total\")) writes rows 
 
   io <- list(graphql = function(query) {
     if (grepl("forks\\(", query))
-      return(list(data = list(repository = list(forks = list(
+      return(list(data = list(r0 = list(forks = list(
         pageInfo = list(endCursor = NULL, hasNextPage = FALSE),
         nodes = list(list(createdAt = "2021-01-01T00:00:00Z"),
                     list(createdAt = "2021-01-02T00:00:00Z")))))))
     if (grepl("releases\\(", query))
-      return(list(data = list(repository = list(releases = list(
+      return(list(data = list(r0 = list(releases = list(
         pageInfo = list(endCursor = NULL, hasNextPage = FALSE),
         nodes = list(list(createdAt = "2021-03-01T00:00:00Z")))))))
     stop("unexpected metric in query")
@@ -114,9 +124,9 @@ test_that("run_fetch_shard skips only the erroring metric, still writing rows fo
   write_roster(roster_path, roster)
 
   io <- list(graphql = function(query) {
-    if (grepl("forks\\(", query)) stop("502")
+    if (grepl("forks\\(", query)) stop("502")   # both the batched query AND its per-repo fallback fail
     if (grepl("releases\\(", query))
-      return(list(data = list(repository = list(releases = list(
+      return(list(data = list(r0 = list(releases = list(
         pageInfo = list(endCursor = NULL, hasNextPage = FALSE),
         nodes = list(list(createdAt = "2021-03-01T00:00:00Z")))))))
     stop("unexpected metric in query")
@@ -127,6 +137,53 @@ test_that("run_fetch_shard skips only the erroring metric, still writing rows fo
   rows <- DBI::dbGetQuery(con, "SELECT * FROM signals_series")
   expect_equal(unique(rows$metric), "releases_total")   # forks metric errored and was skipped, releases still written
   expect_equal(rows$value, 1L)
+})
+
+test_that("run_fetch_shard reconstructs issues_open through the batched-then-continue flow for both a complete and a paginated repo", {
+  # repo1's batched first page is already complete (has_next FALSE): two
+  # issues opened the same day, one of them closed two days later. repo2's
+  # batched first page reports has_next TRUE, so a second (still-open) issue
+  # is picked up via a continuation fetch that resumes from the returned
+  # cursor and prepends the already-fetched first page.
+  out_dir <- tempfile("out"); dir.create(out_dir)
+  roster <- data.frame(repo_id = c("github.com/o1/n1", "github.com/o2/n2"),
+                       owner = c("o1", "o2"), name = c("n1", "n2"),
+                       stars = c(1L, 1L), done = c(0L, 0L), stringsAsFactors = FALSE)
+  roster_path <- file.path(out_dir, "vcs-signals-roster.db")
+  write_roster(roster_path, roster)
+
+  io <- list(graphql = function(query) {
+    if (grepl("r0:", query, fixed = TRUE)) {
+      r0_nodes <- list(
+        list(createdAt = "2022-01-01T00:00:00Z", closedAt = NULL),
+        list(createdAt = "2022-01-01T05:00:00Z", closedAt = "2022-01-03T00:00:00Z"))
+      r1_nodes <- list(list(createdAt = "2022-02-01T00:00:00Z", closedAt = NULL))
+      return(list(data = list(
+        r0 = list(issues = list(
+          pageInfo = list(endCursor = NA, hasNextPage = FALSE),
+          nodes = r0_nodes)),
+        r1 = list(issues = list(
+          pageInfo = list(endCursor = "C9", hasNextPage = TRUE),
+          nodes = r1_nodes)))))
+    }
+    # continuation query for repo2 (owner o2/name n2), cursor C9
+    list(data = list(repository = list(issues = list(
+      pageInfo = list(endCursor = NA, hasNextPage = FALSE),
+      nodes = list(list(createdAt = "2022-02-02T00:00:00Z", closedAt = NULL))))))
+  })
+
+  shard_path <- run_fetch_shard(io, out_dir, roster_path, 0, 1, delay = 0, metrics = "issues_open")
+  con <- DBI::dbConnect(RSQLite::SQLite(), shard_path); on.exit(DBI::dbDisconnect(con))
+  rows <- DBI::dbGetQuery(con, "SELECT * FROM signals_series ORDER BY repo_id, date")
+  expect_equal(unique(rows$metric), "issues_open")
+
+  r1 <- rows[rows$repo_id == "github.com/o1/n1", ]
+  expect_equal(r1$date, c("2022-01-01", "2022-01-03"))
+  expect_equal(r1$value, c(2L, 1L))
+
+  r2 <- rows[rows$repo_id == "github.com/o2/n2", ]
+  expect_equal(r2$date, c("2022-02-01", "2022-02-02"))
+  expect_equal(r2$value, c(1L, 2L))
 })
 
 test_that("run_merge folds in backfill without truncating aged-out forward year-shard data or series_latest", {

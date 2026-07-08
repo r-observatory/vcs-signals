@@ -34,25 +34,55 @@ build_commit_query <- function(node_ids) {
   } } }', ids)
 }
 
-#' Build a GraphQL query paging one cumulative connection (stargazers, forks,
-#' or releases) for a repo, per METRIC_CONNECTIONS' per-metric shape. `after`
-#' is embedded as `null` (no quotes) when absent, or as a quoted cursor.
+#' The `<selection>` block for a connection metric: `edges { starredAt }` for
+#' stars, `nodes { createdAt }` for the other cumulative metrics, and
+#' `nodes { createdAt closedAt }` for open metrics (whose ts_close is set),
+#' so the open-count reconstruction can see when (if ever) each item closed.
+.connection_selection <- function(mc) {
+  fields <- if (!is.null(mc$ts_close)) paste(mc$ts, mc$ts_close) else mc$ts
+  sprintf("%s { %s }", mc$sel, fields)
+}
+
+#' Build a GraphQL query paging one connection (stargazers/forks/releases/
+#' issues/pullRequests) for a repo, per METRIC_CONNECTIONS' per-metric shape.
+#' `after` is embedded as `null` (no quotes) when absent, or as a quoted cursor.
 build_connection_query <- function(owner, name, metric, after = NULL) {
   mc <- METRIC_CONNECTIONS[[metric]]
   if (is.null(mc)) stop(sprintf("unknown metric: %s", metric))
   after_arg <- if (is.null(after) || is.na(after)) "null" else sprintf('"%s"', after)
-  sel <- sprintf("%s { %s }", mc$sel, mc$ts)
   sprintf('query { repository(owner: "%s", name: "%s") {
     %s(first: %d, orderBy: {field: %s, direction: ASC}, after: %s) {
       pageInfo { endCursor hasNextPage }
       %s
     }
-  } }', owner, name, mc$conn, STARGAZER_PAGE, mc$order, after_arg, sel)
+  } }', owner, name, mc$conn, STARGAZER_PAGE, mc$order, after_arg, .connection_selection(mc))
 }
 
 #' Thin wrapper preserving the stars-only query builder for existing callers.
 build_stargazers_query <- function(owner, name, after = NULL) {
   build_connection_query(owner, name, "stars", after)
+}
+
+#' Build one aliased multi-repo query batching a metric's FIRST connection
+#' page across many repos into a single GraphQL request (a multi-repo
+#' aliased query costs ~1 point regardless of repo count, since only the
+#' repository lookup and one page per repo are requested - no `after`, this
+#' is always page 1). `repos` is a data.frame with repo_id, owner, name; the
+#' alias `r<idx>` (0-based, by row order) is mapped back to repo_id by
+#' fetch_batched_page.
+build_batched_query <- function(repos, metric) {
+  mc <- METRIC_CONNECTIONS[[metric]]
+  if (is.null(mc)) stop(sprintf("unknown metric: %s", metric))
+  sel <- .connection_selection(mc)
+  parts <- vapply(seq_len(nrow(repos)), function(j) {
+    sprintf('r%d: repository(owner: "%s", name: "%s") {
+      %s(first: %d, orderBy: {field: %s, direction: ASC}) {
+        pageInfo { endCursor hasNextPage }
+        %s
+      }
+    }', j - 1L, repos$owner[j], repos$name[j], mc$conn, STARGAZER_PAGE, mc$order, sel)
+  }, character(1))
+  sprintf('query { %s }', paste(parts, collapse = "\n"))
 }
 
 build_resolve_query <- function(owners, names) {
@@ -105,26 +135,51 @@ rows_df_empty_gauges <- function() {
     last_release_at = character(), stringsAsFactors = FALSE)
 }
 
-#' Extract timestamps + pagination state from one connection-query response,
-#' per the metric's connection field and selection shape (edges for stars,
-#' nodes for forks/releases). Degrades to an empty, has_next=FALSE result
-#' when the connection node itself is null (e.g. repository not found).
+#' Typed zero-row nodes frame for a metric's kind: ts for cumulative metrics,
+#' created/closed for open metrics. Shared by parse_connection's null-connection
+#' branch and paginate_connection's never-looped (impossible) empty case.
+.empty_connection_nodes <- function(mc) {
+  if (identical(mc$kind, "open"))
+    data.frame(created = character(0), closed = character(0), stringsAsFactors = FALSE)
+  else
+    data.frame(ts = character(0), stringsAsFactors = FALSE)
+}
+
+#' Extract the connection's items + pagination state from one connection-query
+#' response, per the metric's connection field and selection shape (edges for
+#' stars, nodes for the rest). Returns list(nodes, end_cursor, has_next):
+#' `nodes` is a data.frame with column `ts` for cumulative metrics, or columns
+#' `created`/`closed` for open metrics (`closed` is NA for a still-open item).
+#' Degrades to empty nodes + has_next=FALSE when the connection node itself is
+#' null (e.g. repository not found).
 parse_connection <- function(resp, metric) {
   mc <- METRIC_CONNECTIONS[[metric]]
   if (is.null(mc)) stop(sprintf("unknown metric: %s", metric))
   conn <- resp$data$repository[[mc$conn]]
-  if (is.null(conn)) return(list(timestamps = character(0), end_cursor = NA_character_, has_next = FALSE))
+  if (is.null(conn))
+    return(list(nodes = .empty_connection_nodes(mc), end_cursor = NA_character_, has_next = FALSE))
   items <- .nn(conn[[mc$sel]], list())
-  timestamps <- vapply(items, function(e) .nn(e[[mc$ts]], NA_character_), character(1))
-  list(timestamps = timestamps,
+  if (identical(mc$kind, "open")) {
+    created <- vapply(items, function(e) .nn(e[[mc$ts]], NA_character_), character(1))
+    closed  <- vapply(items, function(e) .nn(e[[mc$ts_close]], NA_character_), character(1))
+    nodes <- data.frame(created = created, closed = closed, stringsAsFactors = FALSE)
+  } else {
+    ts <- vapply(items, function(e) .nn(e[[mc$ts]], NA_character_), character(1))
+    nodes <- data.frame(ts = ts, stringsAsFactors = FALSE)
+  }
+  list(nodes = nodes,
        end_cursor = .nn(conn$pageInfo$endCursor, NA_character_),
        has_next = isTRUE(conn$pageInfo$hasNextPage))
 }
 
+#' Extract the cumulative timestamp vector from a parsed connection result
+#' (cumulative metrics only, whose nodes frame carries a single `ts` column).
+connection_timestamps <- function(parsed) parsed$nodes$ts
+
 #' Thin wrapper preserving the stars-only parser for existing callers.
 parse_stargazers <- function(resp) {
   out <- parse_connection(resp, "stars")
-  list(starred_at = out$timestamps, end_cursor = out$end_cursor, has_next = out$has_next)
+  list(starred_at = connection_timestamps(out), end_cursor = out$end_cursor, has_next = out$has_next)
 }
 
 parse_resolve <- function(data, n) {
@@ -182,11 +237,42 @@ default_io <- function(token) {
   list(graphql = function(query) gh_graphql(token, query))
 }
 
+#' Run one batched first-page query (build_batched_query) for a chunk of
+#' repos and parse it into a named list keyed by repo_id, each value the same
+#' list(nodes, end_cursor, has_next) shape parse_connection returns for a
+#' single repo. Reading each alias `r<idx>` back to its repo_id is purely
+#' positional (by row order in `repos`), matching build_batched_query.
+#'
+#' Errors on the same errors/null-data contract paginate_connection enforces
+#' (rather than degrading silently), so the caller's per-chunk handling turns
+#' a bad batched response into a skip/fallback, never a partial page treated
+#' as complete. A per-alias null (repo gone/renamed) is not an error here -
+#' parse_connection already degrades that one repo to empty/has_next=FALSE.
+fetch_batched_page <- function(io, repos, metric) {
+  mc <- METRIC_CONNECTIONS[[metric]]
+  if (is.null(mc)) stop(sprintf("unknown metric: %s", metric))
+  resp <- io$graphql(build_batched_query(repos, metric))
+  if (!is.null(resp$errors) || is.null(resp$data)) stop(sprintf("%s batched page error", mc$conn))
+  out <- vector("list", nrow(repos))
+  names(out) <- repos$repo_id
+  for (j in seq_len(nrow(repos))) {
+    alias_resp <- list(data = list(repository = resp$data[[sprintf("r%d", j - 1L)]]))
+    out[[j]] <- parse_connection(alias_resp, metric)
+  }
+  out
+}
+
 #' Page through a repo's full connection for the given metric (ASC by the
-#' metric's order field: STARRED_AT for stars, CREATED_AT for forks/releases),
+#' metric's order field: STARRED_AT for stars, CREATED_AT for the rest),
 #' looping the `after` cursor until `hasNextPage` is FALSE. Sleeps `delay`
 #' after every request (each page, including the last) for rate-limit pacing.
-#' Returns character(0) for a repo with genuinely no items on this connection.
+#' Returns a `nodes` data.frame (all pages, ts or created/closed columns per
+#' parse_connection). Empty for a repo with genuinely no items on this connection.
+#'
+#' When `after` and `first_nodes` are supplied, resumes from that cursor
+#' instead of starting at page 1, prepending `first_nodes` (typically the
+#' already-fetched batched first page) to what this call fetches - so a repo
+#' whose first page reported hasNextPage is completed without re-fetching it.
 #'
 #' Errors (rather than silently truncating) on any response that carries
 #' `errors` or a null `data` - GitHub commonly returns HTTP 200 with
@@ -198,23 +284,23 @@ default_io <- function(token) {
 #' which would otherwise re-fetch page 1 forever. The caller's per-repo,
 #' per-metric tryCatch turns any of these into a skip (that metric left for a
 #' re-run), never a persisted partial curve.
-paginate_connection <- function(io, owner, name, metric, delay = BACKFILL_DELAY_S) {
+paginate_connection <- function(io, owner, name, metric, delay = BACKFILL_DELAY_S,
+                                after = NULL, first_nodes = NULL) {
   mc <- METRIC_CONNECTIONS[[metric]]
   if (is.null(mc)) stop(sprintf("unknown metric: %s", metric))
-  timestamps <- character(0)
-  after <- NULL
+  parts <- if (!is.null(first_nodes)) list(first_nodes) else list()
   repeat {
     resp <- io$graphql(build_connection_query(owner, name, metric, after))
     if (!is.null(resp$errors) || is.null(resp$data)) stop(sprintf("%s page error", mc$conn))
     if (delay > 0) Sys.sleep(delay)
     parsed <- parse_connection(resp, metric)
-    timestamps <- c(timestamps, parsed$timestamps)
+    parts[[length(parts) + 1L]] <- parsed$nodes
     if (!isTRUE(parsed$has_next)) break
     if (is.na(parsed$end_cursor) || !nzchar(parsed$end_cursor))
       stop(sprintf("%s page claims a next page but returned no cursor", mc$conn))
     after <- parsed$end_cursor
   }
-  timestamps
+  do.call(rbind, parts)
 }
 
 #' Thin wrapper preserving the stars-only paginator for existing callers.

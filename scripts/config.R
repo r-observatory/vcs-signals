@@ -58,10 +58,15 @@ BACKFILL_DELAY_S <- 0.8   # pause between connection pages: each page costs 1 Gr
 
 # Per-metric GraphQL connection shape: conn = connection field name, order =
 # orderBy field, sel = "edges" or "nodes" (the selection shape GitHub uses for
-# that connection), ts = the timestamp field name inside each edge/node.
+# that connection), ts = the timestamp field name inside each edge/node,
+# ts_close = the closedAt-equivalent field (open metrics only), kind =
+# "cumulative" (reconstruct_cumulative_series) or "open" (reconstruct_open_series).
 METRIC_CONNECTIONS <- list(
-  stars    = list(conn = "stargazers", order = "STARRED_AT", sel = "edges", ts = "starredAt"),
-  forks    = list(conn = "forks",      order = "CREATED_AT",  sel = "nodes", ts = "createdAt"),
-  releases_total = list(conn = "releases", order = "CREATED_AT", sel = "nodes", ts = "createdAt")
+  stars          = list(conn = "stargazers",   order = "STARRED_AT", sel = "edges", ts = "starredAt",  kind = "cumulative"),
+  forks          = list(conn = "forks",        order = "CREATED_AT", sel = "nodes", ts = "createdAt",  kind = "cumulative"),
+  releases_total = list(conn = "releases",     order = "CREATED_AT", sel = "nodes", ts = "createdAt",  kind = "cumulative"),
+  issues_open    = list(conn = "issues",       order = "CREATED_AT", sel = "nodes", ts = "createdAt", ts_close = "closedAt", kind = "open"),
+  prs_open       = list(conn = "pullRequests", order = "CREATED_AT", sel = "nodes", ts = "createdAt", ts_close = "closedAt", kind = "open")
 )
-BACKFILL_METRICS <- c("stars", "forks", "releases_total")  # default metric set for a backfill run
+BACKFILL_METRICS <- c("stars", "forks", "releases_total")  # default metric set for a backfill run; open metrics (issues_open/prs_open) are run explicitly via VCS_METRICS
+BATCH_REPOS <- 20L   # repos per batched first-page query (a multi-repo aliased query is ~1 GraphQL point)

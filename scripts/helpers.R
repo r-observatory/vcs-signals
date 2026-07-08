@@ -456,6 +456,47 @@ reconstruct_star_series <- function(repo_id, starred_at) {
   reconstruct_cumulative_series(repo_id, starred_at, "stars")
 }
 
+#' Reconstruct a repo's daily OPEN-count series (issues_open/prs_open) from
+#' raw createdAt/closedAt timestamps, in any order. Builds one +1 event per
+#' created item and one -1 event per non-NA closed item (still-open items -
+#' including, for prs_open, still-open PRs - contribute no close event),
+#' aggregates the net delta per UTC calendar day, and cumulative-sums those
+#' per-day deltas in day order to get the running open count.
+#'
+#' Change-only: a day's running value is emitted only when it differs from
+#' the last emitted value (implicitly 0 before the first event), so a day
+#' whose creates and closes net to zero - or a day sandwiched between two
+#' equal-value days - contributes no row, matching signals_series' sparse
+#' invariant. When no item ever closes, this reduces to the same curve
+#' reconstruct_cumulative_series would produce from the created timestamps.
+#'
+#' @param repo_id character scalar
+#' @param created character vector of ISO-8601 createdAt timestamps
+#' @param closed  character vector, same length as `created`; NA for an item
+#'   still open
+#' @param metric  character scalar stamped onto every row
+#' @return data.frame(repo_id, date, metric, value)
+reconstruct_open_series <- function(repo_id, created, closed, metric) {
+  empty <- data.frame(repo_id = character(), date = character(), metric = character(),
+                      value = integer(), stringsAsFactors = FALSE)
+  if (is.null(created) || length(created) == 0) return(empty)
+
+  closed_at <- closed[!is.na(closed)]
+  ev_days <- c(substr(created, 1, 10), substr(closed_at, 1, 10))
+  ev_delta <- c(rep(1L, length(created)), rep(-1L, length(closed_at)))
+
+  agg <- tapply(ev_delta, ev_days, sum)
+  days <- sort(names(agg))
+  running <- as.integer(cumsum(as.integer(agg[days])))
+
+  prev <- c(0L, running[-length(running)])
+  keep <- running != prev
+  if (!any(keep)) return(empty)
+
+  data.frame(repo_id = rep(repo_id, sum(keep)), date = days[keep], metric = metric,
+             value = running[keep], stringsAsFactors = FALSE)
+}
+
 # ---- shard + manifest helpers ------------------------------------------------
 #' Even mod-N index slice: which rows (1-based) of an n-row table belong to
 #' shard i (0-based, 0 <= i < N). Used to split a roster across matrix jobs
