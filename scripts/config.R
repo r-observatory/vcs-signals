@@ -52,6 +52,16 @@ REVISION_WINDOW<- 10L    # trailing days re-materialized each run (must be < REC
 POINT_RESERVE  <- 1500L  # GraphQL points left unspent as headroom
 BATCH_DELAY_S  <- 0.35   # pause between GraphQL batches, to stay well under secondary rate limits
 
-# ---- historical star-history backfill ----
-STARGAZER_PAGE   <- 100L  # stargazers per GraphQL page
-BACKFILL_DELAY_S <- 0.8   # pause between stargazer pages: each page costs 1 GraphQL point, so this keeps a single token under the 5000-points/hour primary budget (~4500/hr)
+# ---- historical cumulative-series backfill (stars, forks, releases) ----
+STARGAZER_PAGE   <- 100L  # items per GraphQL connection page (all metrics share one page size)
+BACKFILL_DELAY_S <- 0.8   # pause between connection pages: each page costs 1 GraphQL point, so this keeps a single token under the 5000-points/hour primary budget (~4500/hr)
+
+# Per-metric GraphQL connection shape: conn = connection field name, order =
+# orderBy field, sel = "edges" or "nodes" (the selection shape GitHub uses for
+# that connection), ts = the timestamp field name inside each edge/node.
+METRIC_CONNECTIONS <- list(
+  stars    = list(conn = "stargazers", order = "STARRED_AT", sel = "edges", ts = "starredAt"),
+  forks    = list(conn = "forks",      order = "CREATED_AT",  sel = "nodes", ts = "createdAt"),
+  releases = list(conn = "releases",   order = "CREATED_AT",  sel = "nodes", ts = "createdAt")
+)
+BACKFILL_METRICS <- c("stars", "forks", "releases")  # default metric set for a backfill run

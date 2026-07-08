@@ -34,14 +34,25 @@ build_commit_query <- function(node_ids) {
   } } }', ids)
 }
 
-build_stargazers_query <- function(owner, name, after = NULL) {
+#' Build a GraphQL query paging one cumulative connection (stargazers, forks,
+#' or releases) for a repo, per METRIC_CONNECTIONS' per-metric shape. `after`
+#' is embedded as `null` (no quotes) when absent, or as a quoted cursor.
+build_connection_query <- function(owner, name, metric, after = NULL) {
+  mc <- METRIC_CONNECTIONS[[metric]]
+  if (is.null(mc)) stop(sprintf("unknown metric: %s", metric))
   after_arg <- if (is.null(after) || is.na(after)) "null" else sprintf('"%s"', after)
+  sel <- sprintf("%s { %s }", mc$sel, mc$ts)
   sprintf('query { repository(owner: "%s", name: "%s") {
-    stargazers(first: %d, orderBy: {field: STARRED_AT, direction: ASC}, after: %s) {
+    %s(first: %d, orderBy: {field: %s, direction: ASC}, after: %s) {
       pageInfo { endCursor hasNextPage }
-      edges { starredAt }
+      %s
     }
-  } }', owner, name, STARGAZER_PAGE, after_arg)
+  } }', owner, name, mc$conn, STARGAZER_PAGE, mc$order, after_arg, sel)
+}
+
+#' Thin wrapper preserving the stars-only query builder for existing callers.
+build_stargazers_query <- function(owner, name, after = NULL) {
+  build_connection_query(owner, name, "stars", after)
 }
 
 build_resolve_query <- function(owners, names) {
@@ -94,17 +105,26 @@ rows_df_empty_gauges <- function() {
     last_release_at = character(), stringsAsFactors = FALSE)
 }
 
-#' Extract starredAt timestamps + pagination state from one stargazers query
-#' response. Degrades to an empty, has_next=FALSE result when the
-#' `stargazers` node itself is null (e.g. repository not found).
+#' Extract timestamps + pagination state from one connection-query response,
+#' per the metric's connection field and selection shape (edges for stars,
+#' nodes for forks/releases). Degrades to an empty, has_next=FALSE result
+#' when the connection node itself is null (e.g. repository not found).
+parse_connection <- function(resp, metric) {
+  mc <- METRIC_CONNECTIONS[[metric]]
+  if (is.null(mc)) stop(sprintf("unknown metric: %s", metric))
+  conn <- resp$data$repository[[mc$conn]]
+  if (is.null(conn)) return(list(timestamps = character(0), end_cursor = NA_character_, has_next = FALSE))
+  items <- .nn(conn[[mc$sel]], list())
+  timestamps <- vapply(items, function(e) .nn(e[[mc$ts]], NA_character_), character(1))
+  list(timestamps = timestamps,
+       end_cursor = .nn(conn$pageInfo$endCursor, NA_character_),
+       has_next = isTRUE(conn$pageInfo$hasNextPage))
+}
+
+#' Thin wrapper preserving the stars-only parser for existing callers.
 parse_stargazers <- function(resp) {
-  sg <- resp$data$repository$stargazers
-  if (is.null(sg)) return(list(starred_at = character(0), end_cursor = NA_character_, has_next = FALSE))
-  edges <- .nn(sg$edges, list())
-  starred_at <- vapply(edges, function(e) .nn(e$starredAt, NA_character_), character(1))
-  list(starred_at = starred_at,
-       end_cursor = .nn(sg$pageInfo$endCursor, NA_character_),
-       has_next = isTRUE(sg$pageInfo$hasNextPage))
+  out <- parse_connection(resp, "stars")
+  list(starred_at = out$timestamps, end_cursor = out$end_cursor, has_next = out$has_next)
 }
 
 parse_resolve <- function(data, n) {
@@ -162,36 +182,44 @@ default_io <- function(token) {
   list(graphql = function(query) gh_graphql(token, query))
 }
 
-#' Page through a repo's full stargazers connection (ASC by starredAt),
+#' Page through a repo's full connection for the given metric (ASC by the
+#' metric's order field: STARRED_AT for stars, CREATED_AT for forks/releases),
 #' looping the `after` cursor until `hasNextPage` is FALSE. Sleeps `delay`
 #' after every request (each page, including the last) for rate-limit pacing.
-#' Returns character(0) for a repo with genuinely no stargazers.
+#' Returns character(0) for a repo with genuinely no items on this connection.
 #'
 #' Errors (rather than silently truncating) on any response that carries
 #' `errors` or a null `data` - GitHub commonly returns HTTP 200 with
 #' `{"data":{"repository":{"stargazers":null}},"errors":[...]}` on a transient
 #' fault or in-body secondary-limit for a large connection, which
-#' parse_stargazers alone would read as a clean end-of-pages and yield a
+#' parse_connection alone would read as a clean end-of-pages and yield a
 #' truncated curve. Same gate collect_batched/resolve_node_ids use. Also
 #' stops on a malformed page that claims a next page but gives no cursor,
-#' which would otherwise re-fetch page 1 forever. The caller's per-repo
-#' tryCatch turns any of these into a skip (repo left for a re-run), never a
-#' persisted partial curve.
-paginate_stargazers <- function(io, owner, name, delay = BACKFILL_DELAY_S) {
-  starred_at <- character(0)
+#' which would otherwise re-fetch page 1 forever. The caller's per-repo,
+#' per-metric tryCatch turns any of these into a skip (that metric left for a
+#' re-run), never a persisted partial curve.
+paginate_connection <- function(io, owner, name, metric, delay = BACKFILL_DELAY_S) {
+  mc <- METRIC_CONNECTIONS[[metric]]
+  if (is.null(mc)) stop(sprintf("unknown metric: %s", metric))
+  timestamps <- character(0)
   after <- NULL
   repeat {
-    resp <- io$graphql(build_stargazers_query(owner, name, after))
-    if (!is.null(resp$errors) || is.null(resp$data)) stop("stargazers page error")
+    resp <- io$graphql(build_connection_query(owner, name, metric, after))
+    if (!is.null(resp$errors) || is.null(resp$data)) stop(sprintf("%s page error", mc$conn))
     if (delay > 0) Sys.sleep(delay)
-    parsed <- parse_stargazers(resp)
-    starred_at <- c(starred_at, parsed$starred_at)
+    parsed <- parse_connection(resp, metric)
+    timestamps <- c(timestamps, parsed$timestamps)
     if (!isTRUE(parsed$has_next)) break
     if (is.na(parsed$end_cursor) || !nzchar(parsed$end_cursor))
-      stop("stargazers page claims a next page but returned no cursor")
+      stop(sprintf("%s page claims a next page but returned no cursor", mc$conn))
     after <- parsed$end_cursor
   }
-  starred_at
+  timestamps
+}
+
+#' Thin wrapper preserving the stars-only paginator for existing callers.
+paginate_stargazers <- function(io, owner, name, delay = BACKFILL_DELAY_S) {
+  paginate_connection(io, owner, name, "stars", delay = delay)
 }
 
 # ---- batched collection with the 502/partial failure contract -------------
