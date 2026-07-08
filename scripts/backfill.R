@@ -79,34 +79,72 @@ run_enumerate <- function(io, out_dir) {
 
 # ---- fetch ----------------------------------------------------------------------
 #' Paginate the requested metrics for one even mod-N shard of the roster and
-#' reconstruct each repo's historical daily-cumulative series per metric. For
-#' each repo, every metric in `metrics` is fetched independently: a metric
-#' whose pagination errors (rate limit, transient 502, repo gone) is skipped
-#' this run for that metric only - left for a re-run - rather than aborting
-#' the whole repo or the whole shard.
+#' reconstruct each repo's historical series per metric (cumulative for
+#' stars/forks/releases_total, open-count for issues_open/prs_open). Each
+#' metric's repos are swept in `batch_size`-sized chunks: one batched query
+#' (fetch_batched_page) fetches every chunk member's first connection page in
+#' a single ~1-point request, then only the repos whose first page reported
+#' hasNextPage pay for individual continuation pagination (paginate_connection,
+#' resuming from that page's cursor and prepending its already-fetched nodes
+#' rather than re-fetching page 1). If the batched query itself fails, this
+#' falls back to a full per-repo pagination for every repo in that chunk, so
+#' one bad chunk does not lose its chunk-mates. Every repo/metric fetch -
+#' batched or per-repo - is isolated: a failure (rate limit, transient 502,
+#' repo gone) is skipped this run for that repo/metric only - left for a
+#' re-run - rather than aborting the whole chunk or shard.
 run_fetch_shard <- function(io, out_dir, roster_path, i, N, delay = BACKFILL_DELAY_S,
-                            metrics = BACKFILL_METRICS) {
+                            metrics = BACKFILL_METRICS, batch_size = BATCH_REPOS) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   roster <- load_roster(roster_path)
   mine <- roster[shard_rows(nrow(roster), i, N), , drop = FALSE]
-  message(sprintf("fetch shard %d/%d: %d of %d repos, metrics: %s",
-                  i, N, nrow(mine), nrow(roster), paste(metrics, collapse = ",")))
-
-  acc <- list(); n_ok <- 0L; n_skipped <- 0L; n_rows <- 0L
   total <- nrow(mine)
-  for (k in seq_len(total)) {
-    if (k %% 500L == 0L)
-      message(sprintf("fetch shard %d/%d: %d/%d repos processed (%d metric-fetches ok, %d skipped, %d series rows so far)",
-                      i, N, k, total, n_ok, n_skipped, n_rows))
-    for (metric in metrics) {
-      timestamps <- tryCatch(paginate_connection(io, mine$owner[k], mine$name[k], metric, delay = delay),
-                            error = function(e) NULL)
-      if (is.null(timestamps)) { n_skipped <- n_skipped + 1L; next }
-      n_ok <- n_ok + 1L
-      if (length(timestamps) == 0) next
-      series <- reconstruct_cumulative_series(mine$repo_id[k], timestamps, metric)
-      acc[[length(acc) + 1L]] <- series
-      n_rows <- n_rows + nrow(series)
+  message(sprintf("fetch shard %d/%d: %d of %d repos, metrics: %s",
+                  i, N, total, nrow(roster), paste(metrics, collapse = ",")))
+
+  acc <- list(); n_ok <- 0L; n_skipped <- 0L; n_rows <- 0L; processed <- 0L
+  total_ops <- total * length(metrics)
+
+  for (metric in metrics) {
+    mc <- METRIC_CONNECTIONS[[metric]]
+    for (idx in unname(chunk(seq_len(total), batch_size))) {
+      repos <- mine[idx, , drop = FALSE]
+
+      batched <- tryCatch(fetch_batched_page(io, repos, metric), error = function(e) NULL)
+      if (!is.null(batched) && delay > 0) Sys.sleep(delay)
+
+      for (r in seq_len(nrow(repos))) {
+        repo_id <- repos$repo_id[r]; owner <- repos$owner[r]; name <- repos$name[r]
+
+        nodes <- tryCatch({
+          if (is.null(batched)) {
+            # whole-chunk batched query failed: fall back to a full per-repo
+            # fetch so this repo's chunk-mates are not lost along with it.
+            paginate_connection(io, owner, name, metric, delay = delay)
+          } else {
+            entry <- batched[[repo_id]]
+            if (isTRUE(entry$has_next))
+              paginate_connection(io, owner, name, metric, delay = delay,
+                                  after = entry$end_cursor, first_nodes = entry$nodes)
+            else entry$nodes
+          }
+        }, error = function(e) NULL)
+
+        processed <- processed + 1L
+        if (processed %% 500L == 0L)
+          message(sprintf("fetch shard %d/%d: %d/%d repo-metric fetches processed (%d ok, %d skipped, %d series rows so far)",
+                          i, N, processed, total_ops, n_ok, n_skipped, n_rows))
+
+        if (is.null(nodes)) { n_skipped <- n_skipped + 1L; next }
+        n_ok <- n_ok + 1L
+        if (nrow(nodes) == 0) next
+
+        series <- if (identical(mc$kind, "open"))
+          reconstruct_open_series(repo_id, nodes$created, nodes$closed, metric)
+        else
+          reconstruct_cumulative_series(repo_id, nodes$ts, metric)
+        acc[[length(acc) + 1L]] <- series
+        n_rows <- n_rows + nrow(series)
+      }
     }
   }
   rows <- if (length(acc)) do.call(rbind, acc) else

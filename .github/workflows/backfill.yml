@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       metrics:
-        description: "Comma-separated metrics to backfill (stars, forks, releases_total)"
+        description: "Comma-separated metrics to backfill (stars, forks, releases_total, issues_open, prs_open)"
         required: false
         default: "stars,forks,releases_total"
       purge:
