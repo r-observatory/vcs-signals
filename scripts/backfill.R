@@ -60,7 +60,8 @@ run_enumerate <- function(io, out_dir) {
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   rows <- DBI::dbGetQuery(con,
     "SELECT repo_id, MAX(stars) AS stars FROM vcs_signals_summary
-      WHERE repo_id LIKE 'github.com/%' AND stars > 0 GROUP BY repo_id")
+      WHERE repo_id LIKE 'github.com/%'
+        AND (stars > 0 OR forks > 0 OR releases_total > 0) GROUP BY repo_id")
 
   parts <- strsplit(rows$repo_id, "/", fixed = TRUE)
   roster <- data.frame(
