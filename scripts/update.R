@@ -201,7 +201,7 @@ run_update <- function(io, out_dir, opts = list()) {
                           license = pick("license", NA_character_),
                           topics = pick("topics", NA_character_),
                           is_archived = as.integer(pick("is_archived", NA_integer_)),
-                          last_commit_date = pick("last_commit_date", NA_character_),
+                          last_commit_date = pick("pushed_at", NA_character_),
                           stringsAsFactors = FALSE)
     }
     prev_summary_attrs <- DBI::dbGetQuery(con,
