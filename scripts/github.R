@@ -85,6 +85,25 @@ build_batched_query <- function(repos, metric) {
   sprintf('query { %s }', paste(parts, collapse = "\n"))
 }
 
+#' Build one aliased multi-repo query batching the weekly commit-count
+#' collection (`defaultBranchRef.target.history.totalCount`) across a chunk
+#' of repos into a single request. Unlike build_batched_query's connection
+#' pages, `history.totalCount` alone costs ~1 GraphQL point regardless of
+#' chunk size, but is expensive for GitHub to *compute* server-side, so
+#' chunks are kept small (COMMIT_HISTORY_BATCH) to avoid execution-time
+#' errors rather than to manage point budget. The alias `r<idx>` (0-based, by
+#' row order) is mapped back to repo_id by fetch_commit_counts.
+build_commits_batched_query <- function(repos) {
+  parts <- vapply(seq_len(nrow(repos)), function(j) {
+    sprintf('r%d: repository(owner: "%s", name: "%s") {
+      defaultBranchRef { target { ... on Commit {
+        history { totalCount }
+      } } }
+    }', j - 1L, repos$owner[j], repos$name[j])
+  }, character(1))
+  sprintf('query { %s }', paste(parts, collapse = "\n"))
+}
+
 build_resolve_query <- function(owners, names) {
   parts <- vapply(seq_along(owners), function(i) sprintf(
     'r%d: repository(owner: "%s", name: "%s", followRenames: true) { id nameWithOwner isArchived isFork isMirror isDisabled createdAt }',
@@ -196,6 +215,25 @@ parse_resolve <- function(data, n) {
   }))
 }
 
+#' Parse the `Link` response header GitHub's REST API returns on the
+#' contributors endpoint (called with per_page=1&anon=true, see
+#' fetch_contributor_count) into a contributor count. When the response is
+#' paginated, the `rel="last"` link's `page` query parameter IS the total
+#' contributor count, since each page holds exactly one item. When there is
+#' no `Link` header at all (fewer than 2 contributors), the count is simply
+#' the number of items in the parsed response body (0 or 1). Pure: `headers`
+#' is the vector of raw header lines from a `gh api ... -i` response (or
+#' character(0)/no matching line), so this is unit-testable without a
+#' network call.
+parse_contributor_link_count <- function(headers, body_len) {
+  link_line <- grep("^link:", headers, ignore.case = TRUE, value = TRUE)
+  if (length(link_line) == 0) return(as.integer(body_len))
+  m <- regmatches(link_line[1],
+                  regexec('[?&]page=([0-9]+)[^,]*>;\\s*rel="last"', link_line[1]))[[1]]
+  if (length(m) < 2) return(as.integer(body_len))
+  as.integer(m[2])
+}
+
 parse_commits <- function(nodes) {
   rows <- lapply(nodes, function(n) {
     if (is.null(n)) return(NULL)
@@ -237,6 +275,41 @@ default_io <- function(token) {
   list(graphql = function(query) gh_graphql(token, query))
 }
 
+#' Fetch a repo's contributor count via GitHub's REST contributors endpoint,
+#' called with per_page=1&anon=true so the response is minimal and its
+#' `Link` header's rel="last" page number directly gives the count (see
+#' parse_contributor_link_count). Same transport style as gh_graphql: routed
+#' through `gh` (auth, TLS), the token set via the environment and restored
+#' afterward, response headers captured via `-i`. Returns NA on any
+#' transport error, non-2xx status (e.g. a 404'd/renamed repo), or
+#' unparseable output, so one bad repo never aborts its caller's chunk.
+fetch_contributor_count <- function(token, owner, name) {
+  old <- Sys.getenv("GH_TOKEN", unset = NA)
+  Sys.setenv(GH_TOKEN = token)
+  on.exit({
+    if (is.na(old)) Sys.unsetenv("GH_TOKEN") else Sys.setenv(GH_TOKEN = old)
+  }, add = TRUE)
+
+  # Pass the query as -X GET fields (not a "?a=1&b=2" URL) so the ampersand is
+  # never handed to a shell; capture stdout only so stderr cannot corrupt the
+  # header block we parse.
+  endpoint <- sprintf("repos/%s/%s/contributors", owner, name)
+  out <- suppressWarnings(system2("gh", c("api", "-X", "GET", endpoint,
+                                          "-f", "per_page=1", "-f", "anon=true", "-i"),
+                                  stdout = TRUE))
+  status <- attr(out, "status")
+  if (!is.null(status) && !identical(as.integer(status), 0L)) return(NA_integer_)
+
+  blank <- which(!nzchar(trimws(out)))
+  if (length(blank) == 0) return(NA_integer_)
+  header_lines <- out[seq_len(blank[1] - 1L)]
+  body_txt <- paste(out[(blank[1] + 1L):length(out)], collapse = "\n")
+  body <- tryCatch(jsonlite::fromJSON(body_txt, simplifyVector = FALSE), error = function(e) NULL)
+  if (is.null(body)) return(NA_integer_)
+
+  parse_contributor_link_count(header_lines, length(body))
+}
+
 #' Run one batched first-page query (build_batched_query) for a chunk of
 #' repos and parse it into a named list keyed by repo_id, each value the same
 #' list(nodes, end_cursor, has_next) shape parse_connection returns for a
@@ -258,6 +331,28 @@ fetch_batched_page <- function(io, repos, metric) {
   for (j in seq_len(nrow(repos))) {
     alias_resp <- list(data = list(repository = resp$data[[sprintf("r%d", j - 1L)]]))
     out[[j]] <- parse_connection(alias_resp, metric)
+  }
+  out
+}
+
+#' Run one batched commit-count query (build_commits_batched_query) for a
+#' chunk of repos and return a named list keyed by repo_id, each value an
+#' integer commit count - NA when `defaultBranchRef`/`target`/`history` is
+#' null (e.g. an empty repo with no default branch). Errors on a
+#' transport-level failure or an in-body GraphQL error/null data (the same
+#' contract fetch_batched_page enforces), so the caller's per-chunk handling
+#' turns a bad batched response into a skip (NA for the whole chunk) rather
+#' than silently treating it as "every repo has zero commits".
+fetch_commit_counts <- function(io, repos) {
+  resp <- io$graphql(build_commits_batched_query(repos))
+  if (!is.null(resp$errors) || is.null(resp$data)) stop("commits batched page error")
+  out <- vector("list", nrow(repos))
+  names(out) <- repos$repo_id
+  for (j in seq_len(nrow(repos))) {
+    r <- resp$data[[sprintf("r%d", j - 1L)]]
+    total <- NA_integer_
+    if (!is.null(r)) total <- .nn(r$defaultBranchRef$target$history$totalCount, NA_integer_)
+    out[[j]] <- as.integer(total)
   }
   out
 }
