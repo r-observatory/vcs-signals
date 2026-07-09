@@ -346,7 +346,7 @@ ensure_series_schema <- function(con) {
   DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_signals_summary (
     package TEXT NOT NULL, origin TEXT NOT NULL, repo_id TEXT,
     stars INTEGER, forks INTEGER, issues_open INTEGER, prs_open INTEGER,
-    commits_total INTEGER, releases_total INTEGER, last_commit_date TEXT,
+    commits_total INTEGER, contributors_total INTEGER, releases_total INTEGER, last_commit_date TEXT,
     license TEXT, topics TEXT, is_archived INTEGER, trend_30d REAL,
     first_seen TEXT, last_seen TEXT, PRIMARY KEY (package, origin))")
   DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS pipeline_state (key TEXT PRIMARY KEY, value TEXT)")
@@ -387,7 +387,7 @@ build_signals_summary <- function(latest, series, repos, repo_packages, today) {
   if (nrow(repo_packages) == 0)
     return(data.frame(package = character(), origin = character(), repo_id = character(),
       stars = integer(), forks = integer(), issues_open = integer(), prs_open = integer(),
-      commits_total = integer(), releases_total = integer(), last_commit_date = character(),
+      commits_total = integer(), contributors_total = integer(), releases_total = integer(), last_commit_date = character(),
       license = character(), topics = character(), is_archived = integer(), trend_30d = double(),
       first_seen = character(), last_seen = character(), stringsAsFactors = FALSE))
   val <- function(rid, met) {
@@ -411,6 +411,7 @@ build_signals_summary <- function(latest, series, repos, repo_packages, today) {
     data.frame(package = repo_packages$package[i], origin = repo_packages$origin[i], repo_id = rid,
       stars = val(rid, "stars"), forks = val(rid, "forks"), issues_open = val(rid, "issues_open"),
       prs_open = val(rid, "prs_open"), commits_total = val(rid, "commits_total"),
+      contributors_total = val(rid, "contributors_total"),
       releases_total = val(rid, "releases_total"),
       last_commit_date = if (nrow(ra)) ra$last_commit_date[1] else NA_character_,
       license = if (nrow(ra)) ra$license[1] else NA_character_,
