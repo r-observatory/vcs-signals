@@ -125,3 +125,7 @@ jobs:
           if [ -f out/release_notes.md ]; then
             gh release edit current --repo ${{ github.repository }} --notes-file out/release_notes.md
           fi
+      - name: Mirror year shards to per-year tags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/mirror-year-tags.sh out
