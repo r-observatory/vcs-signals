@@ -433,13 +433,31 @@ collect_gauges <- function(io, node_ids) {
 }
 
 # ---- node-id resolution stage ----------------------------------------------
+#' TRUE when every error in a GraphQL response is a per-alias NOT_FOUND: GitHub
+#' answered the batch, but one aliased repo is deleted, renamed away, or gone
+#' private. It reports that as HTTP 200 carrying partial `data` (that alias null,
+#' the rest intact) plus an errors[] entry scoped to the alias via `path`. Such a
+#' response is USABLE - the surviving aliases hold real ids. Any other error (rate
+#' limit, 502, timeout) is not alias-scoped and could have nulled a live alias, so
+#' the batch must be deferred instead of read as "these repos are all gone".
+errors_are_alias_not_found <- function(errs) {
+  if (is.null(errs) || length(errs) == 0) return(FALSE)
+  all(vapply(errs, function(e) identical(e$type, "NOT_FOUND") && length(e$path) > 0, logical(1)))
+}
+
 #' Resolve node ids for repos needing them, one CHEAP_BATCH-sized query at a
-#' time. A batch whose response is unusable (io$graphql throws, res$errors is
-#' non-null, or res$data is NULL - e.g. a rate limit or transient 502) is
-#' DEFERRED: it contributes no rows at all, so update_repo_node_ids never
-#' touches those repos and they stay node_id=NULL/status='active' for retry
-#' on the next run. Only a genuinely successful batch is parsed, where a
-#' per-alias null (repo actually gone/renamed-away) becomes status='gone'.
+#' time. A batch whose response is unusable (io$graphql throws, res$data is NULL,
+#' or res$errors carries anything that is not an alias-scoped NOT_FOUND - e.g. a
+#' rate limit or transient 502) is DEFERRED: it contributes no rows at all, so
+#' update_repo_node_ids never touches those repos and they stay
+#' node_id=NULL/status='active' for retry on the next run.
+#'
+#' A batch is still parsed when its only errors are alias-scoped NOT_FOUNDs, where
+#' each per-alias null (repo actually gone/renamed-away) becomes status='gone'.
+#' Deferring those would be permanent, not transient: the batch's live repos would
+#' stay node_id=NULL, be re-selected next run, be re-batched with the same dead
+#' repo, and be discarded again forever - so one deleted repo would silently strand
+#' every repo it happens to share a batch with, and they would never gain a signal.
 resolve_node_ids <- function(io, repos_needing) {
   empty <- data.frame(repo_id = character(), node_id = character(), owner = character(),
     name = character(), name_with_owner = character(), status = character(), stringsAsFactors = FALSE)
@@ -450,7 +468,8 @@ resolve_node_ids <- function(io, repos_needing) {
     res <- tryCatch(io$graphql(build_resolve_query(sub$owner, sub$name)),
                      error = function(e) list(.err = TRUE))
     Sys.sleep(BATCH_DELAY_S)
-    ok <- is.list(res) && is.null(res$.err) && is.null(res$errors) && !is.null(res$data)
+    ok <- is.list(res) && is.null(res$.err) && !is.null(res$data) &&
+      (is.null(res$errors) || errors_are_alias_not_found(res$errors))
     if (!ok) return(NULL)
     pr <- parse_resolve(res$data, nrow(sub))
     do.call(rbind, lapply(seq_len(nrow(sub)), function(j) {
