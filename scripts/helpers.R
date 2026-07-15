@@ -348,6 +348,8 @@ ensure_series_schema <- function(con) {
     stars INTEGER, forks INTEGER, issues_open INTEGER, prs_open INTEGER,
     commits_total INTEGER, contributors_total INTEGER, releases_total INTEGER, last_commit_date TEXT,
     license TEXT, topics TEXT, is_archived INTEGER, trend_30d REAL,
+    pr_merge_ratio INTEGER, median_days_to_close_issue INTEGER, median_days_to_close_pr INTEGER,
+    median_open_issue_age_days INTEGER, last_release_date TEXT, median_days_between_releases INTEGER,
     first_seen TEXT, last_seen TEXT, PRIMARY KEY (package, origin))")
   DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS pipeline_state (key TEXT PRIMARY KEY, value TEXT)")
   invisible(TRUE)
@@ -383,17 +385,21 @@ materialize_series <- function(prev_latest, snapshot_long, date) {
        new_latest = snapshot_long)
 }
 
-build_signals_summary <- function(latest, series, repos, repo_packages, today) {
+build_signals_summary <- function(latest, series, repos, repo_packages, today,
+                                  compute_release_facts = FALSE) {
   if (nrow(repo_packages) == 0)
     return(data.frame(package = character(), origin = character(), repo_id = character(),
       stars = integer(), forks = integer(), issues_open = integer(), prs_open = integer(),
       commits_total = integer(), contributors_total = integer(), releases_total = integer(), last_commit_date = character(),
       license = character(), topics = character(), is_archived = integer(), trend_30d = double(),
+      pr_merge_ratio = integer(), median_days_to_close_issue = integer(), median_days_to_close_pr = integer(),
+      median_open_issue_age_days = integer(), last_release_date = character(), median_days_between_releases = integer(),
       first_seen = character(), last_seen = character(), stringsAsFactors = FALSE))
   val <- function(rid, met) {
     v <- latest$value[latest$repo_id == rid & latest$metric == met]
     if (length(v)) as.integer(v[1]) else NA_integer_
   }
+  rel_dates <- function(rid) series$date[series$repo_id == rid & series$metric == "releases_total"]
   trend30 <- function(rid) {
     s <- series[series$repo_id == rid & series$metric == "stars", ]
     if (nrow(s) < 2) return(NA_real_)
@@ -408,6 +414,18 @@ build_signals_summary <- function(latest, series, repos, repo_packages, today) {
   rows <- lapply(seq_len(nrow(repo_packages)), function(i) {
     rid <- repo_packages$repo_id[i]
     ra <- repos[repos$repo_id == rid, ]
+    rd <- rel_dates(rid)
+    # last_release_date: recompute the max from the window each run, but never
+    # regress below a carried-forward prior value (a repo with no recent
+    # release has no rows in the window).
+    prev_last_rel <- if (nrow(ra) && "last_release_date" %in% names(ra)) ra$last_release_date[1] else NA_character_
+    computed_last_rel <- release_last_date(rd)
+    last_rel <- if (is.na(computed_last_rel)) prev_last_rel
+                else if (is.na(prev_last_rel)) computed_last_rel
+                else max(computed_last_rel, prev_last_rel)
+    # cadence: trustworthy only with full history; else carry forward.
+    prev_cadence <- if (nrow(ra) && "median_days_between_releases" %in% names(ra)) as.integer(ra$median_days_between_releases[1]) else NA_integer_
+    cadence <- if (compute_release_facts) median_days_between_releases(rd) else prev_cadence
     data.frame(package = repo_packages$package[i], origin = repo_packages$origin[i], repo_id = rid,
       stars = val(rid, "stars"), forks = val(rid, "forks"), issues_open = val(rid, "issues_open"),
       prs_open = val(rid, "prs_open"), commits_total = val(rid, "commits_total"),
@@ -418,6 +436,12 @@ build_signals_summary <- function(latest, series, repos, repo_packages, today) {
       topics = if (nrow(ra)) ra$topics[1] else NA_character_,
       is_archived = if (nrow(ra)) as.integer(ra$is_archived[1]) else NA_integer_,
       trend_30d = trend30(rid),
+      pr_merge_ratio = pr_merge_ratio(val(rid, "prs_merged"), val(rid, "prs_closed")),
+      median_days_to_close_issue = val(rid, "median_days_to_close_issue"),
+      median_days_to_close_pr = val(rid, "median_days_to_close_pr"),
+      median_open_issue_age_days = val(rid, "median_open_issue_age_days"),
+      last_release_date = last_rel,
+      median_days_between_releases = cadence,
       first_seen = if (nrow(ra)) ra$first_seen[1] else NA_character_,
       last_seen = if (nrow(ra)) ra$last_seen[1] else NA_character_,
       stringsAsFactors = FALSE)
