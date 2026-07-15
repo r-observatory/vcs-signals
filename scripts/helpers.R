@@ -425,6 +425,49 @@ build_signals_summary <- function(latest, series, repos, repo_packages, today) {
   do.call(rbind, rows)
 }
 
+# ---- derived repo-health signals (pure) ------------------------------------
+#' Percent of decided PRs that were merged (merged / (merged + closed)), where
+#' `closed` is closed-without-merge. NA (not 0) when no PRs are decided.
+pr_merge_ratio <- function(merged, closed) {
+  if (is.na(merged) || is.na(closed)) return(NA_integer_)
+  denom <- merged + closed
+  if (denom == 0) return(NA_integer_)
+  as.integer(round(100 * merged / denom))
+}
+
+#' Latest release date (max), from the dates on which releases_total changed.
+#' NA when the repo has no releases.
+release_last_date <- function(dates) {
+  d <- substr(dates[!is.na(dates)], 1, 10)
+  if (!length(d)) return(NA_character_)
+  max(d)
+}
+
+#' Median gap in days between consecutive distinct release dates. NA when fewer
+#' than two distinct releases exist.
+median_days_between_releases <- function(dates) {
+  d <- sort(unique(substr(dates[!is.na(dates)], 1, 10)))
+  if (length(d) < 2) return(NA_integer_)
+  as.integer(round(stats::median(as.numeric(diff(as.Date(d))))))
+}
+
+#' Median open->close duration in days over paired created/closed timestamps;
+#' pairs whose close is NA are dropped. NA on an empty set.
+median_days_to_close <- function(created, closed) {
+  keep <- !is.na(created) & !is.na(closed)
+  if (!any(keep)) return(NA_integer_)
+  dur <- as.numeric(as.Date(substr(closed[keep], 1, 10)) - as.Date(substr(created[keep], 1, 10)))
+  as.integer(round(stats::median(dur)))
+}
+
+#' Median age in days of open issues as of `today`. NA on an empty set.
+median_open_issue_age <- function(created, today) {
+  c0 <- created[!is.na(created)]
+  if (!length(c0)) return(NA_integer_)
+  age <- as.numeric(as.Date(today) - as.Date(substr(c0, 1, 10)))
+  as.integer(round(stats::median(age)))
+}
+
 # ---- historical cumulative-series reconstruction -----------------------------
 #' Reconstruct a repo's daily-cumulative series from raw creation timestamps
 #' for a cumulative connection metric (stars/forks/releases), in any order.
