@@ -120,7 +120,8 @@ meets_naming_threshold <- function(ai_rows) {
 .ai_tier_rank <- function(s) {
   tiers <- .ai_split_tiers(s)
   if (!length(tiers)) return(99L)
-  min(TIER_PRIORITY[tiers], na.rm = TRUE)
+  r <- suppressWarnings(min(TIER_PRIORITY[tiers], na.rm = TRUE))
+  if (is.finite(r)) as.integer(r) else 99L
 }
 
 #' Non-agnostic tools ordered by (date ASC, censored ASC, tier ASC, tool ASC).
@@ -154,16 +155,22 @@ order_ai_tools <- function(ai_rows) {
   data.frame(repo_id = g$repo_id[1], tool = g$tool[1], first_seen_date = fs,
              first_seen_censored = fc,
              evidence_tiers = if (length(tiers)) paste(tiers, collapse = ",") else NA_character_,
-             authored = as.integer(any(as.integer(g$authored) == 1L)),
+             authored = as.integer(any(as.integer(g$authored) == 1L, na.rm = TRUE)),
              last_confirmed_date = if (length(lc)) max(lc) else NA_character_,
              stringsAsFactors = FALSE)
 }
+
+.ai_empty_signals <- function()
+  data.frame(repo_id = character(), tool = character(), first_seen_date = character(),
+             first_seen_censored = integer(), evidence_tiers = character(),
+             authored = integer(), last_confirmed_date = character(),
+             stringsAsFactors = FALSE)
 
 #' Merge prior + incoming vcs_ai_signals rows per (repo_id, tool) by the six
 #' column rules. Read-modify-write: callers write the returned set wholesale.
 ai_onset_reducer <- function(prior_rows, incoming_rows) {
   all_rows <- rbind(prior_rows, incoming_rows)
-  if (is.null(all_rows) || nrow(all_rows) == 0) return(prior_rows[0, , drop = FALSE])
+  if (is.null(all_rows) || nrow(all_rows) == 0) return(.ai_empty_signals())
   key <- paste(all_rows$repo_id, all_rows$tool, sep = "\r")
   parts <- lapply(split(all_rows, key), .ai_reduce_group)
   do.call(rbind, parts)

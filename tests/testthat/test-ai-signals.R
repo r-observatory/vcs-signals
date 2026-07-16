@@ -168,3 +168,26 @@ test_that("build_ai_rollups returns a typed empty frame when nothing is nameable
   expect_true(all(c("repo_id","ai_markers_detected","ai_first_tool","ai_first_date",
                     "ai_tool_count","ai_tools","ai_latest_tool","ai_latest_date") %in% names(out)))
 })
+
+test_that("order_ai_tools does not crash on an unknown evidence_tiers code and sorts it last", {
+  rows <- rbind(
+    mk("claude", "2024-01-01", tiers = "A"),
+    mk("mystery", "2024-01-01", tiers = "Z"))   # unknown tier code -> rank falls back to 99
+  out <- order_ai_tools(rows)
+  expect_equal(out, c("claude", "mystery"))     # same date: unknown-tier tool included, sorted last on rank
+})
+
+test_that("reducer: authored is 0L (never NA) when one input row has authored = NA and none is 1", {
+  o <- ai_onset_reducer(row("claude", "2024-01-01", 0L, "A", NA_integer_, "2024-01-01"),
+                        row("claude", "2024-02-01", 0L, "B", 0L, "2024-02-01"))
+  expect_identical(o$authored, 0L)
+  expect_false(is.na(o$authored))
+})
+
+test_that("ai_onset_reducer(NULL, NULL) returns a typed 0-row frame, not NULL", {
+  out <- ai_onset_reducer(NULL, NULL)
+  expect_false(is.null(out))
+  expect_equal(nrow(out), 0)
+  expect_true(all(c("repo_id", "tool", "first_seen_date", "first_seen_censored",
+                    "evidence_tiers", "authored", "last_confirmed_date") %in% names(out)))
+})
