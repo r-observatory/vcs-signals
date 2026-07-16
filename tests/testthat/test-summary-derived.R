@@ -45,3 +45,20 @@ test_that("without full history, cadence is carried forward not recomputed", {
   expect_equal(out$median_days_between_releases, 42L)   # carried forward
   expect_equal(out$last_release_date, "2024-02-01")     # recomputed max == carried value
 })
+
+test_that("last_release_date carries forward when the window has no release rows", {
+  latest <- data.frame(repo_id = "github.com/o/r", metric = "prs_merged",
+    value = 1L, stringsAsFactors = FALSE)
+  series <- data.frame(repo_id = character(), metric = character(),
+    date = character(), value = integer(), stringsAsFactors = FALSE)  # no releases_total rows
+  repos <- data.frame(repo_id = "github.com/o/r", first_seen = "2020-01-01",
+    last_seen = "2024-02-01", last_commit_date = NA_character_, license = NA_character_,
+    topics = NA_character_, is_archived = 0L,
+    last_release_date = "2023-05-05", median_days_between_releases = 30L,
+    stringsAsFactors = FALSE)
+  rp <- data.frame(package = "pkg", origin = "cran", repo_id = "github.com/o/r",
+    stringsAsFactors = FALSE)
+  out <- build_signals_summary(latest, series, repos, rp, "2024-02-02",
+                               compute_release_facts = FALSE)
+  expect_equal(out$last_release_date, "2023-05-05")   # computed NA -> carried forward
+})
