@@ -191,3 +191,74 @@ test_that("ai_onset_reducer(NULL, NULL) returns a typed 0-row frame, not NULL", 
   expect_true(all(c("repo_id", "tool", "first_seen_date", "first_seen_censored",
                     "evidence_tiers", "authored", "last_confirmed_date") %in% names(out)))
 })
+
+gd <- function(tool, tier, marker) data.frame(tool = tool, tier = tier, marker = marker,
+  agnostic = FALSE, stringsAsFactors = FALSE)
+
+test_that("apply_fork_guard censors every Tier-D marker on a fork", {
+  ev <- rbind(gd("claude", "D", ".claude"), gd("cursor", "D", ".cursor"))
+  out <- apply_fork_guard(ev, is_fork = TRUE, parent = "up/stream", first_commit_touches = character(0))
+  expect_equal(out$first_seen_censored, c(1L, 1L))
+})
+
+test_that("apply_fork_guard censors a template-seeded marker on a non-fork, leaves the rest exact", {
+  ev <- rbind(gd("claude", "D", "CLAUDE.md"), gd("cursor", "D", ".cursor"))
+  out <- apply_fork_guard(ev, is_fork = FALSE, parent = NA_character_,
+                          first_commit_touches = c("CLAUDE.md"))
+  expect_equal(out$first_seen_censored[out$marker == "CLAUDE.md"], 1L)
+  expect_equal(out$first_seen_censored[out$marker == ".cursor"], 0L)
+})
+
+test_that("apply_fork_guard never censors a non-Tier-D row", {
+  ev <- rbind(gd("claude", "B", "B"), gd("claude", "D", "CLAUDE.md"))
+  out <- apply_fork_guard(ev, is_fork = TRUE, parent = "up/stream", first_commit_touches = character(0))
+  expect_equal(out$first_seen_censored[out$tier == "B"], 0L)   # commit-tier onset untouched
+  expect_equal(out$first_seen_censored[out$tier == "D"], 1L)
+})
+
+test_that("apply_fork_guard passes an empty evidence frame through unchanged", {
+  ev <- .ai_empty_evidence()
+  expect_equal(nrow(apply_fork_guard(ev, FALSE, NA_character_, character(0))), 0)
+})
+
+test_that("build_ai_detail collapses per tool: reducer picks the tighter onset, unions tiers, ORs authored", {
+  ev <- data.frame(
+    tool     = c("claude", "claude", "cursor"),
+    tier     = c("D", "B", "D"),
+    marker   = c(".claude", "B", ".cursor"),
+    agnostic = FALSE,
+    first_seen_censored = c(0L, 0L, 1L),   # cursor .cursor was fork-censored upstream
+    authored = c(0L, 1L, 0L),
+    stringsAsFactors = FALSE)
+  onsets <- data.frame(
+    tool   = c("claude", "claude", "cursor"),
+    marker = c(".claude", "B", ".cursor"),
+    first_seen_date = c("2024-06-01", "2024-03-01", "2022-01-01"),
+    first_seen_censored = c(0L, 0L, 0L),
+    stringsAsFactors = FALSE)
+  out <- build_ai_detail("github.com/o/r", ev, onsets, last_confirmed = "2026-07-15")
+  expect_setequal(out$tool, c("claude", "cursor"))
+  cl <- out[out$tool == "claude", ]
+  expect_equal(cl$first_seen_date, "2024-03-01")                     # exact B beats D marker date
+  expect_equal(cl$first_seen_censored, 0L)
+  expect_setequal(strsplit(cl$evidence_tiers, ",")[[1]], c("B", "D"))
+  expect_equal(cl$authored, 1L)
+  expect_equal(cl$last_confirmed_date, "2026-07-15")
+  cu <- out[out$tool == "cursor", ]
+  expect_equal(cu$first_seen_censored, 1L)                           # fork-guard censoring survives
+  expect_equal(cu$first_seen_date, "2022-01-01")
+  expect_true(all(c("repo_id", "tool", "first_seen_date", "first_seen_censored",
+                    "evidence_tiers", "authored", "last_confirmed_date") %in% names(out)))
+})
+
+test_that("build_ai_detail returns a typed 0-row frame for no evidence and tolerates NULL onsets", {
+  out <- build_ai_detail("github.com/o/r", NULL, NULL, "2026-07-15")
+  expect_equal(nrow(out), 0)
+  expect_true(all(c("repo_id", "tool", "first_seen_date", "first_seen_censored",
+                    "evidence_tiers", "authored", "last_confirmed_date") %in% names(out)))
+  ev <- data.frame(tool = "claude", tier = "D", marker = ".claude", agnostic = FALSE,
+                   stringsAsFactors = FALSE)
+  nulled <- build_ai_detail("github.com/o/r", ev, NULL, "2026-07-15")   # onsets NULL -> NA date
+  expect_equal(nulled$tool, "claude")
+  expect_true(is.na(nulled$first_seen_date))
+})

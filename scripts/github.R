@@ -546,3 +546,202 @@ fetch_responsiveness <- function(io, repos, today) {
   if (!is.null(resp$errors) && is.null(resp$data)) stop("responsiveness batch error")
   parse_responsiveness(resp, repos, today)
 }
+
+# ---- AI-tooling detection collection -------------------------------------
+# Pure query builders + response parsers for the cheap Tier-D marker pass, the
+# PR-agent pass, and the onset lookups. Unit-tested against inline fixtures like
+# build_responsiveness_query / parse_responsiveness above. The two impure
+# transports at the end (marked) are not unit-tested, like fetch_contributor_count.
+
+#' One aliased multi-repo query returning, per repo: the root-tree entry names
+#' (expression "HEAD:"), the .github-tree entry names ("HEAD:.github"), isFork,
+#' and parent.nameWithOwner. object() is null when a tree is absent (empty repo,
+#' no .github), so the parser guards it. Alias r<idx> (0-based) maps back to
+#' repo_id by row order. The entry-name vectors feed classify_tree_markers.
+build_tree_query <- function(repos) {
+  parts <- vapply(seq_len(nrow(repos)), function(j) {
+    sprintf('r%d: repository(owner: "%s", name: "%s") {
+      isFork parent { nameWithOwner }
+      rootTree: object(expression: "HEAD:") { ... on Tree { entries { name type } } }
+      githubTree: object(expression: "HEAD:.github") { ... on Tree { entries { name type } } }
+      gitignore: object(expression: "HEAD:.gitignore") { ... on Blob { text } }
+      rbuildignore: object(expression: "HEAD:.Rbuildignore") { ... on Blob { text } }
+    }', j - 1L, repos$owner[j], repos$name[j])
+  }, character(1))
+  sprintf('query { %s }', paste(parts, collapse = "\n"))
+}
+
+#' Demux a build_tree_query response into a named list keyed by repo_id, each
+#' value list(root_entries, github_entries, is_fork, parent). A null alias (repo
+#' gone) or a null object() (absent tree) degrades to empty entries, so the cheap
+#' pass never reads "could not fetch the tree" as "no markers".
+parse_tree_markers <- function(resp, repos) {
+  entry_names <- function(tree) {
+    ns <- vapply(.nn(tree$entries, list()), function(e) .nn(e$name, ""), character(1))
+    ns[nzchar(ns)]
+  }
+  blob_lines <- function(blob) {
+    txt <- .nn(blob$text, NA_character_)
+    if (is.na(txt) || !nzchar(txt)) return(character(0))
+    strsplit(txt, "\n", fixed = TRUE)[[1]]
+  }
+  out <- vector("list", nrow(repos))
+  names(out) <- repos$repo_id
+  for (j in seq_len(nrow(repos))) {
+    r <- resp$data[[sprintf("r%d", j - 1L)]]
+    if (is.null(r)) {
+      out[[j]] <- list(root_entries = character(0), github_entries = character(0),
+                       is_fork = NA, parent = NA_character_,
+                       gitignore_lines = character(0), rbuildignore_lines = character(0))
+      next
+    }
+    out[[j]] <- list(
+      root_entries = entry_names(r$rootTree),
+      github_entries = entry_names(r$githubTree),
+      is_fork = isTRUE(r$isFork),
+      parent = .nn(r$parent$nameWithOwner, NA_character_),
+      gitignore_lines = blob_lines(r$gitignore),
+      rbuildignore_lines = blob_lines(r$rbuildignore))
+  }
+  out
+}
+
+#' One aliased multi-repo query for the oldest 50 PRs per repo (CREATED_AT ASC),
+#' each with author { login __typename } and createdAt, plus pageInfo so the
+#' orchestrator can decide which repos need further paging toward the agent era.
+#' Always page 1: a single shared `after` cursor across aliases is meaningless,
+#' so per-repo follow-up paging is the orchestrator's job (Plan B2).
+build_pr_agent_query <- function(repos) {
+  parts <- vapply(seq_len(nrow(repos)), function(j) {
+    sprintf('r%d: repository(owner: "%s", name: "%s") {
+      pullRequests(first: 50, orderBy: {field: CREATED_AT, direction: ASC}) {
+        pageInfo { endCursor hasNextPage }
+        nodes { author { login __typename } createdAt }
+      }
+    }', j - 1L, repos$owner[j], repos$name[j])
+  }, character(1))
+  sprintf('query { %s }', paste(parts, collapse = "\n"))
+}
+
+#' Demux a build_pr_agent_query response into a named list keyed by repo_id, each
+#' value list(prs = data.frame(login, typename, created_at), has_next). A null
+#' author (deleted account) yields login = NA. __typename is surfaced for
+#' provenance only and never trusted alone - detection is detect_pr_agents(login)
+#' against the allowlist, so Dependabot/renovate/github-actions never flag.
+parse_pr_agents <- function(resp, repos) {
+  empty <- data.frame(login = character(0), typename = character(0),
+                      created_at = character(0), stringsAsFactors = FALSE)
+  out <- vector("list", nrow(repos))
+  names(out) <- repos$repo_id
+  for (j in seq_len(nrow(repos))) {
+    r <- resp$data[[sprintf("r%d", j - 1L)]]
+    if (is.null(r) || is.null(r$pullRequests)) { out[[j]] <- list(prs = empty, has_next = FALSE); next }
+    nodes <- .nn(r$pullRequests$nodes, list())
+    out[[j]] <- list(
+      prs = data.frame(
+        login      = vapply(nodes, function(n) .nn(n$author$login, NA_character_), character(1)),
+        typename   = vapply(nodes, function(n) .nn(n$author[["__typename"]], NA_character_), character(1)),
+        created_at = vapply(nodes, function(n) .nn(n$createdAt, NA_character_), character(1)),
+        stringsAsFactors = FALSE),
+      has_next = isTRUE(r$pullRequests$pageInfo$hasNextPage))
+  }
+  out
+}
+
+#' Pure: the earliest-match commit date from a search/commits JSON body, or NA when
+#' total_count is 0, items is empty, or the body does not parse. The match is FUZZY
+#' (substring-ish), so the caller treats this date as a CANDIDATE onset.
+parse_search_commit <- function(body_txt) {
+  body <- tryCatch(jsonlite::fromJSON(body_txt, simplifyVector = FALSE), error = function(e) NULL)
+  if (is.null(body)) return(NA_character_)
+  items <- .nn(body$items, list())
+  if (isTRUE(.nn(body$total_count, length(items)) == 0) || length(items) == 0) return(NA_character_)
+  .nn(items[[1]]$commit$committer$date, NA_character_)
+}
+
+#' A marker path plus any known predecessor paths (AI_MARKER_PREDECESSORS), probed
+#' together so a rename (e.g. .cursorrules -> .cursor) does not reset the onset.
+expand_marker_paths <- function(path) {
+  preds <- unname(AI_MARKER_PREDECESSORS[names(AI_MARKER_PREDECESSORS) == path])
+  unique(c(path, preds[!is.na(preds)]))
+}
+
+#' One page of a path's commit history on the default branch (DESC, newest first).
+#' `after` is embedded as null (unquoted) when absent, else as a quoted cursor.
+build_marker_history_query <- function(owner, name, path, after = NULL) {
+  after_arg <- if (is.null(after) || is.na(after)) "null" else sprintf('"%s"', after)
+  sprintf('query { repository(owner: "%s", name: "%s") {
+    defaultBranchRef { target { ... on Commit {
+      history(first: 100, path: "%s", after: %s) {
+        pageInfo { endCursor hasNextPage }
+        nodes { committedDate }
+      }
+    } } }
+  } }', owner, name, path, after_arg)
+}
+
+#' Parse one marker-history page to list(dates, end_cursor, has_next). Degrades to
+#' empty when defaultBranchRef / target / history is null (empty repo, or the path
+#' never existed on the default branch).
+parse_marker_history <- function(resp) {
+  h <- resp$data$repository$defaultBranchRef$target$history
+  if (is.null(h)) return(list(dates = character(0), end_cursor = NA_character_, has_next = FALSE))
+  list(dates = vapply(.nn(h$nodes, list()), function(n) .nn(n$committedDate, NA_character_), character(1)),
+       end_cursor = .nn(h$pageInfo$endCursor, NA_character_),
+       has_next = isTRUE(h$pageInfo$hasNextPage))
+}
+
+#' Earliest commit date touching `path` (or a known predecessor path) on the default
+#' branch. Pages history(path:) to exhaustion (DESC, so the oldest touch is on the
+#' last page; marker files have few touching commits) and returns the min committedDate
+#' across all probed paths, or NA when nothing touches them OR a page faults mid-scan
+#' (fails closed - never folds a partial newest-page min, which would write a too-recent
+#' onset; left for a re-run, never written as "no marker"). Uses io$graphql (GraphQL
+#' budget), so it paces with BACKFILL_DELAY_S, not SEARCH_DELAY_S.
+fetch_marker_onset <- function(io, owner, name, path, delay = BACKFILL_DELAY_S) {
+  earliest <- NA_character_
+  for (p in expand_marker_paths(path)) {
+    after <- NULL; oldest <- NA_character_
+    repeat {
+      resp <- io$graphql(build_marker_history_query(owner, name, p, after))
+      # history(path:) is DESC, so the true earliest touch is on the LAST page. A
+      # mid-pagination fault means we never reached it; discarding this path's partial
+      # (newest-page) min is the only correct choice - folding it would write a
+      # too-recent onset into the immutable table. Fail closed, leave it for a re-run.
+      if (!is.null(resp$errors) || is.null(resp$data)) return(NA_character_)
+      if (delay > 0) Sys.sleep(delay)
+      pg <- parse_marker_history(resp)
+      d <- pg$dates[!is.na(pg$dates)]
+      if (length(d)) oldest <- if (is.na(oldest)) min(d) else min(oldest, min(d))
+      if (!isTRUE(pg$has_next) || is.na(pg$end_cursor) || !nzchar(pg$end_cursor)) break
+      after <- pg$end_cursor
+    }
+    if (!is.na(oldest)) earliest <- if (is.na(earliest)) oldest else min(earliest, oldest)
+  }
+  earliest
+}
+
+# --- transport (not unit-tested) ---
+
+#' Earliest commit in owner/name whose message matches `query`, via the REST
+#' commit-search API. One request returns the server-side earliest match. `sort` and
+#' `order` MUST be paired or GitHub silently returns best-match desc. Same transport
+#' style as fetch_contributor_count: routed through gh, GH_TOKEN set/restored, NA on
+#' any transport error or non-2xx so one bad repo never aborts a scan. Sleeps `delay`
+#' after the request because the search budget (~30/min) is separate from and tighter
+#' than GraphQL, so pacing at the transport keeps the caller's loop simple. FUZZY: the
+#' returned date is a CANDIDATE the caller verifies (scan_trailers) or records as a
+#' censored floor.
+search_earliest_commit <- function(token, owner, name, query, delay = SEARCH_DELAY_S) {
+  old <- Sys.getenv("GH_TOKEN", unset = NA)
+  Sys.setenv(GH_TOKEN = token)
+  on.exit({ if (is.na(old)) Sys.unsetenv("GH_TOKEN") else Sys.setenv(GH_TOKEN = old) }, add = TRUE)
+  q <- sprintf("repo:%s/%s %s", owner, name, query)
+  out <- suppressWarnings(system2("gh", c("api", "-X", "GET", "search/commits",
+    "-f", paste0("q=", q), "-f", "sort=committer-date", "-f", "order=asc", "-f", "per_page=1"),
+    stdout = TRUE))
+  if (delay > 0) Sys.sleep(delay)
+  status <- attr(out, "status")
+  if (!is.null(status) && !identical(as.integer(status), 0L)) return(NA_character_)
+  parse_search_commit(paste(out, collapse = "\n"))
+}
