@@ -176,6 +176,24 @@ ai_onset_reducer <- function(prior_rows, incoming_rows) {
   do.call(rbind, parts)
 }
 
+#' Fork / template guard for Tier-D marker onsets. A forked repo (is_fork) or a
+#' marker present in the repo's first commit (template seeding, first_commit_touches)
+#' inherits that marker rather than adopting it, so its Tier-D onset is censored to a
+#' "<=" floor (first_seen_censored = 1). Only Tier D is guarded - commit-message and
+#' author tiers carry their own dated, repo-specific evidence. `parent` is reserved
+#' for a future parent-tree uniqueness check; here a fork conservatively censors every
+#' Tier-D marker (over-censoring is the safe direction for an immutable onset, and any
+#' genuine commit-tier onset later dominates the censored floor in the reducer).
+apply_fork_guard <- function(evidence, is_fork, parent, first_commit_touches) {
+  if (is.null(evidence) || nrow(evidence) == 0) return(evidence)
+  if (!"first_seen_censored" %in% names(evidence)) evidence$first_seen_censored <- 0L
+  templated <- evidence$marker %in% (first_commit_touches %||% character(0))
+  inherited <- templated | isTRUE(is_fork)
+  guarded <- inherited & (evidence$tier == "D")
+  evidence$first_seen_censored[guarded] <- 1L
+  evidence
+}
+
 .ai_empty_rollups <- function()
   data.frame(repo_id = character(), ai_markers_detected = logical(),
              ai_first_tool = character(), ai_first_date = character(),

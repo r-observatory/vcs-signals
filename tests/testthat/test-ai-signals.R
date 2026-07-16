@@ -191,3 +191,32 @@ test_that("ai_onset_reducer(NULL, NULL) returns a typed 0-row frame, not NULL", 
   expect_true(all(c("repo_id", "tool", "first_seen_date", "first_seen_censored",
                     "evidence_tiers", "authored", "last_confirmed_date") %in% names(out)))
 })
+
+gd <- function(tool, tier, marker) data.frame(tool = tool, tier = tier, marker = marker,
+  agnostic = FALSE, stringsAsFactors = FALSE)
+
+test_that("apply_fork_guard censors every Tier-D marker on a fork", {
+  ev <- rbind(gd("claude", "D", ".claude"), gd("cursor", "D", ".cursor"))
+  out <- apply_fork_guard(ev, is_fork = TRUE, parent = "up/stream", first_commit_touches = character(0))
+  expect_equal(out$first_seen_censored, c(1L, 1L))
+})
+
+test_that("apply_fork_guard censors a template-seeded marker on a non-fork, leaves the rest exact", {
+  ev <- rbind(gd("claude", "D", "CLAUDE.md"), gd("cursor", "D", ".cursor"))
+  out <- apply_fork_guard(ev, is_fork = FALSE, parent = NA_character_,
+                          first_commit_touches = c("CLAUDE.md"))
+  expect_equal(out$first_seen_censored[out$marker == "CLAUDE.md"], 1L)
+  expect_equal(out$first_seen_censored[out$marker == ".cursor"], 0L)
+})
+
+test_that("apply_fork_guard never censors a non-Tier-D row", {
+  ev <- rbind(gd("claude", "B", "B"), gd("claude", "D", "CLAUDE.md"))
+  out <- apply_fork_guard(ev, is_fork = TRUE, parent = "up/stream", first_commit_touches = character(0))
+  expect_equal(out$first_seen_censored[out$tier == "B"], 0L)   # commit-tier onset untouched
+  expect_equal(out$first_seen_censored[out$tier == "D"], 1L)
+})
+
+test_that("apply_fork_guard passes an empty evidence frame through unchanged", {
+  ev <- .ai_empty_evidence()
+  expect_equal(nrow(apply_fork_guard(ev, FALSE, NA_character_, character(0))), 0)
+})
