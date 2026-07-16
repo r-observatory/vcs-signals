@@ -194,6 +194,45 @@ apply_fork_guard <- function(evidence, is_fork, parent, first_commit_touches) {
   evidence
 }
 
+#' Build this scan's vcs_ai_signals detail rows for one repo. Groups the raw tier
+#' evidence (classify_tree_markers / scan_ignore_tokens / scan_trailers / match_* /
+#' detect_pr_agents rows, optionally fork-guarded) by (repo_id, tool), attaches each
+#' signal's onset from `onsets` (keyed by tool + marker), then collapses per tool
+#' through ai_onset_reducer: evidence_tiers set-union, onset by the
+#' exact-dominates-floor rules, authored logical-OR, last_confirmed max. Output is
+#' exactly the 7-col shape ai_onset_reducer consumes cross-run, so B2 feeds it straight
+#' into the prior-vs-incoming merge.
+#'
+#' `onsets` is data.frame(tool, marker, first_seen_date, first_seen_censored) (NULL or
+#' 0-row is allowed). A signal with no matching onset keeps first_seen_date NA and
+#' whatever censoring apply_fork_guard already put on its evidence row. Any censoring is
+#' the max of the onset's and the fork-guard's, so an inherited marker with an exact
+#' onset is still recorded as a floor. `last_confirmed` (the scan date) is stamped on
+#' every row, since a HEAD marker is confirmed present now.
+build_ai_detail <- function(repo_id, raw_evidence, onsets, last_confirmed) {
+  if (is.null(raw_evidence) || nrow(raw_evidence) == 0) return(.ai_empty_signals())
+  if (is.null(onsets) || nrow(onsets) == 0)
+    onsets <- data.frame(tool = character(0), marker = character(0),
+                         first_seen_date = character(0), first_seen_censored = integer(0),
+                         stringsAsFactors = FALSE)
+  ev <- raw_evidence
+  if (!"authored" %in% names(ev)) ev$authored <- 0L
+  guard_c <- if ("first_seen_censored" %in% names(ev)) as.integer(ev$first_seen_censored)
+             else rep(0L, nrow(ev))
+  m <- match(paste(ev$tool, ev$marker, sep = "\r"),
+             paste(onsets$tool, onsets$marker, sep = "\r"))
+  onset_c <- as.integer(onsets$first_seen_censored[m]); onset_c[is.na(onset_c)] <- 0L
+  candidates <- data.frame(
+    repo_id = repo_id, tool = ev$tool,
+    first_seen_date = onsets$first_seen_date[m],
+    first_seen_censored = pmax(onset_c, guard_c),
+    evidence_tiers = ev$tier,
+    authored = as.integer(ev$authored),
+    last_confirmed_date = last_confirmed,
+    stringsAsFactors = FALSE)
+  ai_onset_reducer(.ai_empty_signals(), candidates)
+}
+
 .ai_empty_rollups <- function()
   data.frame(repo_id = character(), ai_markers_detected = logical(),
              ai_first_tool = character(), ai_first_date = character(),
