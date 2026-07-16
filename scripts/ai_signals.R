@@ -99,6 +99,48 @@ detect_pr_agents <- function(pr_logins) {
   .ai_rows(unname(AI_PR_AGENT_LOGINS[match(hit, tolower(names(AI_PR_AGENT_LOGINS)))]), "PR")
 }
 
+#' Post-cutoff agent-PR logins: an allowlisted agent login whose PR was created at or
+#' after AI_PR_CUTOFF. A pre-cutoff match predates the agent era (a login collision) and
+#' is dropped. Internal.
+.ai_agent_pr_logins <- function(pr, cutoff) {
+  prs <- if (is.null(pr) || is.null(pr$prs)) NULL else pr$prs
+  if (is.null(prs) || nrow(prs) == 0) return(character(0))
+  intra <- !is.na(prs$created_at) & prs$created_at >= cutoff
+  prs$login[intra]
+}
+
+#' Combine one repo's cheap-pass parsed tree + PR results into a raw-evidence frame
+#' (tool, tier, marker, agnostic): classify_tree_markers + scan_ignore_tokens on the
+#' tree, detect_pr_agents on the post-cutoff agent logins. Pure. A NULL tree or NULL pr
+#' (that channel errored or is empty) contributes no rows from that channel, never a
+#' "no AI" verdict. Returns the typed 0-row frame when nothing matches.
+assemble_repo_evidence <- function(tree, pr, cutoff = AI_PR_CUTOFF) {
+  tree <- tree %||% list()
+  markers <- classify_tree_markers(tree$root_entries, tree$github_entries)
+  ign <- scan_ignore_tokens(tree$gitignore_lines, tree$rbuildignore_lines)
+  pr_ev <- detect_pr_agents(.ai_agent_pr_logins(pr, cutoff))
+  do.call(rbind, list(markers, ign, pr_ev))
+}
+
+#' The gate: TRUE iff a repo shows ANY AI evidence (a marker, an ignore token, or a
+#' post-cutoff agent PR). Absence of evidence is never gated in, so a repo that errored
+#' in the cheap pass (no evidence frame) is deferred, never recorded as clean.
+repo_has_ai_signal <- function(evidence) {
+  !is.null(evidence) && nrow(evidence) > 0
+}
+
+#' PR-channel onset: the earliest createdAt among the repo's post-cutoff agent PRs, or
+#' NA. A PR createdAt is a real dated event, so this is recorded exact by build_onset_map.
+earliest_agent_pr_date <- function(pr, cutoff = AI_PR_CUTOFF) {
+  prs <- if (is.null(pr) || is.null(pr$prs)) NULL else pr$prs
+  if (is.null(prs) || nrow(prs) == 0) return(NA_character_)
+  intra <- !is.na(prs$created_at) & prs$created_at >= cutoff
+  agent <- intra & tolower(prs$login) %in% tolower(names(AI_PR_AGENT_LOGINS))
+  d <- prs$created_at[agent]
+  if (!length(d)) return(NA_character_)
+  min(d)
+}
+
 .ai_split_tiers <- function(s) {
   if (is.na(s) || !nzchar(s)) return(character(0))
   trimws(strsplit(s, ",", fixed = TRUE)[[1]])
@@ -231,6 +273,45 @@ build_ai_detail <- function(repo_id, raw_evidence, onsets, last_confirmed) {
     last_confirmed_date = last_confirmed,
     stringsAsFactors = FALSE)
   ai_onset_reducer(.ai_empty_signals(), candidates)
+}
+
+#' Assemble the per-(tool, marker) onset frame build_ai_detail consumes, from a repo's
+#' evidence plus the fetched onset dates. Each evidence row is matched to its onset source
+#' by tier/marker shape: a Tier-D row (marker is a path, or "ignore:<path>") takes
+#' marker_dates[[<path>]] exact; a PR row (marker == "PR") takes pr_date exact; a Tier
+#' A/B/C row (marker == tier) takes commit_onsets for (tool, tier), exact when that onset's
+#' `confirmed` is TRUE (a structured author match or a scan_trailers confirm) else a
+#' censored floor - a fuzzy message-search candidate is never written as an exact immutable
+#' onset. Pure: all dates/confirms are passed in. A row with no resolved onset keeps
+#' first_seen_date NA (build_ai_detail leaves it NA in the detail row).
+build_onset_map <- function(evidence, marker_dates = list(),
+                            commit_onsets = NULL, pr_date = NA_character_) {
+  empty <- data.frame(tool = character(), marker = character(),
+                      first_seen_date = character(), first_seen_censored = integer(),
+                      stringsAsFactors = FALSE)
+  if (is.null(evidence) || nrow(evidence) == 0) return(empty)
+  co_key <- if (is.null(commit_onsets) || nrow(commit_onsets) == 0) character(0)
+            else paste(commit_onsets$tool, commit_onsets$tier, sep = "\r")
+  rows <- lapply(seq_len(nrow(evidence)), function(i) {
+    tool <- evidence$tool[i]; tier <- evidence$tier[i]; marker <- evidence$marker[i]
+    fs <- NA_character_; fc <- 0L
+    if (identical(tier, "D")) {
+      path <- sub("^ignore:", "", marker)
+      fs <- if (path %in% names(marker_dates)) marker_dates[[path]] else NA_character_
+    } else if (identical(tier, "PR")) {
+      fs <- pr_date
+    } else {
+      j <- match(paste(tool, tier, sep = "\r"), co_key)
+      if (!is.na(j)) {
+        fs <- commit_onsets$first_seen_date[j]
+        fc <- if (isTRUE(as.logical(commit_onsets$confirmed[j]))) 0L else 1L
+      }
+    }
+    data.frame(tool = tool, marker = marker, first_seen_date = fs,
+               first_seen_censored = as.integer(fc), stringsAsFactors = FALSE)
+  })
+  out <- do.call(rbind, rows)
+  out[!duplicated(paste(out$tool, out$marker, sep = "\r")), , drop = FALSE]
 }
 
 .ai_empty_rollups <- function()

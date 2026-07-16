@@ -214,6 +214,7 @@ ensure_repo_schema <- function(con) {
     PRIMARY KEY (repo_id, package, origin))")
   DBI::dbExecute(con, "CREATE INDEX IF NOT EXISTS idx_rp_package ON repo_packages(package)")
   DBI::dbExecute(con, "CREATE INDEX IF NOT EXISTS idx_repos_host ON repos(host)")
+  DBI::dbExecute(con, "CREATE INDEX IF NOT EXISTS idx_repos_node_id ON repos(node_id)")
   invisible(TRUE)
 }
 
@@ -271,6 +272,43 @@ update_repo_node_ids <- function(con, resolved) {
     params = list(resolved$node_id, resolved$owner, resolved$name,
                   resolved$name_with_owner, resolved$status, resolved$repo_id))
   DBI::dbCommit(con); ok <- TRUE
+  invisible(TRUE)
+}
+
+#' Carry vcs_ai_signals onset rows across repos that share an immutable node_id (a
+#' rename/transfer minted a second repo_id for the same GitHub repository, orphaning the
+#' old slug's onset). For each node_id held by 2+ repos, the canonical repo_id is the
+#' active, most-recently-seen one (tiebroken by repo_id ascending for determinism); every
+#' other repo_id is stale. All involved rows are re-keyed to the canonical repo_id and
+#' folded through ai_onset_reducer, so a (canonical, tool) collision collapses by the onset
+#' rules (exact dominates a later floor, min of exacts, tier union, authored OR,
+#' last_confirmed max) instead of violating the (repo_id, tool) primary key that a blind
+#' UPDATE ... SET repo_id would hit. Structural: run on every merge, before the
+#' prior-vs-incoming onset reduce. No-op when no node_id is shared.
+reconcile_ai_identity <- function(con) {
+  if (!DBI::dbExistsTable(con, "vcs_ai_signals")) return(invisible(FALSE))
+  dups <- DBI::dbGetQuery(con,
+    "SELECT node_id FROM repos WHERE node_id IS NOT NULL GROUP BY node_id HAVING COUNT(*) > 1")
+  if (nrow(dups) == 0) return(invisible(FALSE))
+  for (nid in dups$node_id) {
+    grp <- DBI::dbGetQuery(con,
+      "SELECT repo_id, status, last_seen FROM repos WHERE node_id = ?", params = list(nid))
+    # canonical: active before non-active, then newest last_seen, then repo_id ascending.
+    a <- ifelse(grp$status == "active", 0L, 1L)
+    o <- order(a, grp$last_seen, grp$repo_id, decreasing = c(FALSE, TRUE, FALSE), method = "radix")
+    canonical <- grp$repo_id[o[1]]
+    ids <- grp$repo_id
+    ph <- paste(rep("?", length(ids)), collapse = ",")
+    involved <- DBI::dbGetQuery(con, sprintf(
+      "SELECT repo_id, tool, first_seen_date, first_seen_censored, evidence_tiers, authored, last_confirmed_date
+         FROM vcs_ai_signals WHERE repo_id IN (%s)", ph), params = as.list(ids))
+    if (nrow(involved) == 0) next
+    involved$repo_id <- canonical
+    reduced <- ai_onset_reducer(.ai_empty_signals(), involved)
+    DBI::dbExecute(con, sprintf("DELETE FROM vcs_ai_signals WHERE repo_id IN (%s)", ph),
+                   params = as.list(ids))
+    DBI::dbWriteTable(con, "vcs_ai_signals", reduced, append = TRUE)
+  }
   invisible(TRUE)
 }
 
