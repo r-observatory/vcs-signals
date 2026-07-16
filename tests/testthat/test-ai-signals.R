@@ -299,3 +299,45 @@ test_that("earliest_agent_pr_date returns the earliest post-cutoff agent created
   expect_true(is.na(earliest_agent_pr_date(none)))
   expect_true(is.na(earliest_agent_pr_date(NULL)))
 })
+
+test_that("build_onset_map maps Tier-D markers and ignore tokens to exact onsets", {
+  ev <- data.frame(tool = c("claude", "aider"), tier = c("D", "D"),
+                   marker = c("CLAUDE.md", "ignore:.aiderignore"),
+                   agnostic = c(FALSE, FALSE), stringsAsFactors = FALSE)
+  om <- build_onset_map(ev, marker_dates = list("CLAUDE.md" = "2024-02-01T00:00:00Z",
+                                                ".aiderignore" = "2023-11-01T00:00:00Z"))
+  expect_equal(om$first_seen_date[om$marker == "CLAUDE.md"], "2024-02-01T00:00:00Z")
+  expect_equal(om$first_seen_date[om$marker == "ignore:.aiderignore"], "2023-11-01T00:00:00Z")
+  expect_true(all(om$first_seen_censored == 0L))            # marker onsets are exact
+})
+
+test_that("build_onset_map records a PR onset exact and a commit onset per its confirmed flag", {
+  ev <- data.frame(
+    tool = c("copilot", "claude", "cursor"), tier = c("PR", "A", "B"),
+    marker = c("PR", "A", "B"), agnostic = FALSE, stringsAsFactors = FALSE)
+  co <- data.frame(tool = c("claude", "cursor"), tier = c("A", "B"),
+                   first_seen_date = c("2023-09-01T00:00:00Z", "2023-01-05T00:00:00Z"),
+                   confirmed = c(TRUE, FALSE), stringsAsFactors = FALSE)
+  om <- build_onset_map(ev, commit_onsets = co, pr_date = "2024-04-01T00:00:00Z")
+  expect_equal(om$first_seen_date[om$marker == "PR"], "2024-04-01T00:00:00Z")
+  expect_equal(om$first_seen_censored[om$marker == "PR"], 0L)            # PR event -> exact
+  expect_equal(om$first_seen_censored[om$tool == "claude"], 0L)         # confirmed -> exact
+  expect_equal(om$first_seen_censored[om$tool == "cursor"], 1L)         # unconfirmed -> floor
+})
+
+test_that("build_onset_map leaves an unresolved onset NA and feeds build_ai_detail", {
+  ev <- data.frame(tool = "claude", tier = "D", marker = "CLAUDE.md",
+                   agnostic = FALSE, stringsAsFactors = FALSE)
+  om <- build_onset_map(ev)                                             # no dates supplied
+  expect_true(is.na(om$first_seen_date))
+  # marker onset earlier than a floor from a commit search: the reducer keeps the exact
+  ev2 <- data.frame(tool = c("claude", "claude"), tier = c("D", "B"),
+                    marker = c("CLAUDE.md", "B"), agnostic = FALSE, stringsAsFactors = FALSE)
+  om2 <- build_onset_map(ev2, marker_dates = list("CLAUDE.md" = "2024-01-01T00:00:00Z"),
+    commit_onsets = data.frame(tool = "claude", tier = "B",
+      first_seen_date = "2023-06-01T00:00:00Z", confirmed = TRUE, stringsAsFactors = FALSE))
+  detail <- build_ai_detail("github.com/o/r", ev2, om2, "2026-07-16")
+  expect_equal(nrow(detail), 1)                                        # collapsed per tool
+  expect_equal(detail$first_seen_date, "2023-06-01T00:00:00Z")         # tighter (earlier) exact wins
+  expect_setequal(strsplit(detail$evidence_tiers, ",")[[1]], c("B", "D"))
+})

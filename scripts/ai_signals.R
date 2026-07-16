@@ -275,6 +275,45 @@ build_ai_detail <- function(repo_id, raw_evidence, onsets, last_confirmed) {
   ai_onset_reducer(.ai_empty_signals(), candidates)
 }
 
+#' Assemble the per-(tool, marker) onset frame build_ai_detail consumes, from a repo's
+#' evidence plus the fetched onset dates. Each evidence row is matched to its onset source
+#' by tier/marker shape: a Tier-D row (marker is a path, or "ignore:<path>") takes
+#' marker_dates[[<path>]] exact; a PR row (marker == "PR") takes pr_date exact; a Tier
+#' A/B/C row (marker == tier) takes commit_onsets for (tool, tier), exact when that onset's
+#' `confirmed` is TRUE (a structured author match or a scan_trailers confirm) else a
+#' censored floor - a fuzzy message-search candidate is never written as an exact immutable
+#' onset. Pure: all dates/confirms are passed in. A row with no resolved onset keeps
+#' first_seen_date NA (build_ai_detail leaves it NA in the detail row).
+build_onset_map <- function(evidence, marker_dates = list(),
+                            commit_onsets = NULL, pr_date = NA_character_) {
+  empty <- data.frame(tool = character(), marker = character(),
+                      first_seen_date = character(), first_seen_censored = integer(),
+                      stringsAsFactors = FALSE)
+  if (is.null(evidence) || nrow(evidence) == 0) return(empty)
+  co_key <- if (is.null(commit_onsets) || nrow(commit_onsets) == 0) character(0)
+            else paste(commit_onsets$tool, commit_onsets$tier, sep = "\r")
+  rows <- lapply(seq_len(nrow(evidence)), function(i) {
+    tool <- evidence$tool[i]; tier <- evidence$tier[i]; marker <- evidence$marker[i]
+    fs <- NA_character_; fc <- 0L
+    if (identical(tier, "D")) {
+      path <- sub("^ignore:", "", marker)
+      fs <- if (path %in% names(marker_dates)) marker_dates[[path]] else NA_character_
+    } else if (identical(tier, "PR")) {
+      fs <- pr_date
+    } else {
+      j <- match(paste(tool, tier, sep = "\r"), co_key)
+      if (!is.na(j)) {
+        fs <- commit_onsets$first_seen_date[j]
+        fc <- if (isTRUE(as.logical(commit_onsets$confirmed[j]))) 0L else 1L
+      }
+    }
+    data.frame(tool = tool, marker = marker, first_seen_date = fs,
+               first_seen_censored = as.integer(fc), stringsAsFactors = FALSE)
+  })
+  out <- do.call(rbind, rows)
+  out[!duplicated(paste(out$tool, out$marker, sep = "\r")), , drop = FALSE]
+}
+
 .ai_empty_rollups <- function()
   data.frame(repo_id = character(), ai_markers_detected = logical(),
              ai_first_tool = character(), ai_first_date = character(),
