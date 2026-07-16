@@ -350,6 +350,8 @@ ensure_series_schema <- function(con) {
     license TEXT, topics TEXT, is_archived INTEGER, trend_30d REAL,
     pr_merge_ratio INTEGER, median_days_to_close_issue INTEGER, median_days_to_close_pr INTEGER,
     median_open_issue_age_days INTEGER, last_release_date TEXT, median_days_between_releases INTEGER,
+    ai_markers_detected INTEGER, ai_first_tool TEXT, ai_first_date TEXT,
+    ai_tool_count INTEGER, ai_tools TEXT, ai_latest_tool TEXT, ai_latest_date TEXT,
     first_seen TEXT, last_seen TEXT, PRIMARY KEY (package, origin))")
   DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS pipeline_state (key TEXT PRIMARY KEY, value TEXT)")
   DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_ai_signals (
@@ -391,7 +393,12 @@ materialize_series <- function(prev_latest, snapshot_long, date) {
 }
 
 build_signals_summary <- function(latest, series, repos, repo_packages, today,
-                                  compute_release_facts = FALSE) {
+                                  compute_release_facts = FALSE, ai_signals = NULL) {
+  ai_roll <- build_ai_rollups(ai_signals)
+  ai_lookup <- function(rid, col) {
+    v <- ai_roll[[col]][ai_roll$repo_id == rid]
+    if (length(v)) v[1] else NA
+  }
   if (nrow(repo_packages) == 0)
     return(data.frame(package = character(), origin = character(), repo_id = character(),
       stars = integer(), forks = integer(), issues_open = integer(), prs_open = integer(),
@@ -399,6 +406,9 @@ build_signals_summary <- function(latest, series, repos, repo_packages, today,
       license = character(), topics = character(), is_archived = integer(), trend_30d = double(),
       pr_merge_ratio = integer(), median_days_to_close_issue = integer(), median_days_to_close_pr = integer(),
       median_open_issue_age_days = integer(), last_release_date = character(), median_days_between_releases = integer(),
+      ai_markers_detected = logical(), ai_first_tool = character(), ai_first_date = character(),
+      ai_tool_count = integer(), ai_tools = character(), ai_latest_tool = character(),
+      ai_latest_date = character(),
       first_seen = character(), last_seen = character(), stringsAsFactors = FALSE))
   val <- function(rid, met) {
     v <- latest$value[latest$repo_id == rid & latest$metric == met]
@@ -447,6 +457,13 @@ build_signals_summary <- function(latest, series, repos, repo_packages, today,
       median_open_issue_age_days = val(rid, "median_open_issue_age_days"),
       last_release_date = last_rel,
       median_days_between_releases = cadence,
+      ai_markers_detected = ai_lookup(rid, "ai_markers_detected"),
+      ai_first_tool = ai_lookup(rid, "ai_first_tool"),
+      ai_first_date = ai_lookup(rid, "ai_first_date"),
+      ai_tool_count = ai_lookup(rid, "ai_tool_count"),
+      ai_tools = ai_lookup(rid, "ai_tools"),
+      ai_latest_tool = ai_lookup(rid, "ai_latest_tool"),
+      ai_latest_date = ai_lookup(rid, "ai_latest_date"),
       first_seen = if (nrow(ra)) ra$first_seen[1] else NA_character_,
       last_seen = if (nrow(ra)) ra$last_seen[1] else NA_character_,
       stringsAsFactors = FALSE)

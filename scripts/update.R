@@ -231,10 +231,11 @@ run_update <- function(io, out_dir, opts = list()) {
     # ones deferred this run), not just this run's snapshot, so a deferred
     # repo keeps its numeric values in the summary too.
     latest_all <- DBI::dbGetQuery(con, "SELECT repo_id, metric, value FROM series_latest")
+    ai_all <- if (DBI::dbExistsTable(con, "vcs_ai_signals")) DBI::dbReadTable(con, "vcs_ai_signals") else NULL
     # Recent-window collection only (no full history), so release cadence is
     # never recomputed here - it is carried forward via repo_attrs above.
     summary_df <- build_signals_summary(latest_all, series_all, repo_attrs, rp_all, today_s,
-                                        compute_release_facts = FALSE)
+                                        compute_release_facts = FALSE, ai_signals = ai_all)
     DBI::dbExecute(con, "DELETE FROM vcs_signals_summary")
     if (nrow(summary_df) > 0) DBI::dbWriteTable(con, "vcs_signals_summary", summary_df, append = TRUE)
 

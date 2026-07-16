@@ -229,10 +229,11 @@ run_merge <- function(io, out_dir, parts_dir) {
   repo_attrs <- merge(repos_all[, c("repo_id", "first_seen", "last_seen")], prev_summary_attrs,
                       by = "repo_id", all.x = TRUE)
 
+  ai_all <- if (DBI::dbExistsTable(con, "vcs_ai_signals")) DBI::dbReadTable(con, "vcs_ai_signals") else NULL
   # Full history is loaded this run (protect_history_pull + year shards), so
   # release cadence is recomputed from scratch rather than carried forward.
   summary_df <- build_signals_summary(latest_all, series_all, repo_attrs, rp_all, today,
-                                      compute_release_facts = TRUE)
+                                      compute_release_facts = TRUE, ai_signals = ai_all)
   DBI::dbExecute(con, "DELETE FROM vcs_signals_summary")
   if (nrow(summary_df) > 0) DBI::dbWriteTable(con, "vcs_signals_summary", summary_df, append = TRUE)
 
