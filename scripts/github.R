@@ -659,6 +659,68 @@ parse_search_commit <- function(body_txt) {
   .nn(items[[1]]$commit$committer$date, NA_character_)
 }
 
+#' A marker path plus any known predecessor paths (AI_MARKER_PREDECESSORS), probed
+#' together so a rename (e.g. .cursorrules -> .cursor) does not reset the onset.
+expand_marker_paths <- function(path) {
+  preds <- unname(AI_MARKER_PREDECESSORS[names(AI_MARKER_PREDECESSORS) == path])
+  unique(c(path, preds[!is.na(preds)]))
+}
+
+#' One page of a path's commit history on the default branch (DESC, newest first).
+#' `after` is embedded as null (unquoted) when absent, else as a quoted cursor.
+build_marker_history_query <- function(owner, name, path, after = NULL) {
+  after_arg <- if (is.null(after) || is.na(after)) "null" else sprintf('"%s"', after)
+  sprintf('query { repository(owner: "%s", name: "%s") {
+    defaultBranchRef { target { ... on Commit {
+      history(first: 100, path: "%s", after: %s) {
+        pageInfo { endCursor hasNextPage }
+        nodes { committedDate }
+      }
+    } } }
+  } }', owner, name, path, after_arg)
+}
+
+#' Parse one marker-history page to list(dates, end_cursor, has_next). Degrades to
+#' empty when defaultBranchRef / target / history is null (empty repo, or the path
+#' never existed on the default branch).
+parse_marker_history <- function(resp) {
+  h <- resp$data$repository$defaultBranchRef$target$history
+  if (is.null(h)) return(list(dates = character(0), end_cursor = NA_character_, has_next = FALSE))
+  list(dates = vapply(.nn(h$nodes, list()), function(n) .nn(n$committedDate, NA_character_), character(1)),
+       end_cursor = .nn(h$pageInfo$endCursor, NA_character_),
+       has_next = isTRUE(h$pageInfo$hasNextPage))
+}
+
+#' Earliest commit date touching `path` (or a known predecessor path) on the default
+#' branch. Pages history(path:) to exhaustion (DESC, so the oldest touch is on the
+#' last page; marker files have few touching commits) and returns the min committedDate
+#' across all probed paths, or NA when nothing touches them OR a page faults mid-scan
+#' (fails closed - never folds a partial newest-page min, which would write a too-recent
+#' onset; left for a re-run, never written as "no marker"). Uses io$graphql (GraphQL
+#' budget), so it paces with BACKFILL_DELAY_S, not SEARCH_DELAY_S.
+fetch_marker_onset <- function(io, owner, name, path, delay = BACKFILL_DELAY_S) {
+  earliest <- NA_character_
+  for (p in expand_marker_paths(path)) {
+    after <- NULL; oldest <- NA_character_; faulted <- FALSE
+    repeat {
+      resp <- io$graphql(build_marker_history_query(owner, name, p, after))
+      # history(path:) is DESC, so the true earliest touch is on the LAST page. A
+      # mid-pagination fault means we never reached it; discarding this path's partial
+      # (newest-page) min is the only correct choice - folding it would write a
+      # too-recent onset into the immutable table. Fail closed, leave it for a re-run.
+      if (!is.null(resp$errors) || is.null(resp$data)) { faulted <- TRUE; break }
+      if (delay > 0) Sys.sleep(delay)
+      pg <- parse_marker_history(resp)
+      d <- pg$dates[!is.na(pg$dates)]
+      if (length(d)) oldest <- if (is.na(oldest)) min(d) else min(oldest, min(d))
+      if (!isTRUE(pg$has_next) || is.na(pg$end_cursor) || !nzchar(pg$end_cursor)) break
+      after <- pg$end_cursor
+    }
+    if (!faulted && !is.na(oldest)) earliest <- if (is.na(earliest)) oldest else min(earliest, oldest)
+  }
+  earliest
+}
+
 # --- transport (not unit-tested) ---
 
 #' Earliest commit in owner/name whose message matches `query`, via the REST

@@ -100,3 +100,55 @@ test_that("parse_search_commit reads the earliest-match date, NA on no match or 
   expect_true(is.na(parse_search_commit('{"items":[]}')))
   expect_true(is.na(parse_search_commit('not json at all')))
 })
+
+test_that("expand_marker_paths adds known predecessors so a rename does not reset onset", {
+  expect_setequal(expand_marker_paths(".cursor"), c(".cursor", ".cursorrules"))
+  expect_equal(expand_marker_paths("CLAUDE.md"), "CLAUDE.md")   # no predecessor
+})
+
+test_that("build_marker_history_query pages a path's history on the default branch", {
+  q <- build_marker_history_query("o", "n", ".claude")
+  expect_match(q, 'repository(owner: "o", name: "n")', fixed = TRUE)
+  expect_match(q, 'history(first: 100, path: ".claude", after: null)', fixed = TRUE)
+  expect_match(q, "nodes { committedDate }", fixed = TRUE)
+  q2 <- build_marker_history_query("o", "n", ".claude", after = "CUR")
+  expect_match(q2, 'after: "CUR"', fixed = TRUE)
+})
+
+test_that("parse_marker_history returns dates + pagination, guards a null history", {
+  resp <- list(data = list(repository = list(defaultBranchRef = list(target = list(history = list(
+    pageInfo = list(endCursor = "c2", hasNextPage = TRUE),
+    nodes = list(list(committedDate = "2025-01-01T00:00:00Z"),
+                 list(committedDate = "2024-12-01T00:00:00Z"))))))))
+  pg <- parse_marker_history(resp)
+  expect_equal(pg$dates, c("2025-01-01T00:00:00Z", "2024-12-01T00:00:00Z"))
+  expect_equal(pg$end_cursor, "c2")
+  expect_true(pg$has_next)
+  pg2 <- parse_marker_history(list(data = list(repository = list(defaultBranchRef = NULL))))
+  expect_equal(length(pg2$dates), 0)
+  expect_false(pg2$has_next)
+})
+
+test_that("fetch_marker_onset returns the LAST-page (oldest) date across pages", {
+  page <- function(dates, cur, more) list(data = list(repository = list(defaultBranchRef = list(
+    target = list(history = list(pageInfo = list(endCursor = cur, hasNextPage = more),
+                                 nodes = lapply(dates, function(d) list(committedDate = d))))))))
+  seq <- list(page(c("2025-06-01T00:00:00Z"), "c1", TRUE),   # newest page
+              page(c("2023-02-01T00:00:00Z"), "",   FALSE))  # last page has the oldest
+  i <- 0L
+  io <- list(graphql = function(q) { i <<- i + 1L; seq[[i]] })
+  expect_equal(fetch_marker_onset(io, "o", "n", "CLAUDE.md", delay = 0),
+               "2023-02-01T00:00:00Z")   # from the LAST page, not page 1
+})
+
+test_that("fetch_marker_onset fails closed (NA) when a page faults mid-pagination", {
+  page1 <- list(data = list(repository = list(defaultBranchRef = list(target = list(history = list(
+    pageInfo = list(endCursor = "c1", hasNextPage = TRUE),
+    nodes = list(list(committedDate = "2025-06-01T00:00:00Z"))))))))
+  err  <- list(errors = list(list(message = "502")), data = NULL)   # page 2 faults
+  seq <- list(page1, err)
+  i <- 0L
+  io <- list(graphql = function(q) { i <<- i + 1L; seq[[i]] })
+  # Must NOT return the too-recent page-1 date; the true onset is on an unreached page.
+  expect_true(is.na(fetch_marker_onset(io, "o", "n", "CLAUDE.md", delay = 0)))
+})
