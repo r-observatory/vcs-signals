@@ -11,4 +11,5 @@ test_that("config constants load with expected shape", {
   expect_true("dependabot[bot]" %in% AI_BOT_DENYLIST)
   expect_true(is.character(AI_RULESET_VERSION) && nzchar(AI_RULESET_VERSION))
   expect_identical(unname(TIER_PRIORITY["A"]), 1L)
+  expect_true(is.numeric(SEARCH_DELAY_S) && length(SEARCH_DELAY_S) == 1 && SEARCH_DELAY_S > 0)
 })

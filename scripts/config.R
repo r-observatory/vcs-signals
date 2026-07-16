@@ -153,3 +153,8 @@ AI_MARKER_PREDECESSORS <- c(".cursor" = ".cursorrules")
 AI_RULESET_VERSION <- "2026-07-15"
 # Evidence-tier strength for deterministic ordering (lower = stronger/earlier on ties).
 TIER_PRIORITY <- c(A = 1L, B = 2L, C = 3L, PR = 4L, D = 5L)
+
+# Pacing for the REST commit-search API (search/commits, ~1,800/hr = 30/min),
+# a budget separate from the GraphQL 5000/hr and from core REST. Each onset
+# search sleeps this long after its request so a gated deep scan stays under it.
+SEARCH_DELAY_S <- 2
