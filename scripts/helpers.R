@@ -352,6 +352,11 @@ ensure_series_schema <- function(con) {
     median_open_issue_age_days INTEGER, last_release_date TEXT, median_days_between_releases INTEGER,
     first_seen TEXT, last_seen TEXT, PRIMARY KEY (package, origin))")
   DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS pipeline_state (key TEXT PRIMARY KEY, value TEXT)")
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_ai_signals (
+    repo_id TEXT NOT NULL, tool TEXT NOT NULL, first_seen_date TEXT,
+    first_seen_censored INTEGER NOT NULL DEFAULT 0, evidence_tiers TEXT,
+    authored INTEGER NOT NULL DEFAULT 0, last_confirmed_date TEXT,
+    PRIMARY KEY (repo_id, tool))")
   invisible(TRUE)
 }
 
