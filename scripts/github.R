@@ -546,3 +546,62 @@ fetch_responsiveness <- function(io, repos, today) {
   if (!is.null(resp$errors) && is.null(resp$data)) stop("responsiveness batch error")
   parse_responsiveness(resp, repos, today)
 }
+
+# ---- AI-tooling detection collection -------------------------------------
+# Pure query builders + response parsers for the cheap Tier-D marker pass, the
+# PR-agent pass, and the onset lookups. Unit-tested against inline fixtures like
+# build_responsiveness_query / parse_responsiveness above. The two impure
+# transports at the end (marked) are not unit-tested, like fetch_contributor_count.
+
+#' One aliased multi-repo query returning, per repo: the root-tree entry names
+#' (expression "HEAD:"), the .github-tree entry names ("HEAD:.github"), isFork,
+#' and parent.nameWithOwner. object() is null when a tree is absent (empty repo,
+#' no .github), so the parser guards it. Alias r<idx> (0-based) maps back to
+#' repo_id by row order. The entry-name vectors feed classify_tree_markers.
+build_tree_query <- function(repos) {
+  parts <- vapply(seq_len(nrow(repos)), function(j) {
+    sprintf('r%d: repository(owner: "%s", name: "%s") {
+      isFork parent { nameWithOwner }
+      rootTree: object(expression: "HEAD:") { ... on Tree { entries { name type } } }
+      githubTree: object(expression: "HEAD:.github") { ... on Tree { entries { name type } } }
+      gitignore: object(expression: "HEAD:.gitignore") { ... on Blob { text } }
+      rbuildignore: object(expression: "HEAD:.Rbuildignore") { ... on Blob { text } }
+    }', j - 1L, repos$owner[j], repos$name[j])
+  }, character(1))
+  sprintf('query { %s }', paste(parts, collapse = "\n"))
+}
+
+#' Demux a build_tree_query response into a named list keyed by repo_id, each
+#' value list(root_entries, github_entries, is_fork, parent). A null alias (repo
+#' gone) or a null object() (absent tree) degrades to empty entries, so the cheap
+#' pass never reads "could not fetch the tree" as "no markers".
+parse_tree_markers <- function(resp, repos) {
+  entry_names <- function(tree) {
+    ns <- vapply(.nn(tree$entries, list()), function(e) .nn(e$name, ""), character(1))
+    ns[nzchar(ns)]
+  }
+  blob_lines <- function(blob) {
+    txt <- .nn(blob$text, NA_character_)
+    if (is.na(txt) || !nzchar(txt)) return(character(0))
+    strsplit(txt, "\n", fixed = TRUE)[[1]]
+  }
+  out <- vector("list", nrow(repos))
+  names(out) <- repos$repo_id
+  for (j in seq_len(nrow(repos))) {
+    r <- resp$data[[sprintf("r%d", j - 1L)]]
+    if (is.null(r)) {
+      out[[j]] <- list(root_entries = character(0), github_entries = character(0),
+                       is_fork = NA, parent = NA_character_,
+                       gitignore_lines = character(0), rbuildignore_lines = character(0))
+      next
+    }
+    out[[j]] <- list(
+      root_entries = entry_names(r$rootTree),
+      github_entries = entry_names(r$githubTree),
+      is_fork = isTRUE(r$isFork),
+      parent = .nn(r$parent$nameWithOwner, NA_character_),
+      gitignore_lines = blob_lines(r$gitignore),
+      rbuildignore_lines = blob_lines(r$rbuildignore))
+  }
+  out
+}
