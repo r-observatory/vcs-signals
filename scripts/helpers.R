@@ -594,16 +594,107 @@ export_summary_shard <- function(path, summary_df, repos_df, repo_packages_df) {
   invisible(NULL)
 }
 
+#' Compute the lowercase hex SHA-256 of a file's exact on-disk bytes.
+#'
+#' Uses whatever the runner already provides, in preference order:
+#'   1. digest  package        (if installed)
+#'   2. openssl package        (if installed)
+#'   3. sha256sum (coreutils)  - present on the ubuntu-latest CI runner
+#'   4. shasum -a 256 (BSD)    - macOS/local fallback
+#' No heavy dependency is declared: CI installs only DBI, RSQLite, and
+#' testthat, so the coreutils `sha256sum` path is used there. If digest or
+#' openssl happen to be present (as on a typical local checkout), that path
+#' wins automatically. Distinct from shard_hash()'s md5sum, which is only a
+#' cheap change-detection key; this is the published content fingerprint.
+file_sha256 <- function(path) {
+  if (requireNamespace("digest", quietly = TRUE)) {
+    return(tolower(digest::digest(file = path, algo = "sha256")))
+  }
+  if (requireNamespace("openssl", quietly = TRUE)) {
+    con <- file(path, open = "rb")
+    on.exit(close(con), add = TRUE)
+    return(tolower(as.character(openssl::sha256(con))))
+  }
+  sha_tool <- Sys.which("sha256sum")
+  if (nzchar(sha_tool)) {
+    out <- system2(sha_tool, shQuote(path), stdout = TRUE)
+    return(tolower(sub("\\s.*$", "", out[1])))
+  }
+  shasum_tool <- Sys.which("shasum")
+  if (nzchar(shasum_tool)) {
+    out <- system2(shasum_tool, c("-a", "256", shQuote(path)), stdout = TRUE)
+    return(tolower(sub("\\s.*$", "", out[1])))
+  }
+  stop("No SHA-256 backend found (need one of: digest, openssl, sha256sum, shasum)")
+}
+
+#' Build the integrity / completeness core describing a finalized SQLite file.
+#'
+#' Returns a named list of TOP-LEVEL manifest fields computed from the exact
+#' on-disk bytes of `db_path` (call this only after the file is finalized and
+#' every connection to it is closed):
+#'   * db_filename - basename of the file
+#'   * db_bytes    - byte size of the file as a double. Deliberately NOT cast
+#'                   to integer: R's integer range is 32-bit and overflows to
+#'                   NA (serialized as the string "NA") for files >= ~2 GiB.
+#'   * db_sha256   - lowercase hex sha256 of the file's exact bytes
+#'   * tables      - named list mapping each user table to its row count
+#'                   (sqlite_master type='table', excluding sqlite_% internals)
+#'   * complete    - passed through by the caller. complete = the DB holds the
+#'                   full, non-partial dataset; freshness is tracked separately
+#'                   via the manifest's generated_at and the db_sha256
+#'                   fingerprint. A pipeline with a genuine partial/bootstrap
+#'                   state would derive this (e.g. remaining == 0) rather than
+#'                   pass a constant.
+#' The table row counts are enumerated first, the connection is then closed,
+#' and only AFTER that are db_bytes/db_sha256 read from the raw file, so no
+#' open handle or -wal/-journal sidecar can skew the size or the hash. Lets a
+#' downstream merge content-verify the asset it pulls and confirm the expected
+#' tables/rows are present.
+summary_integrity_core <- function(db_path, complete = TRUE) {
+  stopifnot(file.exists(db_path))
+
+  con <- DBI::dbConnect(RSQLite::SQLite(), db_path)
+  tables <- tryCatch({
+    tbl_names <- DBI::dbGetQuery(con, "
+      SELECT name FROM sqlite_master
+       WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+       ORDER BY name")$name
+
+    stats::setNames(
+      lapply(tbl_names, function(t) {
+        DBI::dbGetQuery(con, sprintf('SELECT count(*) AS n FROM "%s"', t))$n
+      }),
+      tbl_names
+    )
+  }, finally = DBI::dbDisconnect(con))
+
+  list(
+    db_filename = basename(db_path),
+    db_bytes    = file.size(db_path),
+    db_sha256   = file_sha256(db_path),
+    tables      = tables,
+    complete    = complete
+  )
+}
+
 #' Write the manifest.json describing which shards changed this run.
 #'
 #' Empty arrays are preserved (jsonlite default is to drop them - we force them).
-write_manifest <- function(path, changed_shards, tag, summary) {
+#' `core` (optional) is a named list of TOP-LEVEL fields to merge into the
+#' manifest - used to attach the integrity/completeness core built by
+#' summary_integrity_core() (db_filename, db_bytes, db_sha256, tables,
+#' complete). All existing fields are preserved.
+write_manifest <- function(path, changed_shards, tag, summary, core = NULL) {
   obj <- list(
     tag            = tag,
     generated_at   = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
     changed_shards = as.list(changed_shards),
     summary        = summary
   )
+  if (!is.null(core)) {
+    obj <- c(obj, core)  # merge as top-level fields, not nested
+  }
   json <- jsonlite::toJSON(obj, auto_unbox = TRUE, pretty = TRUE, null = "null")
   writeLines(json, path)
 }
@@ -792,8 +883,22 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
   rp_df      <- if (DBI::dbExistsTable(con, "repo_packages")) DBI::dbReadTable(con, "repo_packages") else data.frame()
 
   summary_shard <- "vcs-signals-summary.db"
-  export_summary_shard(file.path(out_dir, summary_shard), summary_df, repos_df, rp_df)
+  summary_path <- file.path(out_dir, summary_shard)
+  export_summary_shard(summary_path, summary_df, repos_df, rp_df)
   shard_names <- c(shard_names, summary_shard)
+
+  # Integrity/completeness core for the PRIMARY published db a downstream
+  # merge consumes (vcs-signals-summary.db). export_summary_shard() above has
+  # already VACUUMed and closed its connection, so the file is finalized;
+  # summary_integrity_core() enumerates its tables/counts, disconnects, and
+  # only then hashes the raw bytes. complete = TRUE (not derived): the summary
+  # shard is unconditionally a full, non-partial rebuild every run - publish()
+  # reads the working DB's complete vcs_signals_summary/repos/repo_packages
+  # tables (update.R rebuilds vcs_signals_summary with a DELETE + full rewrite;
+  # backfill/weekly merge from the complete working history) - so there is no
+  # partial/bootstrap/remaining state to derive from. Freshness is tracked
+  # separately by the manifest's generated_at plus the db_sha256 fingerprint.
+  summary_core <- summary_integrity_core(summary_path, complete = TRUE)
 
   curr_hashes <- stats::setNames(
     vapply(shard_names, function(nm) shard_hash(file.path(out_dir, nm)), character(1)),
@@ -827,7 +932,7 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
     packages     = nrow(summary_df),
     repos        = nrow(repos_df))
 
-  write_manifest(manifest_path, changed, tag, summary_block)
+  write_manifest(manifest_path, changed, tag, summary_block, core = summary_core)
   io$upload(manifest_path)
 
   writeLines(build_release_notes(summary_block, changed, tag),
