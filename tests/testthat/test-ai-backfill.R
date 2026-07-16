@@ -356,3 +356,23 @@ test_that("run_gate_incremental keeps everything when no published detail exists
   on.exit(DBI::dbDisconnect(ccon), add = TRUE)
   expect_equal(nrow(DBI::dbReadTable(ccon, "vcs_ai_signals")), 0)  # nothing to confirm yet
 })
+
+test_that("main dispatches gate-incremental to run_gate_incremental", {
+  rec <- new.env()
+  orig_fn <- run_gate_incremental
+  orig_parts <- Sys.getenv("VCS_PARTS", unset = NA)
+  on.exit({
+    run_gate_incremental <<- orig_fn
+    if (is.na(orig_parts)) Sys.unsetenv("VCS_PARTS") else Sys.setenv(VCS_PARTS = orig_parts)
+  }, add = TRUE)
+
+  run_gate_incremental <<- function(io, out_dir, parts_dir) {
+    rec$hit <- TRUE; rec$out <- out_dir; rec$parts <- parts_dir; invisible(TRUE)
+  }
+  Sys.setenv(VCS_PARTS = "myparts")
+  main("gate-incremental", "myout")
+
+  expect_true(isTRUE(rec$hit))
+  expect_equal(rec$out, "myout")
+  expect_equal(rec$parts, "myparts")   # read from VCS_PARTS, same as the plain gate
+})

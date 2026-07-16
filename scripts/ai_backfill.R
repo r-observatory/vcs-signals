@@ -1,11 +1,16 @@
 #!/usr/bin/env Rscript
 # scripts/ai_backfill.R - gated deep-scan AI-tooling-detection backfill for vcs-signals.
 #
-# Five sub-commands, wired together by CI (.github/workflows/ai-backfill.yml):
+# Sub-commands wired together by CI (.github/workflows/ai-backfill.yml, the one-time full
+# onset scan, and .github/workflows/ai-weekly.yml, the weekly incremental that swaps gate for
+# gate-incremental):
 #   enumerate -> full active github roster from the published summary's repos table (one job)
 #   cheap     -> Tier-D marker + PR-agent pass over one mod-N shard, write a flagged partial
 #                (matrix job)
 #   gate      -> union every cheap shard's flagged partials into one flagged-roster (one job)
+#   gate-incremental -> like gate, but narrow the flagged roster to repos carrying a tool not
+#                yet in the published vcs_ai_signals detail (the weekly incremental gate used
+#                by .github/workflows/ai-weekly.yml in place of gate)
 #   deep      -> commit-history onset scan over one mod-N shard of the flagged roster,
 #                build vcs_ai_signals detail rows (matrix job)
 #   merge     -> reconcile node_id identity, reduce prior+incoming onsets, rebuild the
@@ -456,6 +461,8 @@ main <- function(mode, out_dir) {
     run_cheap(io, out_dir, file.path(roster_dir, "vcs-ai-roster.db"), i, N)
   } else if (mode == "gate") {
     run_gate(out_dir, Sys.getenv("VCS_PARTS", "parts"))
+  } else if (mode == "gate-incremental") {
+    run_gate_incremental(io, out_dir, Sys.getenv("VCS_PARTS", "parts"))
   } else if (mode == "deep") {
     i <- suppressWarnings(as.integer(Sys.getenv("VCS_SHARD_I", "0")))
     N <- suppressWarnings(as.integer(Sys.getenv("VCS_SHARD_N", "1")))
@@ -466,7 +473,7 @@ main <- function(mode, out_dir) {
   } else if (mode == "merge") {
     run_merge(io, out_dir, Sys.getenv("VCS_PARTS", "parts"))
   } else {
-    stop("usage: ai_backfill.R [enumerate|cheap|gate|deep|merge]")
+    stop("usage: ai_backfill.R [enumerate|cheap|gate|gate-incremental|deep|merge]")
   }
 }
 
