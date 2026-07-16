@@ -502,3 +502,47 @@ graphql_rate_remaining <- function(io) {
   if (is.null(rem)) return(Inf)
   as.integer(rem)
 }
+
+# ---- weekly responsiveness (bounded single-page medians) --------------------
+#' One aliased query per batch: the 50 most-recently-updated closed issues and
+#' resolved (merged|closed) PRs, plus one oldest-first page of open issues, per
+#' repo. Costs ~1 GraphQL point regardless of batch size (aliased single query).
+build_responsiveness_query <- function(repos) {
+  parts <- vapply(seq_len(nrow(repos)), function(j) {
+    sprintf('r%d: repository(owner: "%s", name: "%s") {
+      closedIssues: issues(states: CLOSED, first: 50, orderBy: {field: UPDATED_AT, direction: DESC}) {
+        nodes { createdAt closedAt } }
+      resolvedPRs: pullRequests(states: [MERGED, CLOSED], first: 50, orderBy: {field: UPDATED_AT, direction: DESC}) {
+        nodes { createdAt closedAt } }
+      openIssues: issues(states: OPEN, first: 50, orderBy: {field: CREATED_AT, direction: ASC}) {
+        nodes { createdAt } }
+    }', j - 1L, repos$owner[j], repos$name[j])
+  }, character(1))
+  sprintf('query { %s }', paste(parts, collapse = "\n"))
+}
+
+#' Reduce a parsed responsiveness response to one row of three integer medians
+#' per repo. A null alias (repo deleted/renamed away) yields all-NA for that
+#' repo rather than dropping it.
+parse_responsiveness <- function(resp, repos, today) {
+  ts <- function(nodes, field) vapply(nodes, function(n) {
+    v <- n[[field]]; if (is.null(v)) NA_character_ else v }, character(1))
+  do.call(rbind, lapply(seq_len(nrow(repos)), function(j) {
+    r <- resp$data[[sprintf("r%d", j - 1L)]]
+    ci <- if (is.null(r)) list() else r$closedIssues$nodes
+    pr <- if (is.null(r)) list() else r$resolvedPRs$nodes
+    oi <- if (is.null(r)) list() else r$openIssues$nodes
+    data.frame(repo_id = repos$repo_id[j],
+      median_days_to_close_issue = median_days_to_close(ts(ci, "createdAt"), ts(ci, "closedAt")),
+      median_days_to_close_pr    = median_days_to_close(ts(pr, "createdAt"), ts(pr, "closedAt")),
+      median_open_issue_age_days = median_open_issue_age(ts(oi, "createdAt"), today),
+      stringsAsFactors = FALSE)
+  }))
+}
+
+#' Fetch + parse responsiveness for one batch of repos.
+fetch_responsiveness <- function(io, repos, today) {
+  resp <- io$graphql(build_responsiveness_query(repos))
+  if (!is.null(resp$errors) && is.null(resp$data)) stop("responsiveness batch error")
+  parse_responsiveness(resp, repos, today)
+}

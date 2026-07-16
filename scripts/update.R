@@ -205,22 +205,35 @@ run_update <- function(io, out_dir, opts = list()) {
                           stringsAsFactors = FALSE)
     }
     prev_summary_attrs <- DBI::dbGetQuery(con,
-      "SELECT repo_id, license, topics, is_archived, last_commit_date
+      "SELECT repo_id, license, topics, is_archived, last_commit_date,
+              last_release_date, median_days_between_releases
          FROM vcs_signals_summary WHERE repo_id IS NOT NULL")
     if (nrow(prev_summary_attrs) > 0) {
       prev_summary_attrs <- prev_summary_attrs[!duplicated(prev_summary_attrs$repo_id), ]
-      prev_summary_attrs <- prev_summary_attrs[!(prev_summary_attrs$repo_id %in% attrs$repo_id), ]
       prev_summary_attrs$is_archived <- as.integer(prev_summary_attrs$is_archived)
     }
-    combined_attrs <- rbind(attrs, prev_summary_attrs)
+    # last_release_date/median_days_between_releases have no fresh source in
+    # this run's gauge snapshot (attrs), so - unlike the descriptive fields
+    # below, which prefer this run's fresh attrs when available - they always
+    # carry forward from the prior summary for every repo, collected this run
+    # or not; build_signals_summary(compute_release_facts = FALSE) uses these
+    # as the carry-forward floor.
+    release_facts <- prev_summary_attrs[, c("repo_id", "last_release_date", "median_days_between_releases")]
+    descriptive_prev <- prev_summary_attrs[!(prev_summary_attrs$repo_id %in% attrs$repo_id),
+                                            c("repo_id", "license", "topics", "is_archived", "last_commit_date")]
+    combined_attrs <- rbind(attrs, descriptive_prev)
     repo_attrs <- merge(repos_all[, c("repo_id", "first_seen", "last_seen")], combined_attrs,
                         by = "repo_id", all.x = TRUE)
+    repo_attrs <- merge(repo_attrs, release_facts, by = "repo_id", all.x = TRUE)
 
     # Built from the FULL post-upsert series_latest (every repo, including
     # ones deferred this run), not just this run's snapshot, so a deferred
     # repo keeps its numeric values in the summary too.
     latest_all <- DBI::dbGetQuery(con, "SELECT repo_id, metric, value FROM series_latest")
-    summary_df <- build_signals_summary(latest_all, series_all, repo_attrs, rp_all, today_s)
+    # Recent-window collection only (no full history), so release cadence is
+    # never recomputed here - it is carried forward via repo_attrs above.
+    summary_df <- build_signals_summary(latest_all, series_all, repo_attrs, rp_all, today_s,
+                                        compute_release_facts = FALSE)
     DBI::dbExecute(con, "DELETE FROM vcs_signals_summary")
     if (nrow(summary_df) > 0) DBI::dbWriteTable(con, "vcs_signals_summary", summary_df, append = TRUE)
 

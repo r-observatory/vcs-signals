@@ -6,8 +6,11 @@
 #   enumerate -> reuse backfill's roster build (every github repo with any
 #                signal) - one job
 #   fetch     -> for one even mod-N shard of the roster, collect
-#                commits_total (GraphQL history.totalCount, batched) and
-#                contributors_total (REST /contributors count) - matrix job
+#                commits_total (GraphQL history.totalCount, batched),
+#                contributors_total (REST /contributors count), and the
+#                three responsiveness medians (median_days_to_close_issue,
+#                median_days_to_close_pr, median_open_issue_age_days) -
+#                matrix job
 #   merge     -> fold every shard's snapshot into the published series as a
 #                change-only weekly point dated today, rebuild the summary,
 #                and republish - one job
@@ -34,26 +37,30 @@ export_snapshot_shard <- function(path, rows) {
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   DBI::dbExecute(con, "PRAGMA journal_mode=DELETE")
-  DBI::dbExecute(con, sprintf("CREATE TABLE %s (
-    repo_id TEXT PRIMARY KEY, commits_total INTEGER, contributors_total INTEGER)", SNAPSHOT_TABLE))
-  if (nrow(rows) > 0)
-    DBI::dbWriteTable(con, SNAPSHOT_TABLE,
-      rows[c("repo_id", "commits_total", "contributors_total")], append = TRUE)
+  cols <- paste(sprintf("%s INTEGER", WEEKLY_METRICS), collapse = ", ")
+  DBI::dbExecute(con, sprintf("CREATE TABLE %s (repo_id TEXT PRIMARY KEY, %s)", SNAPSHOT_TABLE, cols))
+  if (nrow(rows) > 0) {
+    DBI::dbWriteTable(con, SNAPSHOT_TABLE, rows[c("repo_id", WEEKLY_METRICS)], append = TRUE)
+  }
   DBI::dbExecute(con, "VACUUM")
   invisible(path)
 }
 
 # ---- fetch ------------------------------------------------------------------
-#' Collect commits_total and contributors_total for one even mod-N shard of
-#' the roster. Commits are swept in COMMIT_HISTORY_BATCH-sized chunks
-#' through one aliased GraphQL query per chunk (fetch_commit_counts): a
-#' chunk whose query itself fails leaves every repo in that chunk NA for
-#' commits_total this run (left for a re-run), while every other chunk is
-#' unaffected. Contributors are fetched one REST request per repo
-#' (io$contributors, paced by contributor_delay): a failing repo is NA for
-#' contributors_total only, independent of whether its commit count
-#' succeeded. Neither failure mode ever aborts the shard. Writes a partial
-#' `snapshot` table to out/vcs-signals-shard-<i>.db.
+#' Collect commits_total, contributors_total, and the three responsiveness
+#' medians (median_days_to_close_issue, median_days_to_close_pr,
+#' median_open_issue_age_days) for one even mod-N shard of the roster.
+#' Commits are swept in COMMIT_HISTORY_BATCH-sized chunks through one
+#' aliased GraphQL query per chunk (fetch_commit_counts): a chunk whose
+#' query itself fails leaves every repo in that chunk NA for commits_total
+#' this run (left for a re-run), while every other chunk is unaffected.
+#' Contributors are fetched one REST request per repo (io$contributors,
+#' paced by contributor_delay): a failing repo is NA for contributors_total
+#' only, independent of whether its commit count succeeded. The three
+#' medians are swept in MEDIAN_BATCH-sized chunks through fetch_responsiveness,
+#' the same way commits are: a chunk whose query fails leaves every repo in
+#' that chunk NA for all three medians this run. No failure mode ever aborts
+#' the shard. Writes a partial `snapshot` table to out/vcs-signals-shard-<i>.db.
 run_fetch_shard <- function(io, out_dir, roster_path, i, N,
                             commit_delay = BACKFILL_DELAY_S,
                             contributor_delay = CONTRIBUTOR_DELAY_S,
@@ -86,8 +93,25 @@ run_fetch_shard <- function(io, out_dir, roster_path, i, N,
     contributors_total[r] <- v
   }
 
+  resp_cols <- data.frame(
+    median_days_to_close_issue = rep(NA_integer_, total),
+    median_days_to_close_pr    = rep(NA_integer_, total),
+    median_open_issue_age_days = rep(NA_integer_, total))
+  today <- format(Sys.Date())
+  for (idx in unname(chunk(seq_len(total), MEDIAN_BATCH))) {
+    repos <- mine[idx, , drop = FALSE]
+    got <- tryCatch(fetch_responsiveness(io, repos, today), error = function(e) NULL)
+    if (commit_delay > 0) Sys.sleep(commit_delay)
+    if (is.null(got)) next
+    m <- match(repos$repo_id, got$repo_id)
+    resp_cols$median_days_to_close_issue[idx] <- got$median_days_to_close_issue[m]
+    resp_cols$median_days_to_close_pr[idx]    <- got$median_days_to_close_pr[m]
+    resp_cols$median_open_issue_age_days[idx] <- got$median_open_issue_age_days[m]
+  }
+
   rows <- data.frame(repo_id = mine$repo_id, commits_total = commits_total,
-                     contributors_total = contributors_total, stringsAsFactors = FALSE)
+                     contributors_total = contributors_total,
+                     resp_cols, stringsAsFactors = FALSE)
 
   shard_path <- file.path(out_dir, sprintf("vcs-signals-shard-%d.db", i))
   export_snapshot_shard(shard_path, rows)
@@ -97,9 +121,11 @@ run_fetch_shard <- function(io, out_dir, roster_path, i, N,
 }
 
 # ---- merge --------------------------------------------------------------------
-#' Fold every shard's commits_total/contributors_total snapshot into the
-#' published series as a change-only point dated today, rebuild the summary,
-#' and republish. Mirrors backfill.R::run_merge's seed + complete-history-load
+#' Fold every shard's snapshot of the five WEEKLY_METRICS
+#' (commits_total, contributors_total, median_days_to_close_issue,
+#' median_days_to_close_pr, median_open_issue_age_days) into the published
+#' series as a change-only point dated today, rebuild the summary, and
+#' republish. Mirrors backfill.R::run_merge's seed + complete-history-load
 #' pattern (seed_working_db for the recent window, then protect_history_pull
 #' plus a year-shard fold so publish()'s re-export of the touched (current)
 #' year never truncates other metrics' rows already in that shard).
@@ -136,8 +162,11 @@ run_merge <- function(io, out_dir, parts_dir) {
   today <- format(Sys.Date())
 
   parts <- list.files(parts_dir, pattern = "^vcs-signals-shard-.*\\.db$", full.names = TRUE)
-  empty_snapshot <- data.frame(repo_id = character(), commits_total = integer(),
-                               contributors_total = integer(), stringsAsFactors = FALSE)
+  empty_snapshot <- setNames(
+    data.frame(repo_id = character(),
+               matrix(integer(0), nrow = 0, ncol = length(WEEKLY_METRICS)),
+               stringsAsFactors = FALSE),
+    c("repo_id", WEEKLY_METRICS))
   snap_rows <- lapply(parts, function(p) {
     pcon <- DBI::dbConnect(RSQLite::SQLite(), p)
     on.exit(DBI::dbDisconnect(pcon), add = TRUE)
@@ -190,7 +219,8 @@ run_merge <- function(io, out_dir, parts_dir) {
   latest_all <- DBI::dbGetQuery(con, "SELECT repo_id, metric, value FROM series_latest")
 
   prev_summary_attrs <- DBI::dbGetQuery(con,
-    "SELECT repo_id, license, topics, is_archived, last_commit_date
+    "SELECT repo_id, license, topics, is_archived, last_commit_date,
+            last_release_date, median_days_between_releases
        FROM vcs_signals_summary WHERE repo_id IS NOT NULL")
   if (nrow(prev_summary_attrs) > 0) {
     prev_summary_attrs <- prev_summary_attrs[!duplicated(prev_summary_attrs$repo_id), ]
@@ -199,7 +229,10 @@ run_merge <- function(io, out_dir, parts_dir) {
   repo_attrs <- merge(repos_all[, c("repo_id", "first_seen", "last_seen")], prev_summary_attrs,
                       by = "repo_id", all.x = TRUE)
 
-  summary_df <- build_signals_summary(latest_all, series_all, repo_attrs, rp_all, today)
+  # Full history is loaded this run (protect_history_pull + year shards), so
+  # release cadence is recomputed from scratch rather than carried forward.
+  summary_df <- build_signals_summary(latest_all, series_all, repo_attrs, rp_all, today,
+                                      compute_release_facts = TRUE)
   DBI::dbExecute(con, "DELETE FROM vcs_signals_summary")
   if (nrow(summary_df) > 0) DBI::dbWriteTable(con, "vcs_signals_summary", summary_df, append = TRUE)
 

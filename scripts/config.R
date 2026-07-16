@@ -72,6 +72,9 @@ BACKFILL_METRICS <- c("stars", "forks", "releases_total")  # default metric set 
 BATCH_REPOS <- 20L   # repos per batched first-page query (a multi-repo aliased query is ~1 GraphQL point)
 
 # ---- weekly commit-count + contributor-count collection ----
-WEEKLY_METRICS <- c("commits_total", "contributors_total")
+WEEKLY_METRICS <- c("commits_total", "contributors_total",
+                    "median_days_to_close_issue", "median_days_to_close_pr",
+                    "median_open_issue_age_days")
 COMMIT_HISTORY_BATCH <- 12L  # repos per commits.history.totalCount aliased query: execution-time expensive server-side, so kept well under the ~15-repo point where it starts to time out (not the 20-40 a cheap connection page can batch)
+MEDIAN_BATCH <- 10L  # repos per responsiveness query: 3 connections x 50 nodes/repo is execution-time heavy server-side, so kept well below the cheap-connection batch size to avoid 502s
 CONTRIBUTOR_DELAY_S   <- 0.5 # pause between per-repo REST contributor-count lookups (one request per repo, no batching available)
