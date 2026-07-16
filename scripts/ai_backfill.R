@@ -294,6 +294,80 @@ run_deep <- function(io, out_dir, roster_path, i, N,
   message(sprintf("ai deep shard %d/%d: %d onset detail rows", i, N, nrow(rows)))
 }
 
+# ---- merge ------------------------------------------------------------------
+#' Fold every deep shard's vcs_ai_signals partial into the published onset table and
+#' republish. Seeds the working DB from the recent shard (which already carries the prior
+#' vcs_ai_signals; no explicit protect_history_pull here, since vcs_ai_signals has no year
+#' component and publish()'s own internal pull handles the change-gate), then:
+#' reconcile_ai_identity carries any node_id-collision onsets onto the canonical repo_id
+#' (PK-safe, before the reduce); ai_onset_reducer merges the reconciled prior set with the
+#' incoming partials by the six column rules; the working vcs_ai_signals is
+#' DELETE-and-rewritten with the fully-reduced set (never blanket-deleted and re-detected -
+#' the rows are immutable, the DELETE only follows the R-side reduce); the summary rollups
+#' are rebuilt so ai_* columns reflect the merge. Publishes with touched_years =
+#' character(0), so no year shard is re-exported.
+run_merge <- function(io, out_dir, parts_dir) {
+  dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+  working_path <- file.path(out_dir, "_ai_merge_working.db")
+  seed_working_db(io, out_dir, working_path)
+
+  con <- DBI::dbConnect(RSQLite::SQLite(), working_path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  ensure_repo_schema(con)
+  ensure_series_schema(con)
+
+  # No explicit protect_history_pull here (unlike backfill.R::run_merge): vcs_ai_signals
+  # has no year component, so there is no year-shard content to fold in or protect;
+  # seed_working_db already carries the prior vcs_ai_signals via the recent shard, and
+  # publish()'s own force_full-gated protect_history_pull handles the change-gate pull.
+  # An explicit call here would just download the full published history twice.
+  reconcile_ai_identity(con)
+
+  prior <- if (DBI::dbExistsTable(con, "vcs_ai_signals")) DBI::dbReadTable(con, "vcs_ai_signals")
+           else .ai_empty_signals()
+
+  parts <- list.files(parts_dir, pattern = "^vcs-ai-shard-.*\\.db$", full.names = TRUE)
+  part_rows <- lapply(parts, function(p) {
+    pcon <- DBI::dbConnect(RSQLite::SQLite(), p)
+    on.exit(DBI::dbDisconnect(pcon), add = TRUE)
+    if (!DBI::dbExistsTable(pcon, "vcs_ai_signals")) return(.ai_empty_signals())
+    DBI::dbReadTable(pcon, "vcs_ai_signals")
+  })
+  incoming <- if (length(part_rows)) do.call(rbind, part_rows) else .ai_empty_signals()
+
+  reduced <- ai_onset_reducer(prior, incoming)
+  DBI::dbExecute(con, "DELETE FROM vcs_ai_signals")
+  if (nrow(reduced) > 0) DBI::dbWriteTable(con, "vcs_ai_signals", reduced, append = TRUE)
+
+  # Rebuild the summary so ai_* rollups reflect the merged onsets. Non-AI columns come
+  # from the seeded series_latest; descriptive + release facts carry forward from the
+  # prior summary (no fresh gauge collection this run, so compute_release_facts = FALSE).
+  today <- format(Sys.Date())
+  repos_all <- DBI::dbReadTable(con, "repos")
+  rp_all <- DBI::dbReadTable(con, "repo_packages")
+  series_all <- DBI::dbGetQuery(con, "SELECT repo_id, date, metric, value FROM signals_series")
+  latest_all <- DBI::dbGetQuery(con, "SELECT repo_id, metric, value FROM series_latest")
+  prev_attrs <- DBI::dbGetQuery(con,
+    "SELECT repo_id, license, topics, is_archived, last_commit_date,
+            last_release_date, median_days_between_releases
+       FROM vcs_signals_summary WHERE repo_id IS NOT NULL")
+  if (nrow(prev_attrs) > 0) {
+    prev_attrs <- prev_attrs[!duplicated(prev_attrs$repo_id), ]
+    prev_attrs$is_archived <- as.integer(prev_attrs$is_archived)
+  }
+  repo_attrs <- merge(repos_all[, c("repo_id", "first_seen", "last_seen")], prev_attrs,
+                      by = "repo_id", all.x = TRUE)
+  summary_df <- build_signals_summary(latest_all, series_all, repo_attrs, rp_all, today,
+                                      compute_release_facts = FALSE, ai_signals = reduced)
+  DBI::dbExecute(con, "DELETE FROM vcs_signals_summary")
+  if (nrow(summary_df) > 0) DBI::dbWriteTable(con, "vcs_signals_summary", summary_df, append = TRUE)
+
+  message(sprintf("ai merge: %d prior, %d incoming, %d reduced onset rows",
+                  nrow(prior), nrow(incoming), nrow(reduced)))
+  invisible(publish(io, con, out_dir, tag = "current", source_kind = "live",
+                    touched_years = character(0)))
+}
+
 # ---- CLI dispatch -----------------------------------------------------------
 main <- function(mode, out_dir) {
   token <- Sys.getenv("VCS_SIGNALS_TOKEN")
@@ -323,6 +397,8 @@ main <- function(mode, out_dir) {
       stop("deep: VCS_SHARD_I must be in [0, VCS_SHARD_N)")
     flagged_dir <- Sys.getenv("VCS_FLAGGED", out_dir)
     run_deep(io, out_dir, file.path(flagged_dir, "vcs-ai-flagged-roster.db"), i, N)
+  } else if (mode == "merge") {
+    run_merge(io, out_dir, Sys.getenv("VCS_PARTS", "parts"))
   } else {
     stop("usage: ai_backfill.R [enumerate|cheap|gate|deep|merge]")
   }

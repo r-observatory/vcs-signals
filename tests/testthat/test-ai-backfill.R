@@ -207,3 +207,44 @@ test_that("run_deep pauses before a repo when rate remaining is below AI_POINT_R
   got <- DBI::dbReadTable(scon, "vcs_ai_signals")
   expect_equal(nrow(got), 0)      # nothing scanned this run
 })
+
+test_that("run_merge reduces prior onsets against incoming shard partials and republishes", {
+  # Local-release fake io (upload copies in, download copies out), as in test-ai-persistence.R.
+  rel <- tempfile("rel_"); dir.create(rel)
+  io <- list(
+    release_exists = function() length(list.files(rel)) > 0,
+    download = function(pattern, dir) {
+      f <- list.files(rel, pattern = utils::glob2rx(pattern), full.names = TRUE)
+      if (!length(f)) return(FALSE)
+      file.copy(f, file.path(dir, basename(f)), overwrite = TRUE); TRUE },
+    upload = function(path) { file.copy(path, file.path(rel, basename(path)), overwrite = TRUE); TRUE })
+
+  # Prior published state: one claude onset recorded as a censored floor at 2024-06-01.
+  out1 <- tempfile("o1_"); dir.create(out1)
+  con <- DBI::dbConnect(RSQLite::SQLite(), file.path(out1, "w.db"))
+  ensure_repo_schema(con); ensure_series_schema(con)
+  DBI::dbExecute(con, "INSERT INTO vcs_ai_signals (repo_id,tool,first_seen_date,first_seen_censored,evidence_tiers,authored,last_confirmed_date) VALUES ('github.com/o/r','claude','2024-06-01',1,'D',0,'2024-06-01')")
+  publish(io, con, out1, tag = "current", source_kind = "live", force_full = TRUE)
+  DBI::dbDisconnect(con)
+
+  # Incoming deep partial: an EXACT claude onset at 2024-03-01 (earlier than the floor).
+  parts <- tempfile("parts_"); dir.create(parts)
+  export_ai_shard(file.path(parts, "vcs-ai-shard-0.db"),
+    data.frame(repo_id = "github.com/o/r", tool = "claude", first_seen_date = "2024-03-01",
+               first_seen_censored = 0L, evidence_tiers = "A", authored = 0L,
+               last_confirmed_date = "2026-07-16", stringsAsFactors = FALSE))
+
+  out2 <- tempfile("o2_"); dir.create(out2)
+  run_merge(io, out2, parts)
+
+  # Read the republished summary shard back and assert the reduced onset.
+  chk <- tempfile("chk_"); dir.create(chk)
+  io$download("vcs-signals-summary.db", chk)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(chk, "vcs-signals-summary.db"))
+  on.exit(DBI::dbDisconnect(scon))
+  got <- DBI::dbReadTable(scon, "vcs_ai_signals")
+  expect_equal(nrow(got), 1)
+  expect_equal(got$first_seen_date, "2024-03-01")          # exact dominates the earlier-published floor
+  expect_equal(got$first_seen_censored, 0L)
+  expect_setequal(strsplit(got$evidence_tiers, ",")[[1]], c("A", "D"))
+})
