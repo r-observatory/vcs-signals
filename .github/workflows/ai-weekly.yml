@@ -1,0 +1,228 @@
+name: ai-weekly
+on:
+  schedule:
+    - cron: "0 7 * * 0"
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: vcs-signals-ai-weekly
+  cancel-in-progress: false
+env:
+  TZ: UTC
+jobs:
+  enumerate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: |
+            any::DBI
+            any::RSQLite
+            any::jsonlite
+            any::testthat
+      - name: Run tests
+        run: Rscript tests/testthat.R
+      - name: Ensure current release exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view current --repo ${{ github.repository }} >/dev/null 2>&1 \
+            || gh release create current --repo ${{ github.repository }} \
+                 --title "vcs-signals (rolling)" \
+                 --notes "Rolling data release, updated daily." --latest
+      - name: Enumerate AI roster
+        env:
+          VCS_SIGNALS_TOKEN: ${{ secrets.VCS_SIGNALS_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VCS_OUT: out
+        run: Rscript scripts/ai_backfill.R enumerate
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ai-roster
+          path: out/vcs-ai-roster.db
+
+  cheap:
+    needs: enumerate
+    runs-on: ubuntu-latest
+    # The weekly incremental still runs the FULL-roster cheap Tier-D marker + PR-login pass: a
+    # new tool can appear in any repo, so full-roster cheap detection is required every week.
+    # Only the deep matrix downstream of the gate shrinks to new-tool repos. The tree query is
+    # ~1 GraphQL point per aliased batch, but build_pr_agent_query's pullRequests(first: 50)
+    # makes a TIER_D_BATCH=10 batch cost ~6-7 points, so the full ~15k-repo roster is ~10k+
+    # points against the 5000/hr budget. A single token caps throughput near that budget, so
+    # the shards run one at a time (max-parallel 1); run_cheap's graphql_rate_remaining /
+    # AI_POINT_RESERVE preflight pauses a shard when the budget runs low, so a week that does
+    # not finish is picked up by the next dispatch (mod-N sharding re-attempts the same shard
+    # deterministically).
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: |
+            any::DBI
+            any::RSQLite
+            any::jsonlite
+            any::testthat
+      - uses: actions/download-artifact@v8
+        with:
+          name: ai-roster
+          path: roster
+      - name: Cheap marker/PR pass (shard ${{ matrix.shard }} of 12)
+        env:
+          VCS_SIGNALS_TOKEN: ${{ secrets.VCS_SIGNALS_TOKEN }}
+          VCS_OUT: out
+          VCS_ROSTER: roster
+          VCS_SHARD_I: ${{ matrix.shard }}
+          VCS_SHARD_N: "12"
+        run: Rscript scripts/ai_backfill.R cheap
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cheap-${{ matrix.shard }}
+          path: out/vcs-ai-cheap-*.db
+          if-no-files-found: ignore
+
+  gate:
+    needs: cheap
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: |
+            any::DBI
+            any::RSQLite
+            any::jsonlite
+            any::testthat
+      - uses: actions/download-artifact@v8
+        with:
+          path: parts
+          pattern: cheap-*
+          merge-multiple: true
+      # The incremental gate downloads the published vcs_ai_signals detail (the baseline) and
+      # narrows the flagged roster to repos carrying a tool not yet onset, so the deep matrix
+      # only re-onsets genuinely new adoptions. GH_TOKEN downloads the published summary asset.
+      - name: Narrow flagged repos to new-tool adoptions
+        env:
+          VCS_SIGNALS_TOKEN: ${{ secrets.VCS_SIGNALS_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VCS_OUT: out
+          VCS_PARTS: parts
+        run: Rscript scripts/ai_backfill.R gate-incremental
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ai-flagged-roster
+          path: out/vcs-ai-flagged-roster.db
+      # The confirmation-row partial (refreshes last_confirmed_date for already-published
+      # repos skipped from the deep matrix below, no new API calls). Uploaded separately from
+      # the flagged roster so the merge job can gather it alongside the deep shard-* artifacts.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ai-confirm-shard
+          path: out/vcs-ai-shard-confirm.db
+          if-no-files-found: ignore
+
+  deep:
+    needs: gate
+    runs-on: ubuntu-latest
+    # The marker pager shares one GraphQL token, so shards run one at a time. The REST
+    # commit-search runs on the separate ~1,800/hr search budget, paced by SEARCH_DELAY_S
+    # inside the script. Sized off weekly.yml's 240-min precedent for the heavy pass; the
+    # weekly new-tool set is usually small, so most shards finish fast.
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: |
+            any::DBI
+            any::RSQLite
+            any::jsonlite
+            any::testthat
+      - uses: actions/download-artifact@v8
+        with:
+          name: ai-flagged-roster
+          path: flagged
+      - name: Deep onset scan (shard ${{ matrix.shard }} of 12)
+        env:
+          VCS_SIGNALS_TOKEN: ${{ secrets.VCS_SIGNALS_TOKEN }}
+          VCS_OUT: out
+          VCS_FLAGGED: flagged
+          VCS_SHARD_I: ${{ matrix.shard }}
+          VCS_SHARD_N: "12"
+        run: Rscript scripts/ai_backfill.R deep
+      - uses: actions/upload-artifact@v7
+        with:
+          name: shard-${{ matrix.shard }}
+          path: out/vcs-ai-shard-*.db
+          if-no-files-found: ignore
+
+  merge:
+    needs: deep
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: |
+            any::DBI
+            any::RSQLite
+            any::jsonlite
+            any::testthat
+      - uses: actions/download-artifact@v8
+        with:
+          path: parts
+          pattern: shard-*
+          merge-multiple: true
+      # Gathers the gate job's confirmation-row partial into the same parts directory. Its
+      # filename (vcs-ai-shard-confirm.db) already matches run_merge's unchanged
+      # vcs-ai-shard-*.db glob, so no merge code change is needed - it folds through
+      # ai_onset_reducer alongside the deep shards.
+      - uses: actions/download-artifact@v8
+        with:
+          name: ai-confirm-shard
+          path: parts
+      - name: Merge and publish
+        env:
+          VCS_SIGNALS_TOKEN: ${{ secrets.VCS_SIGNALS_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VCS_OUT: out
+          VCS_PARTS: parts
+        run: Rscript scripts/ai_backfill.R merge
+      - name: Refresh release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -f out/release_notes.md ]; then
+            gh release edit current --repo ${{ github.repository }} --notes-file out/release_notes.md
+          fi

@@ -376,3 +376,40 @@ test_that("main dispatches gate-incremental to run_gate_incremental", {
   expect_equal(rec$out, "myout")
   expect_equal(rec$parts, "myparts")   # read from VCS_PARTS, same as the plain gate
 })
+
+test_that("ai-weekly.yml is the 5-job incremental pipeline (Sunday cron, incremental gate, serialized, no year-tag mirror)", {
+  wf <- file.path(.repo_root, ".github", "workflows", "ai-weekly.yml")
+  expect_true(file.exists(wf))
+  txt <- paste(readLines(wf), collapse = "\n")
+
+  # Sunday 07:00 UTC cron + manual dispatch.
+  expect_match(txt, "schedule:", fixed = TRUE)
+  expect_match(txt, 'cron:\\s*"0 7 \\* \\* 0"')
+  expect_match(txt, "workflow_dispatch:", fixed = TRUE)
+
+  # Its own concurrency group, not the backfill's.
+  expect_match(txt, "group:\\s*vcs-signals-ai-weekly")
+
+  # The same five jobs (2-space-indented job keys).
+  for (job in c("\n  enumerate:", "\n  cheap:", "\n  gate:", "\n  deep:", "\n  merge:"))
+    expect_match(txt, job, fixed = TRUE)
+
+  # The gate runs INCREMENTALLY.
+  expect_match(txt, "ai_backfill.R gate-incremental", fixed = TRUE)
+
+  # CI test gate + release guard carried over from ai-backfill.yml.
+  expect_match(txt, "Rscript tests/testthat.R", fixed = TRUE)
+  expect_match(txt, "gh release view current", fixed = TRUE)
+
+  # The deep matrix stays serialized on the shared GraphQL token.
+  expect_match(txt, "max-parallel: 1", fixed = TRUE)
+
+  # The gate's confirmation-row partial is uploaded from the gate job and downloaded into the
+  # merge job's parts directory, so run_merge's unchanged vcs-ai-shard-*.db glob picks it up
+  # and last_confirmed_date keeps advancing for already-published repos skipped from deep.
+  expect_match(txt, "vcs-ai-shard-confirm.db", fixed = TRUE)
+  expect_match(txt, "ai-confirm-shard", fixed = TRUE)
+
+  # AI onsets have no year component, so the year-tag mirror must NOT be present.
+  expect_false(grepl("mirror-year-tags", txt, fixed = TRUE))
+})
