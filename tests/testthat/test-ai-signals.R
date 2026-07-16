@@ -262,3 +262,40 @@ test_that("build_ai_detail returns a typed 0-row frame for no evidence and toler
   expect_equal(nulled$tool, "claude")
   expect_true(is.na(nulled$first_seen_date))
 })
+
+test_that("assemble_repo_evidence unions Tier-D markers, ignore tokens, and post-cutoff agent PRs", {
+  tree <- list(root_entries = c(".claude", "DESCRIPTION"), github_entries = character(0),
+               is_fork = FALSE, parent = NA_character_,
+               gitignore_lines = c(".aiderignore", "*.o"), rbuildignore_lines = character(0))
+  pr <- list(prs = data.frame(
+    login = c("octocat", "Copilot", "cursor[bot]"),
+    typename = c("User", "Bot", "Bot"),
+    created_at = c("2019-01-01T00:00:00Z", "2024-05-01T00:00:00Z", "2022-06-01T00:00:00Z"),
+    stringsAsFactors = FALSE), has_next = FALSE)
+  ev <- assemble_repo_evidence(tree, pr)
+  expect_true("claude" %in% ev$tool[ev$tier == "D"])            # .claude marker
+  expect_true("aider" %in% ev$tool[ev$tier == "D"])             # .aiderignore token
+  expect_true("copilot" %in% ev$tool[ev$tier == "PR"])          # post-cutoff agent PR
+  expect_false("cursor" %in% ev$tool[ev$tier == "PR"])          # cursor[bot] PR predates the cutoff -> rejected
+})
+
+test_that("repo_has_ai_signal is the any-evidence gate; absence never counts as clean", {
+  expect_false(repo_has_ai_signal(.ai_empty_evidence()))
+  expect_false(repo_has_ai_signal(NULL))
+  ev <- assemble_repo_evidence(list(root_entries = "CLAUDE.md"), NULL)
+  expect_true(repo_has_ai_signal(ev))
+})
+
+test_that("earliest_agent_pr_date returns the earliest post-cutoff agent createdAt, NA otherwise", {
+  pr <- list(prs = data.frame(
+    login = c("devin-ai-integration[bot]", "Copilot", "octocat"),
+    typename = c("Bot", "Bot", "User"),
+    created_at = c("2024-09-01T00:00:00Z", "2024-03-01T00:00:00Z", "2018-01-01T00:00:00Z"),
+    stringsAsFactors = FALSE), has_next = TRUE)
+  expect_equal(earliest_agent_pr_date(pr), "2024-03-01T00:00:00Z")
+  none <- list(prs = data.frame(login = "octocat", typename = "User",
+                                created_at = "2024-01-01T00:00:00Z", stringsAsFactors = FALSE),
+               has_next = FALSE)
+  expect_true(is.na(earliest_agent_pr_date(none)))
+  expect_true(is.na(earliest_agent_pr_date(NULL)))
+})

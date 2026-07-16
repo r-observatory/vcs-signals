@@ -99,6 +99,48 @@ detect_pr_agents <- function(pr_logins) {
   .ai_rows(unname(AI_PR_AGENT_LOGINS[match(hit, tolower(names(AI_PR_AGENT_LOGINS)))]), "PR")
 }
 
+#' Post-cutoff agent-PR logins: an allowlisted agent login whose PR was created at or
+#' after AI_PR_CUTOFF. A pre-cutoff match predates the agent era (a login collision) and
+#' is dropped. Internal.
+.ai_agent_pr_logins <- function(pr, cutoff) {
+  prs <- if (is.null(pr) || is.null(pr$prs)) NULL else pr$prs
+  if (is.null(prs) || nrow(prs) == 0) return(character(0))
+  intra <- !is.na(prs$created_at) & prs$created_at >= cutoff
+  prs$login[intra]
+}
+
+#' Combine one repo's cheap-pass parsed tree + PR results into a raw-evidence frame
+#' (tool, tier, marker, agnostic): classify_tree_markers + scan_ignore_tokens on the
+#' tree, detect_pr_agents on the post-cutoff agent logins. Pure. A NULL tree or NULL pr
+#' (that channel errored or is empty) contributes no rows from that channel, never a
+#' "no AI" verdict. Returns the typed 0-row frame when nothing matches.
+assemble_repo_evidence <- function(tree, pr, cutoff = AI_PR_CUTOFF) {
+  tree <- tree %||% list()
+  markers <- classify_tree_markers(tree$root_entries, tree$github_entries)
+  ign <- scan_ignore_tokens(tree$gitignore_lines, tree$rbuildignore_lines)
+  pr_ev <- detect_pr_agents(.ai_agent_pr_logins(pr, cutoff))
+  do.call(rbind, list(markers, ign, pr_ev))
+}
+
+#' The gate: TRUE iff a repo shows ANY AI evidence (a marker, an ignore token, or a
+#' post-cutoff agent PR). Absence of evidence is never gated in, so a repo that errored
+#' in the cheap pass (no evidence frame) is deferred, never recorded as clean.
+repo_has_ai_signal <- function(evidence) {
+  !is.null(evidence) && nrow(evidence) > 0
+}
+
+#' PR-channel onset: the earliest createdAt among the repo's post-cutoff agent PRs, or
+#' NA. A PR createdAt is a real dated event, so this is recorded exact by build_onset_map.
+earliest_agent_pr_date <- function(pr, cutoff = AI_PR_CUTOFF) {
+  prs <- if (is.null(pr) || is.null(pr$prs)) NULL else pr$prs
+  if (is.null(prs) || nrow(prs) == 0) return(NA_character_)
+  intra <- !is.na(prs$created_at) & prs$created_at >= cutoff
+  agent <- intra & tolower(prs$login) %in% tolower(names(AI_PR_AGENT_LOGINS))
+  d <- prs$created_at[agent]
+  if (!length(d)) return(NA_character_)
+  min(d)
+}
+
 .ai_split_tiers <- function(s) {
   if (is.na(s) || !nzchar(s)) return(character(0))
   trimws(strsplit(s, ",", fixed = TRUE)[[1]])
