@@ -34,11 +34,15 @@ export_snapshot_shard <- function(path, rows) {
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   DBI::dbExecute(con, "PRAGMA journal_mode=DELETE")
-  DBI::dbExecute(con, sprintf("CREATE TABLE %s (
-    repo_id TEXT PRIMARY KEY, commits_total INTEGER, contributors_total INTEGER)", SNAPSHOT_TABLE))
-  if (nrow(rows) > 0)
-    DBI::dbWriteTable(con, SNAPSHOT_TABLE,
-      rows[c("repo_id", "commits_total", "contributors_total")], append = TRUE)
+  cols <- paste(sprintf("%s INTEGER", WEEKLY_METRICS), collapse = ", ")
+  DBI::dbExecute(con, sprintf("CREATE TABLE %s (repo_id TEXT PRIMARY KEY, %s)", SNAPSHOT_TABLE, cols))
+  if (nrow(rows) > 0) {
+    # A caller may not have collected every metric this run (e.g. a fixture
+    # exercising only commits/contributors); any WEEKLY_METRICS column it
+    # omits is written as NA for every row rather than erroring.
+    for (m in setdiff(WEEKLY_METRICS, names(rows))) rows[[m]] <- NA_integer_
+    DBI::dbWriteTable(con, SNAPSHOT_TABLE, rows[c("repo_id", WEEKLY_METRICS)], append = TRUE)
+  }
   DBI::dbExecute(con, "VACUUM")
   invisible(path)
 }
@@ -86,8 +90,25 @@ run_fetch_shard <- function(io, out_dir, roster_path, i, N,
     contributors_total[r] <- v
   }
 
+  resp_cols <- data.frame(
+    median_days_to_close_issue = rep(NA_integer_, total),
+    median_days_to_close_pr    = rep(NA_integer_, total),
+    median_open_issue_age_days = rep(NA_integer_, total))
+  today <- format(Sys.Date())
+  for (idx in unname(chunk(seq_len(total), MEDIAN_BATCH))) {
+    repos <- mine[idx, , drop = FALSE]
+    got <- tryCatch(fetch_responsiveness(io, repos, today), error = function(e) NULL)
+    if (commit_delay > 0) Sys.sleep(commit_delay)
+    if (is.null(got)) next
+    m <- match(repos$repo_id, got$repo_id)
+    resp_cols$median_days_to_close_issue[idx] <- got$median_days_to_close_issue[m]
+    resp_cols$median_days_to_close_pr[idx]    <- got$median_days_to_close_pr[m]
+    resp_cols$median_open_issue_age_days[idx] <- got$median_open_issue_age_days[m]
+  }
+
   rows <- data.frame(repo_id = mine$repo_id, commits_total = commits_total,
-                     contributors_total = contributors_total, stringsAsFactors = FALSE)
+                     contributors_total = contributors_total,
+                     resp_cols, stringsAsFactors = FALSE)
 
   shard_path <- file.path(out_dir, sprintf("vcs-signals-shard-%d.db", i))
   export_snapshot_shard(shard_path, rows)
@@ -136,8 +157,11 @@ run_merge <- function(io, out_dir, parts_dir) {
   today <- format(Sys.Date())
 
   parts <- list.files(parts_dir, pattern = "^vcs-signals-shard-.*\\.db$", full.names = TRUE)
-  empty_snapshot <- data.frame(repo_id = character(), commits_total = integer(),
-                               contributors_total = integer(), stringsAsFactors = FALSE)
+  empty_snapshot <- setNames(
+    data.frame(repo_id = character(),
+               matrix(integer(0), nrow = 0, ncol = length(WEEKLY_METRICS)),
+               stringsAsFactors = FALSE),
+    c("repo_id", WEEKLY_METRICS))
   snap_rows <- lapply(parts, function(p) {
     pcon <- DBI::dbConnect(RSQLite::SQLite(), p)
     on.exit(DBI::dbDisconnect(pcon), add = TRUE)
