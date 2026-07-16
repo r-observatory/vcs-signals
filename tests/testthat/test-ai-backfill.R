@@ -139,3 +139,71 @@ test_that("run_gate unions and dedups cheap partials into one flagged roster", {
   expect_setequal(fr$flagged$repo_id, c("github.com/a/x", "github.com/b/y"))
   expect_equal(nrow(fr$evidence), 2)
 })
+
+test_that("run_deep assembles marker + confirmed commit + PR onsets into a detail shard", {
+  out <- tempfile("out_"); dir.create(out)
+  write_flagged_partial(file.path(out, "vcs-ai-flagged-roster.db"),
+    data.frame(repo_id = "github.com/o/r", owner = "o", name = "r", node_id = "R_1",
+               is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_,
+               stringsAsFactors = FALSE),
+    data.frame(repo_id = "github.com/o/r", tool = "claude", tier = "D", marker = "CLAUDE.md",
+               agnostic = 0L, stringsAsFactors = FALSE))
+  # Marker pager returns a single last page dated 2024-03-01; the author-email search
+  # returns an earlier 2023-11-01 (a real bot-authored commit, structurally exact).
+  io <- list(
+    graphql = function(query) list(data = list(repository = list(defaultBranchRef = list(
+      target = list(history = list(pageInfo = list(endCursor = "", hasNextPage = FALSE),
+        nodes = list(list(committedDate = "2024-03-01T00:00:00Z")))))))),
+    search = function(owner, name, query, delay = 0) "2023-11-01T00:00:00Z")
+  run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
+           marker_delay = 0, search_delay = 0)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db"))
+  on.exit(DBI::dbDisconnect(scon))
+  got <- DBI::dbReadTable(scon, "vcs_ai_signals")
+  expect_equal(got$tool, "claude")
+  expect_equal(got$first_seen_date, "2023-11-01T00:00:00Z")   # commit onset earlier than marker onset
+  expect_equal(got$first_seen_censored, 0L)                   # both exact
+  expect_setequal(strsplit(got$evidence_tiers, ",")[[1]], c("A", "D"))
+})
+
+test_that("run_deep censors every Tier-D marker on a fork", {
+  out <- tempfile("out_"); dir.create(out)
+  write_flagged_partial(file.path(out, "vcs-ai-flagged-roster.db"),
+    data.frame(repo_id = "github.com/o/f", owner = "o", name = "f", node_id = "R_2",
+               is_fork = 1L, parent = "up/f", pr_onset_date = NA_character_,
+               stringsAsFactors = FALSE),
+    data.frame(repo_id = "github.com/o/f", tool = "cursor", tier = "D", marker = ".cursor",
+               agnostic = 0L, stringsAsFactors = FALSE))
+  io <- list(
+    graphql = function(query) list(data = list(repository = list(defaultBranchRef = list(
+      target = list(history = list(pageInfo = list(endCursor = "", hasNextPage = FALSE),
+        nodes = list(list(committedDate = "2022-01-01T00:00:00Z")))))))),
+    search = function(owner, name, query, delay = 0) NA_character_)   # no bot identity for cursor markers
+  run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
+           marker_delay = 0, search_delay = 0)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db"))
+  on.exit(DBI::dbDisconnect(scon))
+  got <- DBI::dbReadTable(scon, "vcs_ai_signals")
+  expect_equal(got$first_seen_censored, 1L)                   # fork -> Tier-D onset is a floor
+})
+
+test_that("run_deep pauses before a repo when rate remaining is below AI_POINT_RESERVE", {
+  out <- tempfile("out_"); dir.create(out)
+  write_flagged_partial(file.path(out, "vcs-ai-flagged-roster.db"),
+    data.frame(repo_id = "github.com/o/late", owner = "o", name = "late", node_id = "R_3",
+               is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_,
+               stringsAsFactors = FALSE),
+    data.frame(repo_id = "github.com/o/late", tool = "claude", tier = "D", marker = "CLAUDE.md",
+               agnostic = 0L, stringsAsFactors = FALSE))
+  # Rate remaining is already below AI_POINT_RESERVE, so the preflight must pause before
+  # the first repo: fetch_marker_onset's graphql call and io$search are never issued.
+  io <- list(
+    graphql = function(query) list(data = list(rateLimit = list(remaining = 200, resetAt = "2026-07-16T00:00:00Z"))),
+    search = function(owner, name, query, delay = 0) stop("search issued despite the rate pause"))
+  run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
+           marker_delay = 0, search_delay = 0)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db"))
+  on.exit(DBI::dbDisconnect(scon))
+  got <- DBI::dbReadTable(scon, "vcs_ai_signals")
+  expect_equal(nrow(got), 0)      # nothing scanned this run
+})

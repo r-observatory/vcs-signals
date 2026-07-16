@@ -199,6 +199,101 @@ run_gate <- function(out_dir, parts_dir) {
                   nrow(flagged_df), nrow(ev_df), length(parts)))
 }
 
+# ---- deep onset shard IO ----------------------------------------------------
+export_ai_shard <- function(path, rows) {
+  if (file.exists(path)) unlink(path)
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  DBI::dbExecute(con, "PRAGMA journal_mode=DELETE")
+  ensure_series_schema(con)                        # folds in the vcs_ai_signals CREATE
+  if (nrow(rows) > 0) DBI::dbWriteTable(con, "vcs_ai_signals", rows, append = TRUE)
+  DBI::dbExecute(con, "VACUUM")
+  invisible(path)
+}
+
+#' Structured author-email commit search query for a bot-identity tool, or NA when the
+#' tool has no email in AI_BOT_ALLOWLIST (marker-only tools like cursor/gemini/windsurf).
+#' The author-email qualifier is an EXACT match, so a hit is a confirmed Tier-A onset,
+#' unlike a fuzzy message-token search (a floor). Internal.
+.ai_author_email <- function(tool) {
+  em <- names(AI_BOT_ALLOWLIST)[AI_BOT_ALLOWLIST == tool]
+  em <- em[grepl("@", em)]
+  if (length(em)) em[1] else NA_character_
+}
+
+# ---- deep onset scan --------------------------------------------------------
+#' Deep onset scan over one even mod-N shard of the flagged roster. Per repo:
+#'   (0) a graphql_rate_remaining(io) preflight (mirrors update.R:130-137 and run_cheap's,
+#'       Task 7): when the budget is below AI_POINT_RESERVE, pause the shard rather than
+#'       let fetch_marker_onset fail closed to NA onset rows that never recover across
+#'       deterministic re-runs;
+#'   (1) page each Tier-D marker's onset to genesis (fetch_marker_onset, exact, GraphQL
+#'       budget) - a fault leaves that marker's onset NA (build_ai_detail tolerates it);
+#'   (2) for each flagged bot-identity tool, one author-email commit search (io$search,
+#'       REST-search budget) - a hit is an EXACT Tier-A onset and adds a Tier-A evidence
+#'       row so a marker + a bot commit corroborate to two tiers;
+#'   (3) the PR onset carried from the cheap pass (exact);
+#' then build_onset_map + apply_fork_guard (a fork censors every Tier-D onset to a floor)
+#' + build_ai_detail collapse each tool through ai_onset_reducer, taking the tighter onset.
+#' Writes the 7-col vcs_ai_signals partial. Template-seed (first-commit) detection is left
+#' to first_commit_touches = character(0) here; only the fork guard fires in B2.
+run_deep <- function(io, out_dir, roster_path, i, N,
+                     marker_delay = BACKFILL_DELAY_S, search_delay = SEARCH_DELAY_S) {
+  dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+  fr <- read_flagged(roster_path)
+  flagged <- fr$flagged; evidence <- fr$evidence
+  mine <- flagged[shard_rows(nrow(flagged), i, N), , drop = FALSE]
+  message(sprintf("ai deep shard %d/%d: %d of %d flagged repos", i, N, nrow(mine), nrow(flagged)))
+  today <- format(Sys.Date())
+
+  acc <- list()
+  for (r in seq_len(nrow(mine))) {
+    rl <- graphql_rate_remaining(io)
+    if (rl < AI_POINT_RESERVE) {
+      message(sprintf(
+        "ai deep shard %d/%d: graphql rate remaining (%s) below reserve (%d); pausing after %d of %d repos",
+        i, N, rl, AI_POINT_RESERVE, r - 1L, nrow(mine)))
+      break
+    }
+    rid <- mine$repo_id[r]; owner <- mine$owner[r]; name <- mine$name[r]
+    ev <- evidence[evidence$repo_id == rid, c("tool", "tier", "marker", "agnostic"), drop = FALSE]
+    if (nrow(ev) == 0) next
+
+    # (1) Tier-D marker onsets (exact).
+    marker_paths <- unique(sub("^ignore:", "", ev$marker[ev$tier == "D"]))
+    marker_dates <- list()
+    for (path in marker_paths) {
+      d <- tryCatch(fetch_marker_onset(io, owner, name, path, delay = marker_delay),
+                    error = function(e) NA_character_)
+      if (!is.na(d)) marker_dates[[path]] <- d
+    }
+
+    # (2) Tier-A author-email commit onsets (exact) for flagged bot-identity tools.
+    commit_onsets <- NULL; extra_ev <- NULL
+    for (tool in unique(ev$tool[!as.logical(ev$agnostic)])) {
+      email <- .ai_author_email(tool)
+      if (is.na(email)) next
+      d <- tryCatch(io$search(owner, name, sprintf("author-email:%s", email), search_delay),
+                    error = function(e) NA_character_)
+      if (is.na(d)) next
+      commit_onsets <- rbind(commit_onsets, data.frame(tool = tool, tier = "A",
+        first_seen_date = d, confirmed = TRUE, stringsAsFactors = FALSE))
+      extra_ev <- rbind(extra_ev, data.frame(tool = tool, tier = "A", marker = "A",
+        agnostic = 0L, stringsAsFactors = FALSE))
+    }
+    full_ev <- rbind(ev, extra_ev)
+
+    # (3) assemble + guard + collapse.
+    onsets <- build_onset_map(full_ev, marker_dates, commit_onsets, mine$pr_onset_date[r])
+    guarded <- apply_fork_guard(full_ev, isTRUE(mine$is_fork[r] == 1L), mine$parent[r], character(0))
+    detail <- build_ai_detail(rid, guarded, onsets, today)
+    if (nrow(detail) > 0) acc[[length(acc) + 1L]] <- detail
+  }
+  rows <- if (length(acc)) do.call(rbind, acc) else .ai_empty_signals()
+  export_ai_shard(file.path(out_dir, sprintf("vcs-ai-shard-%d.db", i)), rows)
+  message(sprintf("ai deep shard %d/%d: %d onset detail rows", i, N, nrow(rows)))
+}
+
 # ---- CLI dispatch -----------------------------------------------------------
 main <- function(mode, out_dir) {
   token <- Sys.getenv("VCS_SIGNALS_TOKEN")
@@ -221,6 +316,13 @@ main <- function(mode, out_dir) {
     run_cheap(io, out_dir, file.path(roster_dir, "vcs-ai-roster.db"), i, N)
   } else if (mode == "gate") {
     run_gate(out_dir, Sys.getenv("VCS_PARTS", "parts"))
+  } else if (mode == "deep") {
+    i <- suppressWarnings(as.integer(Sys.getenv("VCS_SHARD_I", "0")))
+    N <- suppressWarnings(as.integer(Sys.getenv("VCS_SHARD_N", "1")))
+    if (is.na(i) || is.na(N) || N < 1L || i < 0L || i >= N)
+      stop("deep: VCS_SHARD_I must be in [0, VCS_SHARD_N)")
+    flagged_dir <- Sys.getenv("VCS_FLAGGED", out_dir)
+    run_deep(io, out_dir, file.path(flagged_dir, "vcs-ai-flagged-roster.db"), i, N)
   } else {
     stop("usage: ai_backfill.R [enumerate|cheap|gate|deep|merge]")
   }
