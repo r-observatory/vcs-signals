@@ -219,7 +219,8 @@ run_merge <- function(io, out_dir, parts_dir) {
   latest_all <- DBI::dbGetQuery(con, "SELECT repo_id, metric, value FROM series_latest")
 
   prev_summary_attrs <- DBI::dbGetQuery(con,
-    "SELECT repo_id, license, topics, is_archived, last_commit_date
+    "SELECT repo_id, license, topics, is_archived, last_commit_date,
+            last_release_date, median_days_between_releases
        FROM vcs_signals_summary WHERE repo_id IS NOT NULL")
   if (nrow(prev_summary_attrs) > 0) {
     prev_summary_attrs <- prev_summary_attrs[!duplicated(prev_summary_attrs$repo_id), ]
@@ -228,7 +229,10 @@ run_merge <- function(io, out_dir, parts_dir) {
   repo_attrs <- merge(repos_all[, c("repo_id", "first_seen", "last_seen")], prev_summary_attrs,
                       by = "repo_id", all.x = TRUE)
 
-  summary_df <- build_signals_summary(latest_all, series_all, repo_attrs, rp_all, today)
+  # Full history is loaded this run (protect_history_pull + year shards), so
+  # release cadence is recomputed from scratch rather than carried forward.
+  summary_df <- build_signals_summary(latest_all, series_all, repo_attrs, rp_all, today,
+                                      compute_release_facts = TRUE)
   DBI::dbExecute(con, "DELETE FROM vcs_signals_summary")
   if (nrow(summary_df) > 0) DBI::dbWriteTable(con, "vcs_signals_summary", summary_df, append = TRUE)
 
