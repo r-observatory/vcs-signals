@@ -140,7 +140,8 @@ test_that("run_merge appends today's commits_total/contributors_total change-onl
   .weekly_merge_fixture(released, today)
   export_snapshot_shard(file.path(parts_dir, "vcs-signals-shard-0.db"),
     data.frame(repo_id = "github.com/a/ok", commits_total = 500L, contributors_total = 10L,
-              stringsAsFactors = FALSE))
+              median_days_to_close_issue = NA_integer_, median_days_to_close_pr = NA_integer_,
+              median_open_issue_age_days = NA_integer_, stringsAsFactors = FALSE))
 
   run_merge(.weekly_merge_io(released), out_dir, parts_dir)
 
@@ -170,7 +171,8 @@ test_that("run_merge is change-only: an unchanged weekly value on a second run a
   .weekly_merge_fixture(released, today)
   export_snapshot_shard(file.path(parts_dir1, "vcs-signals-shard-0.db"),
     data.frame(repo_id = "github.com/a/ok", commits_total = 500L, contributors_total = 10L,
-              stringsAsFactors = FALSE))
+              median_days_to_close_issue = NA_integer_, median_days_to_close_pr = NA_integer_,
+              median_open_issue_age_days = NA_integer_, stringsAsFactors = FALSE))
   run_merge(.weekly_merge_io(released), out_dir1, parts_dir1)
 
   # Second run: same repo, same values, against the release the first run
@@ -179,7 +181,8 @@ test_that("run_merge is change-only: an unchanged weekly value on a second run a
   parts_dir2 <- tempfile("parts2"); dir.create(parts_dir2)
   export_snapshot_shard(file.path(parts_dir2, "vcs-signals-shard-0.db"),
     data.frame(repo_id = "github.com/a/ok", commits_total = 500L, contributors_total = 10L,
-              stringsAsFactors = FALSE))
+              median_days_to_close_issue = NA_integer_, median_days_to_close_pr = NA_integer_,
+              median_open_issue_age_days = NA_integer_, stringsAsFactors = FALSE))
   run_merge(.weekly_merge_io(out_dir1), out_dir2, parts_dir2)
 
   rec_con <- DBI::dbConnect(RSQLite::SQLite(), file.path(out_dir2, "vcs-signals-recent.db"))

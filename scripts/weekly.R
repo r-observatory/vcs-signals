@@ -6,8 +6,11 @@
 #   enumerate -> reuse backfill's roster build (every github repo with any
 #                signal) - one job
 #   fetch     -> for one even mod-N shard of the roster, collect
-#                commits_total (GraphQL history.totalCount, batched) and
-#                contributors_total (REST /contributors count) - matrix job
+#                commits_total (GraphQL history.totalCount, batched),
+#                contributors_total (REST /contributors count), and the
+#                three responsiveness medians (median_days_to_close_issue,
+#                median_days_to_close_pr, median_open_issue_age_days) -
+#                matrix job
 #   merge     -> fold every shard's snapshot into the published series as a
 #                change-only weekly point dated today, rebuild the summary,
 #                and republish - one job
@@ -37,10 +40,6 @@ export_snapshot_shard <- function(path, rows) {
   cols <- paste(sprintf("%s INTEGER", WEEKLY_METRICS), collapse = ", ")
   DBI::dbExecute(con, sprintf("CREATE TABLE %s (repo_id TEXT PRIMARY KEY, %s)", SNAPSHOT_TABLE, cols))
   if (nrow(rows) > 0) {
-    # A caller may not have collected every metric this run (e.g. a fixture
-    # exercising only commits/contributors); any WEEKLY_METRICS column it
-    # omits is written as NA for every row rather than erroring.
-    for (m in setdiff(WEEKLY_METRICS, names(rows))) rows[[m]] <- NA_integer_
     DBI::dbWriteTable(con, SNAPSHOT_TABLE, rows[c("repo_id", WEEKLY_METRICS)], append = TRUE)
   }
   DBI::dbExecute(con, "VACUUM")
@@ -48,16 +47,20 @@ export_snapshot_shard <- function(path, rows) {
 }
 
 # ---- fetch ------------------------------------------------------------------
-#' Collect commits_total and contributors_total for one even mod-N shard of
-#' the roster. Commits are swept in COMMIT_HISTORY_BATCH-sized chunks
-#' through one aliased GraphQL query per chunk (fetch_commit_counts): a
-#' chunk whose query itself fails leaves every repo in that chunk NA for
-#' commits_total this run (left for a re-run), while every other chunk is
-#' unaffected. Contributors are fetched one REST request per repo
-#' (io$contributors, paced by contributor_delay): a failing repo is NA for
-#' contributors_total only, independent of whether its commit count
-#' succeeded. Neither failure mode ever aborts the shard. Writes a partial
-#' `snapshot` table to out/vcs-signals-shard-<i>.db.
+#' Collect commits_total, contributors_total, and the three responsiveness
+#' medians (median_days_to_close_issue, median_days_to_close_pr,
+#' median_open_issue_age_days) for one even mod-N shard of the roster.
+#' Commits are swept in COMMIT_HISTORY_BATCH-sized chunks through one
+#' aliased GraphQL query per chunk (fetch_commit_counts): a chunk whose
+#' query itself fails leaves every repo in that chunk NA for commits_total
+#' this run (left for a re-run), while every other chunk is unaffected.
+#' Contributors are fetched one REST request per repo (io$contributors,
+#' paced by contributor_delay): a failing repo is NA for contributors_total
+#' only, independent of whether its commit count succeeded. The three
+#' medians are swept in MEDIAN_BATCH-sized chunks through fetch_responsiveness,
+#' the same way commits are: a chunk whose query fails leaves every repo in
+#' that chunk NA for all three medians this run. No failure mode ever aborts
+#' the shard. Writes a partial `snapshot` table to out/vcs-signals-shard-<i>.db.
 run_fetch_shard <- function(io, out_dir, roster_path, i, N,
                             commit_delay = BACKFILL_DELAY_S,
                             contributor_delay = CONTRIBUTOR_DELAY_S,
@@ -118,9 +121,11 @@ run_fetch_shard <- function(io, out_dir, roster_path, i, N,
 }
 
 # ---- merge --------------------------------------------------------------------
-#' Fold every shard's commits_total/contributors_total snapshot into the
-#' published series as a change-only point dated today, rebuild the summary,
-#' and republish. Mirrors backfill.R::run_merge's seed + complete-history-load
+#' Fold every shard's snapshot of the five WEEKLY_METRICS
+#' (commits_total, contributors_total, median_days_to_close_issue,
+#' median_days_to_close_pr, median_open_issue_age_days) into the published
+#' series as a change-only point dated today, rebuild the summary, and
+#' republish. Mirrors backfill.R::run_merge's seed + complete-history-load
 #' pattern (seed_working_db for the recent window, then protect_history_pull
 #' plus a year-shard fold so publish()'s re-export of the touched (current)
 #' year never truncates other metrics' rows already in that shard).
