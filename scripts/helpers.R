@@ -647,8 +647,9 @@ export_series_shard <- function(path, rows) {
 }
 
 #' Write a minimal SQLite file containing the vcs_signals_summary, repos,
-#' and repo_packages tables - the published "summary" shard.
-export_summary_shard <- function(path, summary_df, repos_df, repo_packages_df) {
+#' repo_packages, and (when supplied) vcs_ai_signals tables - the published
+#' "summary" shard.
+export_summary_shard <- function(path, summary_df, repos_df, repo_packages_df, ai_signals_df = NULL) {
   if (file.exists(path)) unlink(path)
 
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
@@ -661,6 +662,8 @@ export_summary_shard <- function(path, summary_df, repos_df, repo_packages_df) {
   if (nrow(summary_df) > 0) DBI::dbWriteTable(con, "vcs_signals_summary", summary_df, append = TRUE)
   if (nrow(repos_df) > 0) DBI::dbWriteTable(con, "repos", repos_df, append = TRUE)
   if (nrow(repo_packages_df) > 0) DBI::dbWriteTable(con, "repo_packages", repo_packages_df, append = TRUE)
+  if (!is.null(ai_signals_df) && nrow(ai_signals_df) > 0)
+    DBI::dbWriteTable(con, "vcs_ai_signals", ai_signals_df, append = TRUE)
 
   DBI::dbExecute(con, "VACUUM")
   invisible(NULL)
@@ -772,7 +775,7 @@ protect_history_pull <- function(io, dir) {
     }
   }
   for (nm in c("vcs_signals_summary", "repos", "repo_packages",
-               "series_latest", "pipeline_state")) copy_table(nm)
+               "series_latest", "pipeline_state", "vcs_ai_signals")) copy_table(nm)
   invisible(NULL)
 }
 
@@ -862,9 +865,10 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
   summary_df <- if (DBI::dbExistsTable(con, "vcs_signals_summary")) DBI::dbReadTable(con, "vcs_signals_summary") else data.frame()
   repos_df   <- if (DBI::dbExistsTable(con, "repos")) DBI::dbReadTable(con, "repos") else data.frame()
   rp_df      <- if (DBI::dbExistsTable(con, "repo_packages")) DBI::dbReadTable(con, "repo_packages") else data.frame()
+  ai_df      <- if (DBI::dbExistsTable(con, "vcs_ai_signals")) DBI::dbReadTable(con, "vcs_ai_signals") else data.frame()
 
   summary_shard <- "vcs-signals-summary.db"
-  export_summary_shard(file.path(out_dir, summary_shard), summary_df, repos_df, rp_df)
+  export_summary_shard(file.path(out_dir, summary_shard), summary_df, repos_df, rp_df, ai_df)
   shard_names <- c(shard_names, summary_shard)
 
   curr_hashes <- stats::setNames(

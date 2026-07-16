@@ -76,7 +76,7 @@ seed_working_db <- function(io, out_dir, working_path) {
   # embedded into the published recent shard by .embed_recent_tables, so it
   # must be seeded back the same way the other four tables are.
   for (nm in c("repos", "repo_packages", "series_latest", "pipeline_state",
-               "signals_series", "vcs_signals_summary")) {
+               "signals_series", "vcs_signals_summary", "vcs_ai_signals")) {
     if (DBI::dbExistsTable(pcon, nm)) {
       df <- DBI::dbReadTable(pcon, nm)
       if (nrow(df) > 0) DBI::dbWriteTable(wcon, nm, df, append = TRUE)
