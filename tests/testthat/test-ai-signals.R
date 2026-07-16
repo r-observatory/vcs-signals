@@ -131,3 +131,40 @@ test_that("reducer keeps distinct tools as distinct rows", {
                         row("cursor","2024-02-01",0L,"D",0L,"2024-02-01"))
   expect_equal(nrow(o), 2)
 })
+
+test_that("build_ai_rollups names only threshold-met repos, excludes agents-md from counts", {
+  ai <- rbind(
+    # repo A: claude Tier A (nameable) + agents-md agnostic
+    data.frame(repo_id="github.com/a/a", tool="claude", first_seen_date="2024-06-01",
+               first_seen_censored=0L, evidence_tiers="A", authored=1L,
+               last_confirmed_date="2025-01-01", stringsAsFactors=FALSE),
+    data.frame(repo_id="github.com/a/a", tool="agents-md", first_seen_date="2024-01-01",
+               first_seen_censored=0L, evidence_tiers="D", authored=0L,
+               last_confirmed_date="2024-01-01", stringsAsFactors=FALSE),
+    data.frame(repo_id="github.com/a/a", tool="cursor", first_seen_date="2025-03-01",
+               first_seen_censored=0L, evidence_tiers="D,B", authored=0L,
+               last_confirmed_date="2025-03-01", stringsAsFactors=FALSE),
+    # repo B: lone Tier D -> below threshold, omitted
+    data.frame(repo_id="github.com/b/b", tool="copilot", first_seen_date="2024-02-01",
+               first_seen_censored=0L, evidence_tiers="D", authored=0L,
+               last_confirmed_date="2024-02-01", stringsAsFactors=FALSE))
+  out <- build_ai_rollups(ai)
+  expect_equal(out$repo_id, "github.com/a/a")            # only the nameable repo
+  expect_true(out$ai_markers_detected)
+  expect_equal(out$ai_first_tool, "claude")             # earliest non-agnostic
+  expect_equal(out$ai_first_date, "2024-06-01")
+  expect_equal(out$ai_tool_count, 2L)                   # claude + cursor, agents-md excluded
+  expect_equal(out$ai_tools, "claude,cursor")
+  expect_equal(out$ai_latest_tool, "cursor")
+  expect_equal(out$ai_latest_date, "2025-03-01")
+})
+
+test_that("build_ai_rollups returns a typed empty frame when nothing is nameable", {
+  ai <- data.frame(repo_id="github.com/b/b", tool="copilot", first_seen_date="2024-02-01",
+                   first_seen_censored=0L, evidence_tiers="D", authored=0L,
+                   last_confirmed_date="2024-02-01", stringsAsFactors=FALSE)
+  out <- build_ai_rollups(ai)
+  expect_equal(nrow(out), 0)
+  expect_true(all(c("repo_id","ai_markers_detected","ai_first_tool","ai_first_date",
+                    "ai_tool_count","ai_tools","ai_latest_tool","ai_latest_date") %in% names(out)))
+})

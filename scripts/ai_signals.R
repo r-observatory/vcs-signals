@@ -168,3 +168,38 @@ ai_onset_reducer <- function(prior_rows, incoming_rows) {
   parts <- lapply(split(all_rows, key), .ai_reduce_group)
   do.call(rbind, parts)
 }
+
+.ai_empty_rollups <- function()
+  data.frame(repo_id = character(), ai_markers_detected = logical(),
+             ai_first_tool = character(), ai_first_date = character(),
+             ai_tool_count = integer(), ai_tools = character(),
+             ai_latest_tool = character(), ai_latest_date = character(),
+             stringsAsFactors = FALSE)
+
+#' Per-repo AI rollups for the summary. Only repos meeting the naming threshold
+#' get a row (so the summary join yields NULL, never FALSE, for the rest).
+#' agents-md is excluded from count/tools/first/latest.
+build_ai_rollups <- function(ai_signals) {
+  if (is.null(ai_signals) || nrow(ai_signals) == 0) return(.ai_empty_rollups())
+  if (!"agnostic" %in% names(ai_signals))
+    ai_signals$agnostic <- ai_signals$tool == "agents-md"
+  parts <- lapply(split(ai_signals, ai_signals$repo_id), function(g) {
+    if (!meets_naming_threshold(g)) return(NULL)
+    ordered <- order_ai_tools(g)               # non-agnostic, chronological
+    if (!length(ordered)) return(NULL)
+    counted <- g[g$tool %in% ordered, , drop = FALSE]
+    first_tool <- ordered[1]
+    last_tool <- ordered[length(ordered)]
+    data.frame(repo_id = g$repo_id[1], ai_markers_detected = TRUE,
+               ai_first_tool = first_tool,
+               ai_first_date = counted$first_seen_date[counted$tool == first_tool][1],
+               ai_tool_count = length(ordered),
+               ai_tools = paste(ordered, collapse = ","),
+               ai_latest_tool = last_tool,
+               ai_latest_date = counted$first_seen_date[counted$tool == last_tool][1],
+               stringsAsFactors = FALSE)
+  })
+  parts <- Filter(Negate(is.null), parts)
+  if (!length(parts)) return(.ai_empty_rollups())
+  do.call(rbind, parts)
+}
