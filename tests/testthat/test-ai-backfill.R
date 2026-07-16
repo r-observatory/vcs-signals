@@ -66,3 +66,55 @@ test_that("run_enumerate_ai re-resolves owner/name from node_id for rows that al
   expect_equal(roster$name, "name")
   expect_equal(roster$repo_id, "github.com/old/name") # repo_id (the PK) is untouched
 })
+
+test_that("run_cheap keeps only flagged repos and writes evidence + flagged tables", {
+  out <- tempfile("out_"); dir.create(out)
+  roster <- data.frame(
+    repo_id = c("github.com/a/hit", "github.com/b/clean"),
+    owner = c("a", "b"), name = c("hit", "clean"), node_id = c("R_a", "R_b"),
+    done = 0L, stringsAsFactors = FALSE)
+  roster_path <- file.path(out, "vcs-ai-roster.db"); write_ai_roster(roster_path, roster)
+
+  # Fake io: the tree query flags r0 (.claude) and returns nothing for r1; the PR query
+  # returns no agent PRs for either.
+  io <- list(graphql = function(query) {
+    if (grepl("rootTree", query, fixed = TRUE)) {
+      return(list(data = list(
+        r0 = list(isFork = FALSE, parent = NULL,
+                  rootTree = list(entries = list(list(name = ".claude", type = "tree"))),
+                  githubTree = NULL, gitignore = NULL, rbuildignore = NULL),
+        r1 = list(isFork = FALSE, parent = NULL, rootTree = NULL, githubTree = NULL,
+                  gitignore = NULL, rbuildignore = NULL))))
+    }
+    list(data = list(
+      r0 = list(pullRequests = list(pageInfo = list(endCursor = NA, hasNextPage = FALSE), nodes = list())),
+      r1 = list(pullRequests = list(pageInfo = list(endCursor = NA, hasNextPage = FALSE), nodes = list()))))
+  })
+  run_cheap(io, out, roster_path, 0, 1)
+  fr <- read_flagged(file.path(out, "vcs-ai-cheap-0.db"))
+  expect_equal(fr$flagged$repo_id, "github.com/a/hit")            # only the flagged repo
+  expect_equal(fr$flagged$is_fork, 0L)
+  expect_true("claude" %in% fr$evidence$tool[fr$evidence$repo_id == "github.com/a/hit"])
+  expect_false("github.com/b/clean" %in% fr$flagged$repo_id)      # clean repo not written
+})
+
+test_that("run_cheap pauses before spending a batch when rate remaining is below AI_POINT_RESERVE", {
+  out <- tempfile("out_"); dir.create(out)
+  roster <- data.frame(
+    repo_id = c("github.com/a/hit", "github.com/b/late"),
+    owner = c("a", "b"), name = c("hit", "late"), node_id = c("R_a", "R_b"),
+    done = 0L, stringsAsFactors = FALSE)
+  roster_path <- file.path(out, "vcs-ai-roster.db"); write_ai_roster(roster_path, roster)
+
+  # Rate remaining is already below AI_POINT_RESERVE (1500L), so the preflight must pause
+  # before the first batch: the tree/PR queries are never issued, and the partial is
+  # written with whatever was scanned (nothing), never faulted into a silent drop.
+  io <- list(graphql = function(query) {
+    if (grepl("rateLimit", query, fixed = TRUE))
+      return(list(data = list(rateLimit = list(remaining = 100, resetAt = "2026-07-16T00:00:00Z"))))
+    stop("tree/PR query issued despite rate remaining below AI_POINT_RESERVE")
+  })
+  run_cheap(io, out, roster_path, 0, 1, batch_size = 1)
+  fr <- read_flagged(file.path(out, "vcs-ai-cheap-0.db"))
+  expect_equal(nrow(fr$flagged), 0)
+})

@@ -93,6 +93,94 @@ run_enumerate_ai <- function(io, out_dir) {
   write_ai_roster(file.path(out_dir, "vcs-ai-roster.db"), roster)
 }
 
+# ---- flagged partial IO -----------------------------------------------------
+.ai_empty_flagged <- function()
+  data.frame(repo_id = character(), owner = character(), name = character(),
+             node_id = character(), is_fork = integer(), parent = character(),
+             pr_onset_date = character(), stringsAsFactors = FALSE)
+.ai_empty_ev <- function()
+  data.frame(repo_id = character(), tool = character(), tier = character(),
+             marker = character(), agnostic = integer(), stringsAsFactors = FALSE)
+
+write_flagged_partial <- function(path, flagged_df, evidence_df) {
+  if (file.exists(path)) unlink(path)
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  DBI::dbExecute(con, "PRAGMA journal_mode=DELETE")
+  DBI::dbExecute(con, "CREATE TABLE flagged (repo_id TEXT PRIMARY KEY, owner TEXT, name TEXT,
+    node_id TEXT, is_fork INTEGER, parent TEXT, pr_onset_date TEXT)")
+  DBI::dbExecute(con, "CREATE TABLE evidence (repo_id TEXT, tool TEXT, tier TEXT,
+    marker TEXT, agnostic INTEGER)")
+  if (nrow(flagged_df) > 0) DBI::dbWriteTable(con, "flagged", flagged_df, append = TRUE)
+  if (nrow(evidence_df) > 0) DBI::dbWriteTable(con, "evidence", evidence_df, append = TRUE)
+  DBI::dbExecute(con, "VACUUM")
+  invisible(path)
+}
+
+read_flagged <- function(path) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  list(
+    flagged  = if (DBI::dbExistsTable(con, "flagged")) DBI::dbReadTable(con, "flagged") else .ai_empty_flagged(),
+    evidence = if (DBI::dbExistsTable(con, "evidence")) DBI::dbReadTable(con, "evidence") else .ai_empty_ev())
+}
+
+# ---- cheap pass -------------------------------------------------------------
+#' Cheap Tier-D marker + PR-agent pass over one even mod-N shard of the roster. Batches
+#' TIER_D_BATCH repos through fetch_tree_markers + fetch_pr_agents, assembles evidence,
+#' and writes only the flagged repos (repo_has_ai_signal) to a two-table partial. A repo
+#' whose whole cheap batch faulted is absent from both fetch results and is skipped
+#' (deferred, retried next run), never written as clean. Before each batch, a
+#' graphql_rate_remaining(io) preflight (mirrors update.R:130-137) pauses the shard when
+#' the budget is below AI_POINT_RESERVE, so an exhausted token stops the pass cleanly
+#' instead of faulting batches into silent single-repo drops; the unscanned tail of this
+#' shard is picked up by the next workflow_dispatch (enumerate + cheap re-run
+#' deterministically over the same shard). fetch_tree_markers/fetch_pr_agents already
+#' pace themselves with BATCH_DELAY_S, so this loop does not sleep again per batch.
+run_cheap <- function(io, out_dir, roster_path, i, N, batch_size = TIER_D_BATCH) {
+  dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+  roster <- load_ai_roster(roster_path)
+  mine <- roster[shard_rows(nrow(roster), i, N), , drop = FALSE]
+  message(sprintf("ai cheap shard %d/%d: %d of %d repos", i, N, nrow(mine), nrow(roster)))
+
+  flagged <- list(); evrows <- list(); scanned <- 0L
+  for (idx in unname(chunk(seq_len(nrow(mine)), batch_size))) {
+    rl <- graphql_rate_remaining(io)
+    if (rl < AI_POINT_RESERVE) {
+      message(sprintf(
+        "ai cheap shard %d/%d: graphql rate remaining (%s) below reserve (%d); pausing after %d of %d repos",
+        i, N, rl, AI_POINT_RESERVE, scanned, nrow(mine)))
+      break
+    }
+    repos <- mine[idx, , drop = FALSE]
+    trees <- tryCatch(fetch_tree_markers(io, repos, batch_size), error = function(e) NULL)
+    prs   <- tryCatch(fetch_pr_agents(io, repos, batch_size), error = function(e) NULL)
+    for (r in seq_len(nrow(repos))) {
+      rid <- repos$repo_id[r]
+      tree <- if (is.null(trees)) NULL else trees[[rid]]
+      pr   <- if (is.null(prs)) NULL else prs[[rid]]
+      if (is.null(tree) && is.null(pr)) next            # both channels errored -> deferred
+      ev <- assemble_repo_evidence(tree, pr)
+      if (!repo_has_ai_signal(ev)) next
+      flagged[[length(flagged) + 1L]] <- data.frame(
+        repo_id = rid, owner = repos$owner[r], name = repos$name[r], node_id = repos$node_id[r],
+        is_fork = as.integer(isTRUE(tree$is_fork)),
+        parent = if (is.null(tree)) NA_character_ else (tree$parent %||% NA_character_),
+        pr_onset_date = earliest_agent_pr_date(pr),
+        stringsAsFactors = FALSE)
+      ev$repo_id <- rid
+      ev$agnostic <- as.integer(ev$agnostic)
+      evrows[[length(evrows) + 1L]] <- ev[c("repo_id", "tool", "tier", "marker", "agnostic")]
+    }
+    scanned <- scanned + nrow(repos)
+  }
+  flagged_df <- if (length(flagged)) do.call(rbind, flagged) else .ai_empty_flagged()
+  ev_df <- if (length(evrows)) do.call(rbind, evrows) else .ai_empty_ev()
+  write_flagged_partial(file.path(out_dir, sprintf("vcs-ai-cheap-%d.db", i)), flagged_df, ev_df)
+  message(sprintf("ai cheap shard %d/%d: %d flagged repos, %d evidence rows",
+                  i, N, nrow(flagged_df), nrow(ev_df)))
+}
+
 # ---- CLI dispatch -----------------------------------------------------------
 main <- function(mode, out_dir) {
   token <- Sys.getenv("VCS_SIGNALS_TOKEN")
@@ -106,6 +194,13 @@ main <- function(mode, out_dir) {
 
   if (mode == "enumerate") {
     run_enumerate_ai(io, out_dir)
+  } else if (mode == "cheap") {
+    i <- suppressWarnings(as.integer(Sys.getenv("VCS_SHARD_I", "0")))
+    N <- suppressWarnings(as.integer(Sys.getenv("VCS_SHARD_N", "1")))
+    if (is.na(i) || is.na(N) || N < 1L || i < 0L || i >= N)
+      stop("cheap: VCS_SHARD_I must be in [0, VCS_SHARD_N)")
+    roster_dir <- Sys.getenv("VCS_ROSTER", out_dir)
+    run_cheap(io, out_dir, file.path(roster_dir, "vcs-ai-roster.db"), i, N)
   } else {
     stop("usage: ai_backfill.R [enumerate|cheap|gate|deep|merge]")
   }
