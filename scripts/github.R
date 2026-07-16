@@ -701,14 +701,14 @@ parse_marker_history <- function(resp) {
 fetch_marker_onset <- function(io, owner, name, path, delay = BACKFILL_DELAY_S) {
   earliest <- NA_character_
   for (p in expand_marker_paths(path)) {
-    after <- NULL; oldest <- NA_character_; faulted <- FALSE
+    after <- NULL; oldest <- NA_character_
     repeat {
       resp <- io$graphql(build_marker_history_query(owner, name, p, after))
       # history(path:) is DESC, so the true earliest touch is on the LAST page. A
       # mid-pagination fault means we never reached it; discarding this path's partial
       # (newest-page) min is the only correct choice - folding it would write a
       # too-recent onset into the immutable table. Fail closed, leave it for a re-run.
-      if (!is.null(resp$errors) || is.null(resp$data)) { faulted <- TRUE; break }
+      if (!is.null(resp$errors) || is.null(resp$data)) return(NA_character_)
       if (delay > 0) Sys.sleep(delay)
       pg <- parse_marker_history(resp)
       d <- pg$dates[!is.na(pg$dates)]
@@ -716,7 +716,7 @@ fetch_marker_onset <- function(io, owner, name, path, delay = BACKFILL_DELAY_S) 
       if (!isTRUE(pg$has_next) || is.na(pg$end_cursor) || !nzchar(pg$end_cursor)) break
       after <- pg$end_cursor
     }
-    if (!faulted && !is.na(oldest)) earliest <- if (is.na(earliest)) oldest else min(earliest, oldest)
+    if (!is.na(oldest)) earliest <- if (is.na(earliest)) oldest else min(earliest, oldest)
   }
   earliest
 }

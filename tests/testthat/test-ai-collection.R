@@ -152,3 +152,20 @@ test_that("fetch_marker_onset fails closed (NA) when a page faults mid-paginatio
   # Must NOT return the too-recent page-1 date; the true onset is on an unreached page.
   expect_true(is.na(fetch_marker_onset(io, "o", "n", "CLAUDE.md", delay = 0)))
 })
+
+test_that("fetch_marker_onset fails closed function-wide when a sibling predecessor path faults", {
+  # .cursor expands to c(".cursor", ".cursorrules"). The FIRST path (.cursor) succeeds
+  # cleanly with a recent, single-page (last-page) onset. The SECOND path (.cursorrules)
+  # - which holds the OLDER pre-rename history - faults. The fault must bail the whole
+  # function, not just the faulted path; otherwise the recent .cursor date is folded in
+  # and written as onset even though the true (older) onset was never reached.
+  success <- list(data = list(repository = list(defaultBranchRef = list(target = list(history = list(
+    pageInfo = list(endCursor = "", hasNextPage = FALSE),
+    nodes = list(list(committedDate = "2025-06-01T00:00:00Z"))))))))
+  err <- list(errors = list(list(message = "502")), data = NULL)
+  seq <- list(success, err)
+  i <- 0L
+  io <- list(graphql = function(q) { i <<- i + 1L; seq[[i]] })
+  # Must NOT return the recent .cursor date; a fault on the sibling path fails closed.
+  expect_true(is.na(fetch_marker_onset(io, "o", "n", ".cursor", delay = 0)))
+})
