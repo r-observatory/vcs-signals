@@ -63,3 +63,32 @@ test_that("detect_pr_agents matches agent logins, never generic bots", {
   expect_setequal(out$tool, c("copilot", "cursor"))
   expect_true(all(out$tier == "PR"))
 })
+
+mk <- function(tool, date, censored = 0L, tiers, authored = 0L, agnostic = FALSE)
+  data.frame(tool = tool, first_seen_date = date, first_seen_censored = censored,
+             evidence_tiers = tiers, authored = authored, agnostic = agnostic,
+             stringsAsFactors = FALSE)
+
+test_that("naming threshold: Tier A alone passes, lone Tier D fails, two tiers pass", {
+  expect_true(meets_naming_threshold(mk("claude", "2024-01-01", tiers = "A")))
+  expect_false(meets_naming_threshold(mk("cursor", "2024-01-01", tiers = "D")))
+  expect_true(meets_naming_threshold(mk("claude", "2024-01-01", tiers = "D,B")))
+  # agents-md alone never satisfies (agnostic, single tier)
+  expect_false(meets_naming_threshold(mk("agents-md", "2024-01-01", tiers = "D", agnostic = TRUE)))
+})
+
+test_that("order_ai_tools sorts by date then censored then tier then name, excludes agents-md", {
+  rows <- rbind(
+    mk("copilot",   "2024-11-01", tiers = "D"),
+    mk("claude",    "2024-06-01", tiers = "A"),
+    mk("agents-md", "2024-01-01", tiers = "D", agnostic = TRUE),
+    mk("cursor",    "2025-03-01", tiers = "D"))
+  expect_equal(order_ai_tools(rows), c("claude", "copilot", "cursor"))  # agents-md dropped, chronological
+})
+
+test_that("order_ai_tools tie-break: same date -> stronger tier, then name", {
+  rows <- rbind(
+    mk("cursor", "2024-01-01", tiers = "D"),
+    mk("claude", "2024-01-01", tiers = "A"))
+  expect_equal(order_ai_tools(rows)[1], "claude")   # A beats D on the same date
+})

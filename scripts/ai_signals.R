@@ -98,3 +98,38 @@ detect_pr_agents <- function(pr_logins) {
   if (!length(hit)) return(.ai_empty_evidence())
   .ai_rows(unname(AI_PR_AGENT_LOGINS[match(hit, tolower(names(AI_PR_AGENT_LOGINS)))]), "PR")
 }
+
+.ai_split_tiers <- function(s) {
+  if (is.na(s) || !nzchar(s)) return(character(0))
+  trimws(strsplit(s, ",", fixed = TRUE)[[1]])
+}
+
+#' A repo is nameable iff some NON-agnostic tool has Tier A, or >=2 distinct tiers.
+meets_naming_threshold <- function(ai_rows) {
+  if (is.null(ai_rows) || nrow(ai_rows) == 0) return(FALSE)
+  keep <- !as.logical(ai_rows$agnostic)
+  if (!any(keep)) return(FALSE)
+  sub <- ai_rows[keep, , drop = FALSE]
+  any(vapply(seq_len(nrow(sub)), function(i) {
+    tiers <- .ai_split_tiers(sub$evidence_tiers[i])
+    ("A" %in% tiers) || (length(unique(tiers)) >= 2)
+  }, logical(1)))
+}
+
+#' Strongest (lowest) tier priority among a comma tier string.
+.ai_tier_rank <- function(s) {
+  tiers <- .ai_split_tiers(s)
+  if (!length(tiers)) return(99L)
+  min(TIER_PRIORITY[tiers], na.rm = TRUE)
+}
+
+#' Non-agnostic tools ordered by (date ASC, censored ASC, tier ASC, tool ASC).
+order_ai_tools <- function(ai_rows) {
+  if (is.null(ai_rows) || nrow(ai_rows) == 0) return(character(0))
+  sub <- ai_rows[!as.logical(ai_rows$agnostic), , drop = FALSE]
+  if (nrow(sub) == 0) return(character(0))
+  rank <- vapply(sub$evidence_tiers, .ai_tier_rank, integer(1))
+  d <- sub$first_seen_date; d[is.na(d)] <- "9999-99-99"   # NA dates sort last
+  ord <- order(d, sub$first_seen_censored, rank, sub$tool)
+  sub$tool[ord]
+}
