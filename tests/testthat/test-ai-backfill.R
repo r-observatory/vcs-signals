@@ -67,6 +67,46 @@ test_that("run_enumerate_ai re-resolves owner/name from node_id for rows that al
   expect_equal(roster$repo_id, "github.com/old/name") # repo_id (the PK) is untouched
 })
 
+test_that("run_enumerate_ai drops a roster row whose re-resolve returns a different node_id (squatted slug)", {
+  # A fake summary DB with two repos that already carry a node_id: one genuinely renamed
+  # (old/name -> R_x, still resolves to R_x at the new slug) and one whose old slug has
+  # since been squatted by an unrelated repo (stale/squatted -> R_y, but the slug
+  # stale/squatted now resolves to a DIFFERENT node_id, R_evil, at a different slug).
+  rel <- tempfile("rel_"); dir.create(rel)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel, "vcs-signals-summary.db"))
+  ensure_repo_schema(scon)
+  DBI::dbExecute(scon, "INSERT INTO repos (repo_id,node_id,host,host_domain,owner,name,name_with_owner,supported,n_packages,first_seen,last_seen,status) VALUES
+    ('github.com/old/name','R_x','github','github.com','old','name','old/name',1,1,'2024-01-01','2026-07-01','active'),
+    ('github.com/stale/squatted','R_y','github','github.com','stale','squatted','stale/squatted',1,1,'2024-01-01','2026-07-01','active')")
+  DBI::dbDisconnect(scon)
+  io <- list(
+    download = function(pattern, dir) {
+      f <- list.files(rel, pattern = utils::glob2rx(pattern), full.names = TRUE)
+      if (!length(f)) return(FALSE)
+      file.copy(f, file.path(dir, basename(f)), overwrite = TRUE); TRUE },
+    graphql = function(query) {
+      # r0 (old/name, node R_x) genuinely renamed -> same node_id at a new slug.
+      # r1 (stale/squatted, node R_y) -> the slug now resolves to an UNRELATED repo's
+      # node_id (R_evil): the old repo is gone and something else squatted the slug.
+      list(data = list(
+        r0 = list(id = "R_x", nameWithOwner = "new/name", isArchived = FALSE,
+                  isFork = FALSE, isMirror = FALSE, createdAt = "2024-01-01T00:00:00Z"),
+        r1 = list(id = "R_evil", nameWithOwner = "squatter/repo", isArchived = FALSE,
+                  isFork = FALSE, isMirror = FALSE, createdAt = "2025-06-01T00:00:00Z")))
+    })
+  out <- tempfile("out_"); dir.create(out)
+  run_enumerate_ai(io, out)
+  roster <- load_ai_roster(file.path(out, "vcs-ai-roster.db"))
+
+  # The squatted row is dropped from the roster entirely (never scanned by cheap/deep),
+  # not merely flagged done=1: only the genuinely-renamed row survives.
+  expect_equal(roster$repo_id, "github.com/old/name")
+  expect_equal(roster$owner, "new")
+  expect_equal(roster$name, "name")
+  expect_equal(roster$node_id, "R_x")
+  expect_false("github.com/stale/squatted" %in% roster$repo_id)
+})
+
 test_that("run_cheap keeps only flagged repos and writes evidence + flagged tables", {
   out <- tempfile("out_"); dir.create(out)
   roster <- data.frame(
@@ -164,6 +204,7 @@ test_that("run_deep assembles marker + confirmed commit + PR onsets into a detai
   expect_equal(got$first_seen_date, "2023-11-01T00:00:00Z")   # commit onset earlier than marker onset
   expect_equal(got$first_seen_censored, 0L)                   # both exact
   expect_setequal(strsplit(got$evidence_tiers, ",")[[1]], c("A", "D"))
+  expect_equal(got$authored, 1L)   # author-email commit hit means the bot itself authored commits
 })
 
 test_that("run_deep censors every Tier-D marker on a fork", {

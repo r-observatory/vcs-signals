@@ -51,7 +51,11 @@ load_ai_roster <- function(path) {
 #' that already carries one (mirrors resolve_node_ids's build_resolve_query/parse_resolve
 #' pair, github.R:107/204, followRenames:true already baked in), so a rename since the
 #' row's node_id was first attached does not leave a stale slug flowing into Task 7/9's
-#' owner/name-keyed queries. Same download as backfill.R's enumerate.
+#' owner/name-keyed queries. A resolve hit that comes back with a DIFFERENT node_id than
+#' the row's own means the old slug has been squatted (or otherwise reassigned) by an
+#' unrelated repo, and that row is dropped from the roster entirely rather than updated,
+#' so the squatter is never scanned under this row's repo_id. Same download as
+#' backfill.R's enumerate.
 run_enumerate_ai <- function(io, out_dir) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   if (!isTRUE(io$download("vcs-signals-summary.db", out_dir)))
@@ -65,12 +69,19 @@ run_enumerate_ai <- function(io, out_dir) {
                        node_id = rows$node_id, done = 0L, stringsAsFactors = FALSE)
 
   # Re-resolve owner/name from the immutable node_id for rows that already have one, so a
-  # rename since the last resolve does not leave a stale slug: an unrelated repo that
-  # later squats the old slug would otherwise have its markers/PRs/commits misattributed
-  # into the immutable vcs_ai_signals table under this node_id's repo_id. A batch that
-  # still faults after the retry keeps its pre-existing owner/name (retried on the next
-  # enumerate), never dropped from the roster.
+  # rename since the last resolve does not leave a stale slug. The query still runs by the
+  # row's current (possibly stale) owner/name with followRenames:true, so the hit it comes
+  # back with must be checked against the row's OWN node_id before it is trusted: a genuine
+  # rename resolves to the SAME node_id at a new slug (owner/name are updated below), but a
+  # SQUATTED old slug resolves to a DIFFERENT repo's node_id entirely. Trusting that second
+  # case would point this roster row's owner/name at the squatter, and the cheap/deep passes
+  # would then scan the squatter and write ITS markers/PRs/commits into the immutable
+  # vcs_ai_signals table under this row's (unrelated) repo_id - so a node_id mismatch drops
+  # the row from the roster outright rather than updating it. A batch that still faults
+  # after the retry (or a row whose resolve comes back NA) keeps its pre-existing owner/name
+  # (retried on the next enumerate), never dropped from the roster.
   have_id <- !is.na(roster$node_id) & nzchar(roster$node_id)
+  drop_idx <- integer(0)
   for (rowset in chunk(which(have_id), CHEAP_BATCH)) {
     sub <- roster[rowset, , drop = FALSE]
     res <- tryCatch(io$graphql(build_resolve_query(sub$owner, sub$name)),
@@ -83,11 +94,16 @@ run_enumerate_ai <- function(io, out_dir) {
     for (j in seq_len(nrow(sub))) {
       r <- pr[pr$idx == (j - 1L), ]
       if (is.na(r$node_id) || is.na(r$name_with_owner)) next
+      if (!identical(r$node_id, sub$node_id[j])) {
+        drop_idx <- c(drop_idx, rowset[j])   # slug squatted/reassigned: exclude, never scan
+        next
+      }
       parts <- strsplit(r$name_with_owner, "/", fixed = TRUE)[[1]]
       roster$owner[rowset[j]] <- parts[1]
       roster$name[rowset[j]]  <- paste(parts[-1], collapse = "/")
     }
   }
+  if (length(drop_idx) > 0) roster <- roster[-drop_idx, , drop = FALSE]
 
   message(sprintf("ai enumerate: %d active github repos", nrow(roster)))
   write_ai_roster(file.path(out_dir, "vcs-ai-roster.db"), roster)
@@ -231,7 +247,8 @@ export_ai_shard <- function(path, rows) {
 #'       budget) - a fault leaves that marker's onset NA (build_ai_detail tolerates it);
 #'   (2) for each flagged bot-identity tool, one author-email commit search (io$search,
 #'       REST-search budget) - a hit is an EXACT Tier-A onset and adds a Tier-A evidence
-#'       row so a marker + a bot commit corroborate to two tiers;
+#'       row (authored = 1, since an author-email match means the bot itself authored the
+#'       commit) so a marker + a bot commit corroborate to two tiers;
 #'   (3) the PR onset carried from the cheap pass (exact);
 #' then build_onset_map + apply_fork_guard (a fork censors every Tier-D onset to a floor)
 #' + build_ai_detail collapse each tool through ai_onset_reducer, taking the tighter onset.
@@ -258,6 +275,7 @@ run_deep <- function(io, out_dir, roster_path, i, N,
     rid <- mine$repo_id[r]; owner <- mine$owner[r]; name <- mine$name[r]
     ev <- evidence[evidence$repo_id == rid, c("tool", "tier", "marker", "agnostic"), drop = FALSE]
     if (nrow(ev) == 0) next
+    ev$authored <- 0L   # only a Tier-A author-email hit below sets authored = 1
 
     # (1) Tier-D marker onsets (exact).
     marker_paths <- unique(sub("^ignore:", "", ev$marker[ev$tier == "D"]))
@@ -279,7 +297,7 @@ run_deep <- function(io, out_dir, roster_path, i, N,
       commit_onsets <- rbind(commit_onsets, data.frame(tool = tool, tier = "A",
         first_seen_date = d, confirmed = TRUE, stringsAsFactors = FALSE))
       extra_ev <- rbind(extra_ev, data.frame(tool = tool, tier = "A", marker = "A",
-        agnostic = 0L, stringsAsFactors = FALSE))
+        agnostic = 0L, authored = 1L, stringsAsFactors = FALSE))
     }
     full_ev <- rbind(ev, extra_ev)
 
