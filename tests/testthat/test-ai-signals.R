@@ -92,3 +92,42 @@ test_that("order_ai_tools tie-break: same date -> stronger tier, then name", {
     mk("claude", "2024-01-01", tiers = "A"))
   expect_equal(order_ai_tools(rows)[1], "claude")   # A beats D on the same date
 })
+
+row <- function(tool, date, cens, tiers, auth, last, repo = "github.com/o/r")
+  data.frame(repo_id = repo, tool = tool, first_seen_date = date, first_seen_censored = cens,
+             evidence_tiers = tiers, authored = auth, last_confirmed_date = last,
+             stringsAsFactors = FALSE)
+
+test_that("reducer: exact replaces a looser floor, tiers union, authored OR, last_confirmed max", {
+  prior <- row("claude", "2024-06-01", 1L, "D", 0L, "2024-06-01")            # censored floor <= 2024-06-01
+  inc   <- row("claude", "2024-03-01", 0L, "B", 1L, "2025-01-01")            # exact, earlier than floor
+  out <- ai_onset_reducer(prior, inc)
+  expect_equal(out$first_seen_date, "2024-03-01")
+  expect_equal(out$first_seen_censored, 0L)
+  expect_setequal(strsplit(out$evidence_tiers, ",")[[1]], c("B", "D"))
+  expect_equal(out$authored, 1L)
+  expect_equal(out$last_confirmed_date, "2025-01-01")
+})
+
+test_that("reducer: two floors tighten to the min; two exacts take the min", {
+  o <- ai_onset_reducer(row("cursor","2023-01-01",1L,"D",0L,"2023-01-01"),
+                        row("cursor","2022-06-01",1L,"D",0L,"2022-06-01"))
+  expect_equal(o$first_seen_date, "2022-06-01"); expect_equal(o$first_seen_censored, 1L)
+  e <- ai_onset_reducer(row("cursor","2022-01-01",0L,"D",0L,"2022-01-01"),
+                        row("cursor","2021-05-05",0L,"B",0L,"2021-05-05"))
+  expect_equal(e$first_seen_date, "2021-05-05"); expect_equal(e$first_seen_censored, 0L)
+})
+
+test_that("reducer: an exact LATER than a floor is a contradiction - keep the floor and warn", {
+  expect_warning(
+    o <- ai_onset_reducer(row("claude","2023-01-01",1L,"D",0L,"2023-01-01"),   # floor <= 2023-01-01
+                          row("claude","2024-05-05",0L,"B",0L,"2024-05-05")),   # exact 2024 (contradicts)
+    "contradiction")
+  expect_equal(o$first_seen_date, "2023-01-01"); expect_equal(o$first_seen_censored, 1L)
+})
+
+test_that("reducer keeps distinct tools as distinct rows", {
+  o <- ai_onset_reducer(row("claude","2024-01-01",0L,"A",0L,"2024-01-01"),
+                        row("cursor","2024-02-01",0L,"D",0L,"2024-02-01"))
+  expect_equal(nrow(o), 2)
+})

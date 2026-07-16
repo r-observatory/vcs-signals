@@ -133,3 +133,38 @@ order_ai_tools <- function(ai_rows) {
   ord <- order(d, sub$first_seen_censored, rank, sub$tool)
   sub$tool[ord]
 }
+
+#' Reduce one (repo_id, tool) group's rows to a single row by the onset rules.
+.ai_reduce_group <- function(g) {
+  dates <- g$first_seen_date; cens <- as.integer(g$first_seen_censored)
+  ok <- !is.na(dates)
+  dates <- dates[ok]; cens <- cens[ok]
+  exact <- dates[cens == 0L]; floors <- dates[cens == 1L]
+  if (!length(dates)) { fs <- NA_character_; fc <- 0L }
+  else if (!length(exact)) { fs <- min(floors); fc <- 1L }         # floors only
+  else if (!length(floors)) { fs <- min(exact); fc <- 0L }         # exacts only
+  else if (min(exact) <= min(floors)) { fs <- min(exact); fc <- 0L } # exact consistent with floor
+  else {                                                            # exact later than a floor
+    warning(sprintf("ai onset contradiction for %s/%s: exact %s later than floor %s; keeping floor",
+                    g$repo_id[1], g$tool[1], min(exact), min(floors)))
+    fs <- min(floors); fc <- 1L
+  }
+  tiers <- sort(unique(unlist(lapply(g$evidence_tiers, .ai_split_tiers))))
+  lc <- g$last_confirmed_date[!is.na(g$last_confirmed_date)]
+  data.frame(repo_id = g$repo_id[1], tool = g$tool[1], first_seen_date = fs,
+             first_seen_censored = fc,
+             evidence_tiers = if (length(tiers)) paste(tiers, collapse = ",") else NA_character_,
+             authored = as.integer(any(as.integer(g$authored) == 1L)),
+             last_confirmed_date = if (length(lc)) max(lc) else NA_character_,
+             stringsAsFactors = FALSE)
+}
+
+#' Merge prior + incoming vcs_ai_signals rows per (repo_id, tool) by the six
+#' column rules. Read-modify-write: callers write the returned set wholesale.
+ai_onset_reducer <- function(prior_rows, incoming_rows) {
+  all_rows <- rbind(prior_rows, incoming_rows)
+  if (is.null(all_rows) || nrow(all_rows) == 0) return(prior_rows[0, , drop = FALSE])
+  key <- paste(all_rows$repo_id, all_rows$tool, sep = "\r")
+  parts <- lapply(split(all_rows, key), .ai_reduce_group)
+  do.call(rbind, parts)
+}
