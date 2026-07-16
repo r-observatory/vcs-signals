@@ -605,3 +605,45 @@ parse_tree_markers <- function(resp, repos) {
   }
   out
 }
+
+#' One aliased multi-repo query for the oldest 50 PRs per repo (CREATED_AT ASC),
+#' each with author { login __typename } and createdAt, plus pageInfo so the
+#' orchestrator can decide which repos need further paging toward the agent era.
+#' Always page 1: a single shared `after` cursor across aliases is meaningless,
+#' so per-repo follow-up paging is the orchestrator's job (Plan B2).
+build_pr_agent_query <- function(repos) {
+  parts <- vapply(seq_len(nrow(repos)), function(j) {
+    sprintf('r%d: repository(owner: "%s", name: "%s") {
+      pullRequests(first: 50, orderBy: {field: CREATED_AT, direction: ASC}) {
+        pageInfo { endCursor hasNextPage }
+        nodes { author { login __typename } createdAt }
+      }
+    }', j - 1L, repos$owner[j], repos$name[j])
+  }, character(1))
+  sprintf('query { %s }', paste(parts, collapse = "\n"))
+}
+
+#' Demux a build_pr_agent_query response into a named list keyed by repo_id, each
+#' value list(prs = data.frame(login, typename, created_at), has_next). A null
+#' author (deleted account) yields login = NA. __typename is surfaced for
+#' provenance only and never trusted alone - detection is detect_pr_agents(login)
+#' against the allowlist, so Dependabot/renovate/github-actions never flag.
+parse_pr_agents <- function(resp, repos) {
+  empty <- data.frame(login = character(0), typename = character(0),
+                      created_at = character(0), stringsAsFactors = FALSE)
+  out <- vector("list", nrow(repos))
+  names(out) <- repos$repo_id
+  for (j in seq_len(nrow(repos))) {
+    r <- resp$data[[sprintf("r%d", j - 1L)]]
+    if (is.null(r) || is.null(r$pullRequests)) { out[[j]] <- list(prs = empty, has_next = FALSE); next }
+    nodes <- .nn(r$pullRequests$nodes, list())
+    out[[j]] <- list(
+      prs = data.frame(
+        login      = vapply(nodes, function(n) .nn(n$author$login, NA_character_), character(1)),
+        typename   = vapply(nodes, function(n) .nn(n$author[["__typename"]], NA_character_), character(1)),
+        created_at = vapply(nodes, function(n) .nn(n$createdAt, NA_character_), character(1)),
+        stringsAsFactors = FALSE),
+      has_next = isTRUE(r$pullRequests$pageInfo$hasNextPage))
+  }
+  out
+}
