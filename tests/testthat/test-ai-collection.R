@@ -92,3 +92,11 @@ test_that("parse_pr_agents surfaces login+typename, guards null author, never tr
   expect_false(out[["github.com/b/b"]]$has_next)
   expect_equal(nrow(out[["github.com/c/c"]]$prs), 0)                           # null alias guarded
 })
+
+test_that("parse_search_commit reads the earliest-match date, NA on no match or bad body", {
+  body <- '{"total_count":3,"items":[{"commit":{"committer":{"date":"2024-02-15T09:00:00Z"}}}]}'
+  expect_equal(parse_search_commit(body), "2024-02-15T09:00:00Z")
+  expect_true(is.na(parse_search_commit('{"total_count":0,"items":[]}')))
+  expect_true(is.na(parse_search_commit('{"items":[]}')))
+  expect_true(is.na(parse_search_commit('not json at all')))
+})
