@@ -118,3 +118,24 @@ test_that("run_cheap pauses before spending a batch when rate remaining is below
   fr <- read_flagged(file.path(out, "vcs-ai-cheap-0.db"))
   expect_equal(nrow(fr$flagged), 0)
 })
+
+test_that("run_gate unions and dedups cheap partials into one flagged roster", {
+  parts <- tempfile("parts_"); dir.create(parts)
+  write_flagged_partial(file.path(parts, "vcs-ai-cheap-0.db"),
+    data.frame(repo_id = "github.com/a/x", owner = "a", name = "x", node_id = "R_a",
+               is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_,
+               stringsAsFactors = FALSE),
+    data.frame(repo_id = "github.com/a/x", tool = "claude", tier = "D", marker = "CLAUDE.md",
+               agnostic = 0L, stringsAsFactors = FALSE))
+  write_flagged_partial(file.path(parts, "vcs-ai-cheap-1.db"),
+    data.frame(repo_id = "github.com/b/y", owner = "b", name = "y", node_id = "R_b",
+               is_fork = 1L, parent = "up/y", pr_onset_date = "2024-04-01T00:00:00Z",
+               stringsAsFactors = FALSE),
+    data.frame(repo_id = "github.com/b/y", tool = "copilot", tier = "PR", marker = "PR",
+               agnostic = 0L, stringsAsFactors = FALSE))
+  out <- tempfile("out_"); dir.create(out)
+  run_gate(out, parts)
+  fr <- read_flagged(file.path(out, "vcs-ai-flagged-roster.db"))
+  expect_setequal(fr$flagged$repo_id, c("github.com/a/x", "github.com/b/y"))
+  expect_equal(nrow(fr$evidence), 2)
+})

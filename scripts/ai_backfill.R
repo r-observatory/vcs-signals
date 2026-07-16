@@ -181,6 +181,24 @@ run_cheap <- function(io, out_dir, roster_path, i, N, batch_size = TIER_D_BATCH)
                   i, N, nrow(flagged_df), nrow(ev_df)))
 }
 
+# ---- gate -------------------------------------------------------------------
+#' Union every cheap shard's flagged partial into one smaller flagged-roster the deep
+#' matrix shards over. Dedups flagged rows by repo_id and evidence rows by
+#' (repo_id, tool, marker), so a repo split across a shard boundary is folded once.
+run_gate <- function(out_dir, parts_dir) {
+  dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+  parts <- list.files(parts_dir, pattern = "^vcs-ai-cheap-.*\\.db$", full.names = TRUE)
+  fl <- lapply(parts, function(p) read_flagged(p)$flagged)
+  ev <- lapply(parts, function(p) read_flagged(p)$evidence)
+  flagged_df <- if (length(fl)) do.call(rbind, fl) else .ai_empty_flagged()
+  ev_df <- if (length(ev)) do.call(rbind, ev) else .ai_empty_ev()
+  flagged_df <- flagged_df[!duplicated(flagged_df$repo_id), , drop = FALSE]
+  ev_df <- ev_df[!duplicated(paste(ev_df$repo_id, ev_df$tool, ev_df$marker, sep = "\r")), , drop = FALSE]
+  write_flagged_partial(file.path(out_dir, "vcs-ai-flagged-roster.db"), flagged_df, ev_df)
+  message(sprintf("ai gate: %d flagged repos, %d evidence rows across %d shard(s)",
+                  nrow(flagged_df), nrow(ev_df), length(parts)))
+}
+
 # ---- CLI dispatch -----------------------------------------------------------
 main <- function(mode, out_dir) {
   token <- Sys.getenv("VCS_SIGNALS_TOKEN")
@@ -201,6 +219,8 @@ main <- function(mode, out_dir) {
       stop("cheap: VCS_SHARD_I must be in [0, VCS_SHARD_N)")
     roster_dir <- Sys.getenv("VCS_ROSTER", out_dir)
     run_cheap(io, out_dir, file.path(roster_dir, "vcs-ai-roster.db"), i, N)
+  } else if (mode == "gate") {
+    run_gate(out_dir, Sys.getenv("VCS_PARTS", "parts"))
   } else {
     stop("usage: ai_backfill.R [enumerate|cheap|gate|deep|merge]")
   }
