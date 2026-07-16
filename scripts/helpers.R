@@ -350,8 +350,15 @@ ensure_series_schema <- function(con) {
     license TEXT, topics TEXT, is_archived INTEGER, trend_30d REAL,
     pr_merge_ratio INTEGER, median_days_to_close_issue INTEGER, median_days_to_close_pr INTEGER,
     median_open_issue_age_days INTEGER, last_release_date TEXT, median_days_between_releases INTEGER,
+    ai_markers_detected INTEGER, ai_first_tool TEXT, ai_first_date TEXT,
+    ai_tool_count INTEGER, ai_tools TEXT, ai_latest_tool TEXT, ai_latest_date TEXT,
     first_seen TEXT, last_seen TEXT, PRIMARY KEY (package, origin))")
   DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS pipeline_state (key TEXT PRIMARY KEY, value TEXT)")
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_ai_signals (
+    repo_id TEXT NOT NULL, tool TEXT NOT NULL, first_seen_date TEXT,
+    first_seen_censored INTEGER NOT NULL DEFAULT 0, evidence_tiers TEXT,
+    authored INTEGER NOT NULL DEFAULT 0, last_confirmed_date TEXT,
+    PRIMARY KEY (repo_id, tool))")
   invisible(TRUE)
 }
 
@@ -386,7 +393,12 @@ materialize_series <- function(prev_latest, snapshot_long, date) {
 }
 
 build_signals_summary <- function(latest, series, repos, repo_packages, today,
-                                  compute_release_facts = FALSE) {
+                                  compute_release_facts = FALSE, ai_signals = NULL) {
+  ai_roll <- build_ai_rollups(ai_signals)
+  ai_lookup <- function(rid, col) {
+    v <- ai_roll[[col]][ai_roll$repo_id == rid]
+    if (length(v)) v[1] else NA
+  }
   if (nrow(repo_packages) == 0)
     return(data.frame(package = character(), origin = character(), repo_id = character(),
       stars = integer(), forks = integer(), issues_open = integer(), prs_open = integer(),
@@ -394,6 +406,9 @@ build_signals_summary <- function(latest, series, repos, repo_packages, today,
       license = character(), topics = character(), is_archived = integer(), trend_30d = double(),
       pr_merge_ratio = integer(), median_days_to_close_issue = integer(), median_days_to_close_pr = integer(),
       median_open_issue_age_days = integer(), last_release_date = character(), median_days_between_releases = integer(),
+      ai_markers_detected = logical(), ai_first_tool = character(), ai_first_date = character(),
+      ai_tool_count = integer(), ai_tools = character(), ai_latest_tool = character(),
+      ai_latest_date = character(),
       first_seen = character(), last_seen = character(), stringsAsFactors = FALSE))
   val <- function(rid, met) {
     v <- latest$value[latest$repo_id == rid & latest$metric == met]
@@ -442,6 +457,13 @@ build_signals_summary <- function(latest, series, repos, repo_packages, today,
       median_open_issue_age_days = val(rid, "median_open_issue_age_days"),
       last_release_date = last_rel,
       median_days_between_releases = cadence,
+      ai_markers_detected = ai_lookup(rid, "ai_markers_detected"),
+      ai_first_tool = ai_lookup(rid, "ai_first_tool"),
+      ai_first_date = ai_lookup(rid, "ai_first_date"),
+      ai_tool_count = ai_lookup(rid, "ai_tool_count"),
+      ai_tools = ai_lookup(rid, "ai_tools"),
+      ai_latest_tool = ai_lookup(rid, "ai_latest_tool"),
+      ai_latest_date = ai_lookup(rid, "ai_latest_date"),
       first_seen = if (nrow(ra)) ra$first_seen[1] else NA_character_,
       last_seen = if (nrow(ra)) ra$last_seen[1] else NA_character_,
       stringsAsFactors = FALSE)
@@ -642,8 +664,9 @@ export_series_shard <- function(path, rows) {
 }
 
 #' Write a minimal SQLite file containing the vcs_signals_summary, repos,
-#' and repo_packages tables - the published "summary" shard.
-export_summary_shard <- function(path, summary_df, repos_df, repo_packages_df) {
+#' repo_packages, and (when supplied) vcs_ai_signals tables - the published
+#' "summary" shard.
+export_summary_shard <- function(path, summary_df, repos_df, repo_packages_df, ai_signals_df = NULL) {
   if (file.exists(path)) unlink(path)
 
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
@@ -656,6 +679,8 @@ export_summary_shard <- function(path, summary_df, repos_df, repo_packages_df) {
   if (nrow(summary_df) > 0) DBI::dbWriteTable(con, "vcs_signals_summary", summary_df, append = TRUE)
   if (nrow(repos_df) > 0) DBI::dbWriteTable(con, "repos", repos_df, append = TRUE)
   if (nrow(repo_packages_df) > 0) DBI::dbWriteTable(con, "repo_packages", repo_packages_df, append = TRUE)
+  if (!is.null(ai_signals_df) && nrow(ai_signals_df) > 0)
+    DBI::dbWriteTable(con, "vcs_ai_signals", ai_signals_df, append = TRUE)
 
   DBI::dbExecute(con, "VACUUM")
   invisible(NULL)
@@ -858,7 +883,7 @@ protect_history_pull <- function(io, dir) {
     }
   }
   for (nm in c("vcs_signals_summary", "repos", "repo_packages",
-               "series_latest", "pipeline_state")) copy_table(nm)
+               "series_latest", "pipeline_state", "vcs_ai_signals")) copy_table(nm)
   invisible(NULL)
 }
 
@@ -948,10 +973,11 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
   summary_df <- if (DBI::dbExistsTable(con, "vcs_signals_summary")) DBI::dbReadTable(con, "vcs_signals_summary") else data.frame()
   repos_df   <- if (DBI::dbExistsTable(con, "repos")) DBI::dbReadTable(con, "repos") else data.frame()
   rp_df      <- if (DBI::dbExistsTable(con, "repo_packages")) DBI::dbReadTable(con, "repo_packages") else data.frame()
+  ai_df      <- if (DBI::dbExistsTable(con, "vcs_ai_signals")) DBI::dbReadTable(con, "vcs_ai_signals") else data.frame()
 
   summary_shard <- "vcs-signals-summary.db"
   summary_path <- file.path(out_dir, summary_shard)
-  export_summary_shard(summary_path, summary_df, repos_df, rp_df)
+  export_summary_shard(summary_path, summary_df, repos_df, rp_df, ai_df)
   shard_names <- c(shard_names, summary_shard)
 
   # Integrity/completeness core for the PRIMARY published db a downstream
