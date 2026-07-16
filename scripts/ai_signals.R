@@ -55,3 +55,46 @@ scan_ignore_tokens <- function(gitignore_lines, rbuildignore_lines) {
   if (!length(rows)) return(.ai_empty_evidence())
   do.call(rbind, rows)
 }
+
+.ai_rows <- function(tools, tier) {
+  tools <- unique(tools)
+  if (!length(tools)) return(.ai_empty_evidence())
+  data.frame(tool = tools, tier = tier, marker = tier, agnostic = FALSE,
+             stringsAsFactors = FALSE)
+}
+
+#' Tier A: commit author email/login exactly (case-normalized) in the bot
+#' allowlist and not in the denylist.
+match_bot_identity <- function(emails, logins) {
+  ids <- tolower(c(emails %||% character(0), logins %||% character(0)))
+  ids <- ids[!ids %in% tolower(AI_BOT_DENYLIST)]
+  hit <- ids[ids %in% tolower(names(AI_BOT_ALLOWLIST))]
+  if (!length(hit)) return(.ai_empty_evidence())
+  .ai_rows(unname(AI_BOT_ALLOWLIST[match(hit, tolower(names(AI_BOT_ALLOWLIST)))]), "A")
+}
+
+#' Tier B: a commit message matches a canonical AI trailer pattern.
+scan_trailers <- function(messages) {
+  msgs <- tolower(messages %||% character(0))
+  tools <- character(0)
+  for (p in AI_TRAILER_PATTERNS)
+    if (any(grepl(p$pattern, msgs, perl = TRUE))) tools <- c(tools, p$tool)
+  .ai_rows(tools, "B")
+}
+
+#' Tier C: an author display name ends with a known agent suffix.
+match_author_suffix <- function(author_names) {
+  nm <- author_names %||% character(0)
+  tools <- character(0)
+  for (s in AI_AUTHOR_SUFFIXES)
+    if (any(endsWith(trimws(nm), s$suffix))) tools <- c(tools, s$tool)
+  .ai_rows(tools, "C")
+}
+
+#' PR channel: a PR was opened by an allowlisted agent login (exact, lowercase).
+detect_pr_agents <- function(pr_logins) {
+  lg <- tolower(pr_logins %||% character(0))
+  hit <- lg[lg %in% tolower(names(AI_PR_AGENT_LOGINS))]
+  if (!length(hit)) return(.ai_empty_evidence())
+  .ai_rows(unname(AI_PR_AGENT_LOGINS[match(hit, tolower(names(AI_PR_AGENT_LOGINS)))]), "PR")
+}
