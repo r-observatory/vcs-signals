@@ -745,3 +745,58 @@ search_earliest_commit <- function(token, owner, name, query, delay = SEARCH_DEL
   if (!is.null(status) && !identical(as.integer(status), 0L)) return(NA_character_)
   parse_search_commit(paste(out, collapse = "\n"))
 }
+
+#' Cheap Tier-D marker pass over a chunk of repos, batched TIER_D_BATCH at a time. Runs
+#' build_tree_query -> io$graphql -> parse_tree_markers per batch, replicating
+#' collect_batched's halve-and-retry idiom for the aliased-repository shape: a whole-batch
+#' fault (io$graphql throws, null data, or a non-alias-scoped error) halves the batch and
+#' retries; a single-repo batch that still faults is DROPPED (deferred, retried next run),
+#' never recorded as "no markers". A batch whose only errors are alias-scoped NOT_FOUNDs is
+#' parsed - parse_tree_markers already degrades that one repo to empty entries. Returns a
+#' named list keyed by repo_id (a deferred repo is simply absent).
+fetch_tree_markers <- function(io, repos, batch_size = TIER_D_BATCH) {
+  out <- list()
+  queue <- unname(chunk(seq_len(nrow(repos)), batch_size))
+  while (length(queue) > 0) {
+    idx <- queue[[1]]; queue <- queue[-1]
+    sub <- repos[idx, , drop = FALSE]
+    res <- tryCatch(io$graphql(build_tree_query(sub)), error = function(e) list(.err = TRUE))
+    Sys.sleep(BATCH_DELAY_S)
+    ok <- is.list(res) && is.null(res$.err) && !is.null(res$data) &&
+      (is.null(res$errors) || errors_are_alias_not_found(res$errors))
+    if (ok) {
+      parsed <- parse_tree_markers(res, sub)
+      out[names(parsed)] <- parsed
+    } else if (length(idx) > 1) {
+      queue <- c(unname(chunk(idx, ceiling(length(idx) / 2))), queue)   # halve and retry
+    }
+    # a single-repo batch still faulting is dropped (deferred), never written as clean
+  }
+  out
+}
+
+#' Cheap PR-agent pass over a chunk of repos, batched TIER_D_BATCH at a time. Same
+#' halve-and-retry contract as fetch_tree_markers, over build_pr_agent_query /
+#' parse_pr_agents. Page 1 only (oldest 50 PRs, CREATED_AT ASC): a young repo's earliest
+#' agent PR is on page 1 and is the exact onset; per-repo follow-up paging toward the
+#' agent era for large old repos is deferred (Plan C). Returns a named list keyed by
+#' repo_id, each value list(prs, has_next); a deferred repo is absent.
+fetch_pr_agents <- function(io, repos, batch_size = TIER_D_BATCH) {
+  out <- list()
+  queue <- unname(chunk(seq_len(nrow(repos)), batch_size))
+  while (length(queue) > 0) {
+    idx <- queue[[1]]; queue <- queue[-1]
+    sub <- repos[idx, , drop = FALSE]
+    res <- tryCatch(io$graphql(build_pr_agent_query(sub)), error = function(e) list(.err = TRUE))
+    Sys.sleep(BATCH_DELAY_S)
+    ok <- is.list(res) && is.null(res$.err) && !is.null(res$data) &&
+      (is.null(res$errors) || errors_are_alias_not_found(res$errors))
+    if (ok) {
+      parsed <- parse_pr_agents(res, sub)
+      out[names(parsed)] <- parsed
+    } else if (length(idx) > 1) {
+      queue <- c(unname(chunk(idx, ceiling(length(idx) / 2))), queue)
+    }
+  }
+  out
+}
