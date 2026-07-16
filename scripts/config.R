@@ -158,3 +158,19 @@ TIER_PRIORITY <- c(A = 1L, B = 2L, C = 3L, PR = 4L, D = 5L)
 # a budget separate from the GraphQL 5000/hr and from core REST. Each onset
 # search sleeps this long after its request so a gated deep scan stays under it.
 SEARCH_DELAY_S <- 2
+# Repos per aliased tree-marker / PR-login query in the cheap pass. Both queries are
+# execution-heavy server-side (a tree fetch plus 50 PR nodes per alias), so this is
+# kept small like COMMIT_HISTORY_BATCH rather than the 20-40 a cheap connection page
+# can batch. A whole-batch fault halves and retries (fetch_tree_markers / fetch_pr_agents).
+TIER_D_BATCH <- 10L
+# Agent-era boundary. AI coding agents did not open PRs before this date, so an
+# allowlisted agent login on an earlier PR is a login collision, not adoption: it
+# contributes no PR evidence and no PR onset. Full ISO date, compared lexicographically
+# against createdAt (ISO instants sort correctly as strings).
+AI_PR_CUTOFF <- "2023-01-01"
+# GraphQL points left unspent as headroom for the cheap and deep passes, mirroring
+# POINT_RESERVE (the daily pass's reserve). The cheap pass's PR query
+# (pullRequests(first: 50) per alias) is not the ~1-point-per-batch the tree query is, so
+# run_cheap and run_deep both check graphql_rate_remaining(io) against this reserve
+# before spending down the shared token, pausing rather than faulting when it is low.
+AI_POINT_RESERVE <- 1500L

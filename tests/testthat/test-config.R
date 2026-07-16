@@ -12,4 +12,7 @@ test_that("config constants load with expected shape", {
   expect_true(is.character(AI_RULESET_VERSION) && nzchar(AI_RULESET_VERSION))
   expect_identical(unname(TIER_PRIORITY["A"]), 1L)
   expect_true(is.numeric(SEARCH_DELAY_S) && length(SEARCH_DELAY_S) == 1 && SEARCH_DELAY_S > 0)
+  expect_true(is.integer(TIER_D_BATCH) && length(TIER_D_BATCH) == 1 && TIER_D_BATCH > 0)
+  expect_true(is.character(AI_PR_CUTOFF) && grepl("^[0-9]{4}-[0-9]{2}-[0-9]{2}$", AI_PR_CUTOFF))
+  expect_true(is.integer(AI_POINT_RESERVE) && length(AI_POINT_RESERVE) == 1 && AI_POINT_RESERVE > 0)
 })
