@@ -1,11 +1,16 @@
 #!/usr/bin/env Rscript
 # scripts/ai_backfill.R - gated deep-scan AI-tooling-detection backfill for vcs-signals.
 #
-# Five sub-commands, wired together by CI (.github/workflows/ai-backfill.yml):
+# Sub-commands wired together by CI (.github/workflows/ai-backfill.yml, the one-time full
+# onset scan, and .github/workflows/ai-weekly.yml, the weekly incremental that swaps gate for
+# gate-incremental):
 #   enumerate -> full active github roster from the published summary's repos table (one job)
 #   cheap     -> Tier-D marker + PR-agent pass over one mod-N shard, write a flagged partial
 #                (matrix job)
 #   gate      -> union every cheap shard's flagged partials into one flagged-roster (one job)
+#   gate-incremental -> like gate, but narrow the flagged roster to repos carrying a tool not
+#                yet in the published vcs_ai_signals detail (the weekly incremental gate used
+#                by .github/workflows/ai-weekly.yml in place of gate)
 #   deep      -> commit-history onset scan over one mod-N shard of the flagged roster,
 #                build vcs_ai_signals detail rows (matrix job)
 #   merge     -> reconcile node_id identity, reduce prior+incoming onsets, rebuild the
@@ -215,6 +220,54 @@ run_gate <- function(out_dir, parts_dir) {
                   nrow(flagged_df), nrow(ev_df), length(parts)))
 }
 
+#' Read the published vcs_ai_signals detail (the incremental baseline) out of the current
+#' release's summary shard. Returns the typed 0-row frame when no release exists yet (first
+#' ever weekly run) or the table is absent, so the gate treats every flagged repo as new
+#' rather than erroring - absence is never read as "clean".
+.ai_read_published_detail <- function(io, out_dir) {
+  if (!isTRUE(io$download("vcs-signals-summary.db", out_dir))) return(.ai_empty_signals())
+  p <- file.path(out_dir, "vcs-signals-summary.db")
+  con <- DBI::dbConnect(RSQLite::SQLite(), p)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  if (!DBI::dbExistsTable(con, "vcs_ai_signals")) return(.ai_empty_signals())
+  DBI::dbReadTable(con, "vcs_ai_signals")
+}
+
+#' The weekly incremental gate. Unions the cheap partials into the full flagged roster with
+#' run_gate verbatim, then narrows it to only the repos carrying a tool not yet present in the
+#' published vcs_ai_signals detail (select_incremental_repos), so the deep matrix re-onsets
+#' only genuinely new adoptions - re-detecting an already-published tool's ONSET would be a
+#' no-op through ai_onset_reducer. The published detail is the sole baseline (no separate
+#' last-week store). Before narrowing, also computes select_confirmation_rows over the FULL
+#' evidence frame and writes it with export_ai_shard (the same writer run_deep uses) as
+#' out_dir/vcs-ai-shard-confirm.db, so an already-published tool's last_confirmed_date still
+#' advances even though its repo is skipped below - without that, the skip branch would freeze
+#' last_confirmed_date at the onset date forever, since run_deep is the only other path that
+#' stamps it. The name rides run_merge's unchanged vcs-ai-shard-*.db glob (ai_backfill.R:347),
+#' so no merge code changes; only the workflow (Task 4) has to route the file into the merge
+#' job's parts directory. A week with no new adoptions narrows the flagged roster to empty; the
+#' deep matrix then produces empty shards and run_merge folds prior + nothing + confirmations =
+#' prior with last_confirmed refreshed. Rewrites the same vcs-ai-flagged-roster.db the deep
+#' matrix reads, so no downstream job changes to that artifact.
+run_gate_incremental <- function(io, out_dir, parts_dir) {
+  run_gate(out_dir, parts_dir)                       # full flagged roster (B2 verbatim)
+  roster_path <- file.path(out_dir, "vcs-ai-flagged-roster.db")
+  fr <- read_flagged(roster_path)
+  published <- .ai_read_published_detail(io, out_dir)
+  keep <- select_incremental_repos(fr$flagged, fr$evidence, published)
+
+  today <- format(Sys.Date())
+  confirm_rows <- select_confirmation_rows(fr$evidence, published, today)
+  export_ai_shard(file.path(out_dir, "vcs-ai-shard-confirm.db"), confirm_rows)
+
+  flagged_df <- fr$flagged[fr$flagged$repo_id %in% keep, , drop = FALSE]
+  ev_df      <- fr$evidence[fr$evidence$repo_id %in% keep, , drop = FALSE]
+  write_flagged_partial(roster_path, flagged_df, ev_df)
+  message(sprintf(
+    "ai gate (incremental): %d of %d flagged repos carry a new tool since the last publish, %d confirmation rows",
+    nrow(flagged_df), nrow(fr$flagged), nrow(confirm_rows)))
+}
+
 # ---- deep onset shard IO ----------------------------------------------------
 export_ai_shard <- function(path, rows) {
   if (file.exists(path)) unlink(path)
@@ -408,6 +461,8 @@ main <- function(mode, out_dir) {
     run_cheap(io, out_dir, file.path(roster_dir, "vcs-ai-roster.db"), i, N)
   } else if (mode == "gate") {
     run_gate(out_dir, Sys.getenv("VCS_PARTS", "parts"))
+  } else if (mode == "gate-incremental") {
+    run_gate_incremental(io, out_dir, Sys.getenv("VCS_PARTS", "parts"))
   } else if (mode == "deep") {
     i <- suppressWarnings(as.integer(Sys.getenv("VCS_SHARD_I", "0")))
     N <- suppressWarnings(as.integer(Sys.getenv("VCS_SHARD_N", "1")))
@@ -418,7 +473,7 @@ main <- function(mode, out_dir) {
   } else if (mode == "merge") {
     run_merge(io, out_dir, Sys.getenv("VCS_PARTS", "parts"))
   } else {
-    stop("usage: ai_backfill.R [enumerate|cheap|gate|deep|merge]")
+    stop("usage: ai_backfill.R [enumerate|cheap|gate|gate-incremental|deep|merge]")
   }
 }
 

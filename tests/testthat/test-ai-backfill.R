@@ -289,3 +289,127 @@ test_that("run_merge reduces prior onsets against incoming shard partials and re
   expect_equal(got$first_seen_censored, 0L)
   expect_setequal(strsplit(got$evidence_tiers, ",")[[1]], c("A", "D"))
 })
+
+test_that("run_gate_incremental narrows the flagged roster to new-tool repos", {
+  parts <- tempfile("parts_"); dir.create(parts)
+  # Cheap partials: A already-published claude (skip), B new cursor (keep),
+  #                 C already-published claude PLUS a new copilot PR (keep - adopted a 2nd tool).
+  write_flagged_partial(file.path(parts, "vcs-ai-cheap-0.db"),
+    data.frame(repo_id = c("github.com/a/x", "github.com/b/y", "github.com/c/z"),
+               owner = c("a", "b", "c"), name = c("x", "y", "z"),
+               node_id = c("R_a", "R_b", "R_c"), is_fork = 0L,
+               parent = NA_character_, pr_onset_date = NA_character_, stringsAsFactors = FALSE),
+    data.frame(repo_id = c("github.com/a/x", "github.com/b/y", "github.com/c/z", "github.com/c/z"),
+               tool = c("claude", "cursor", "claude", "copilot"),
+               tier = c("D", "D", "D", "PR"),
+               marker = c("CLAUDE.md", ".cursor", "CLAUDE.md", "PR"),
+               agnostic = 0L, stringsAsFactors = FALSE))
+
+  # Published baseline in a fake summary release: A/claude and C/claude already onset.
+  rel <- tempfile("rel_"); dir.create(rel)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel, "vcs-signals-summary.db"))
+  ensure_repo_schema(scon); ensure_series_schema(scon)
+  DBI::dbExecute(scon, "INSERT INTO vcs_ai_signals (repo_id,tool,first_seen_date,first_seen_censored,evidence_tiers,authored,last_confirmed_date) VALUES
+    ('github.com/a/x','claude','2024-01-01',0,'D',0,'2024-01-01'),
+    ('github.com/c/z','claude','2024-02-01',0,'D',0,'2024-02-01')")
+  DBI::dbDisconnect(scon)
+
+  io <- list(download = function(pattern, dir) {
+    f <- list.files(rel, pattern = utils::glob2rx(pattern), full.names = TRUE)
+    if (!length(f)) return(FALSE)
+    file.copy(f, file.path(dir, basename(f)), overwrite = TRUE); TRUE })
+
+  out <- tempfile("out_"); dir.create(out)
+  run_gate_incremental(io, out, parts)
+  fr <- read_flagged(file.path(out, "vcs-ai-flagged-roster.db"))
+  expect_setequal(fr$flagged$repo_id, c("github.com/b/y", "github.com/c/z"))  # A skipped
+  expect_false("github.com/a/x" %in% fr$flagged$repo_id)
+  # C survives with both its evidence rows so the deep pass re-onsets its new copilot.
+  expect_true("copilot" %in% fr$evidence$tool[fr$evidence$repo_id == "github.com/c/z"])
+
+  # A's skipped claude and C's already-published claude both get a confirmation row (their
+  # last_confirmed_date must keep advancing even though A never reaches the deep matrix); B's
+  # cursor and C's copilot are new adoptions, not confirmations, so they get none.
+  ccon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-confirm.db"))
+  on.exit(DBI::dbDisconnect(ccon), add = TRUE)
+  confirm <- DBI::dbReadTable(ccon, "vcs_ai_signals")
+  expect_setequal(paste(confirm$repo_id, confirm$tool),
+                  c("github.com/a/x claude", "github.com/c/z claude"))
+  expect_true(all(is.na(confirm$first_seen_date)))
+})
+
+test_that("run_gate_incremental keeps everything when no published detail exists (first weekly run)", {
+  parts <- tempfile("parts_"); dir.create(parts)
+  write_flagged_partial(file.path(parts, "vcs-ai-cheap-0.db"),
+    data.frame(repo_id = "github.com/a/x", owner = "a", name = "x", node_id = "R_a",
+               is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_,
+               stringsAsFactors = FALSE),
+    data.frame(repo_id = "github.com/a/x", tool = "claude", tier = "D", marker = "CLAUDE.md",
+               agnostic = 0L, stringsAsFactors = FALSE))
+  io <- list(download = function(pattern, dir) FALSE)   # no published release yet
+  out <- tempfile("out_"); dir.create(out)
+  run_gate_incremental(io, out, parts)
+  fr <- read_flagged(file.path(out, "vcs-ai-flagged-roster.db"))
+  expect_equal(fr$flagged$repo_id, "github.com/a/x")    # nothing published -> everything is new
+
+  ccon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-confirm.db"))
+  on.exit(DBI::dbDisconnect(ccon), add = TRUE)
+  expect_equal(nrow(DBI::dbReadTable(ccon, "vcs_ai_signals")), 0)  # nothing to confirm yet
+})
+
+test_that("main dispatches gate-incremental to run_gate_incremental", {
+  rec <- new.env()
+  orig_fn <- run_gate_incremental
+  orig_parts <- Sys.getenv("VCS_PARTS", unset = NA)
+  on.exit({
+    run_gate_incremental <<- orig_fn
+    if (is.na(orig_parts)) Sys.unsetenv("VCS_PARTS") else Sys.setenv(VCS_PARTS = orig_parts)
+  }, add = TRUE)
+
+  run_gate_incremental <<- function(io, out_dir, parts_dir) {
+    rec$hit <- TRUE; rec$out <- out_dir; rec$parts <- parts_dir; invisible(TRUE)
+  }
+  Sys.setenv(VCS_PARTS = "myparts")
+  main("gate-incremental", "myout")
+
+  expect_true(isTRUE(rec$hit))
+  expect_equal(rec$out, "myout")
+  expect_equal(rec$parts, "myparts")   # read from VCS_PARTS, same as the plain gate
+})
+
+test_that("ai-weekly.yml is the 5-job incremental pipeline (Sunday cron, incremental gate, serialized, no year-tag mirror)", {
+  wf <- file.path(.repo_root, ".github", "workflows", "ai-weekly.yml")
+  expect_true(file.exists(wf))
+  txt <- paste(readLines(wf), collapse = "\n")
+
+  # Sunday 07:00 UTC cron + manual dispatch.
+  expect_match(txt, "schedule:", fixed = TRUE)
+  expect_match(txt, 'cron:\\s*"0 7 \\* \\* 0"')
+  expect_match(txt, "workflow_dispatch:", fixed = TRUE)
+
+  # Its own concurrency group, not the backfill's.
+  expect_match(txt, "group:\\s*vcs-signals-ai-weekly")
+
+  # The same five jobs (2-space-indented job keys).
+  for (job in c("\n  enumerate:", "\n  cheap:", "\n  gate:", "\n  deep:", "\n  merge:"))
+    expect_match(txt, job, fixed = TRUE)
+
+  # The gate runs INCREMENTALLY.
+  expect_match(txt, "ai_backfill.R gate-incremental", fixed = TRUE)
+
+  # CI test gate + release guard carried over from ai-backfill.yml.
+  expect_match(txt, "Rscript tests/testthat.R", fixed = TRUE)
+  expect_match(txt, "gh release view current", fixed = TRUE)
+
+  # The deep matrix stays serialized on the shared GraphQL token.
+  expect_match(txt, "max-parallel: 1", fixed = TRUE)
+
+  # The gate's confirmation-row partial is uploaded from the gate job and downloaded into the
+  # merge job's parts directory, so run_merge's unchanged vcs-ai-shard-*.db glob picks it up
+  # and last_confirmed_date keeps advancing for already-published repos skipped from deep.
+  expect_match(txt, "vcs-ai-shard-confirm.db", fixed = TRUE)
+  expect_match(txt, "ai-confirm-shard", fixed = TRUE)
+
+  # AI onsets have no year component, so the year-tag mirror must NOT be present.
+  expect_false(grepl("mirror-year-tags", txt, fixed = TRUE))
+})

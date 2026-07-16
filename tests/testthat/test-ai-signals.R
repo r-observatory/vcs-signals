@@ -341,3 +341,104 @@ test_that("build_onset_map leaves an unresolved onset NA and feeds build_ai_deta
   expect_equal(detail$first_seen_date, "2023-06-01T00:00:00Z")         # tighter (earlier) exact wins
   expect_setequal(strsplit(detail$evidence_tiers, ",")[[1]], c("B", "D"))
 })
+
+test_that("select_incremental_repos keeps only repos with a tool not in the published detail", {
+  flagged <- data.frame(
+    repo_id = c("github.com/a/x", "github.com/b/y", "github.com/c/z"),
+    owner = c("a", "b", "c"), name = c("x", "y", "z"),
+    node_id = c("R_a", "R_b", "R_c"), is_fork = 0L,
+    parent = NA_character_, pr_onset_date = NA_character_, stringsAsFactors = FALSE)
+  evidence <- data.frame(
+    repo_id = c("github.com/a/x", "github.com/b/y", "github.com/c/z", "github.com/c/z"),
+    tool = c("claude", "cursor", "claude", "copilot"),
+    tier = c("D", "D", "D", "PR"),
+    marker = c("CLAUDE.md", ".cursor", "CLAUDE.md", "PR"),
+    agnostic = 0L, stringsAsFactors = FALSE)
+  # A/claude and C/claude are already published; B/cursor and C/copilot are new.
+  published <- data.frame(
+    repo_id = c("github.com/a/x", "github.com/c/z"), tool = c("claude", "claude"),
+    first_seen_date = c("2024-01-01", "2024-02-01"), first_seen_censored = 0L,
+    evidence_tiers = "D", authored = 0L, last_confirmed_date = c("2024-01-01", "2024-02-01"),
+    stringsAsFactors = FALSE)
+
+  keep <- select_incremental_repos(flagged, evidence, published)
+  expect_setequal(keep, c("github.com/b/y", "github.com/c/z"))  # B new tool, C adopted a 2nd
+  expect_false("github.com/a/x" %in% keep)                      # all A's tools already onset
+})
+
+test_that("select_incremental_repos treats an empty published detail as everything-is-new", {
+  flagged <- data.frame(repo_id = "github.com/a/x", owner = "a", name = "x",
+                        node_id = "R_a", is_fork = 0L, parent = NA_character_,
+                        pr_onset_date = NA_character_, stringsAsFactors = FALSE)
+  evidence <- data.frame(repo_id = "github.com/a/x", tool = "claude", tier = "D",
+                         marker = "CLAUDE.md", agnostic = 0L, stringsAsFactors = FALSE)
+  keep <- select_incremental_repos(flagged, evidence, .ai_empty_signals())
+  expect_equal(keep, "github.com/a/x")
+})
+
+test_that("select_incremental_repos treats a newly-adopted agents-md as a new tool (no special-casing)", {
+  flagged <- data.frame(repo_id = "github.com/a/x", owner = "a", name = "x",
+                        node_id = "R_a", is_fork = 0L, parent = NA_character_,
+                        pr_onset_date = NA_character_, stringsAsFactors = FALSE)
+  evidence <- data.frame(repo_id = "github.com/a/x", tool = "agents-md", tier = "D",
+                         marker = "AGENTS.md", agnostic = 1L, stringsAsFactors = FALSE)
+  # agents-md not yet published -> selected; then published -> not re-selected.
+  expect_equal(select_incremental_repos(flagged, evidence, .ai_empty_signals()),
+               "github.com/a/x")
+  published <- data.frame(repo_id = "github.com/a/x", tool = "agents-md",
+                          first_seen_date = "2024-01-01", first_seen_censored = 0L,
+                          evidence_tiers = "D", authored = 0L,
+                          last_confirmed_date = "2024-01-01", stringsAsFactors = FALSE)
+  expect_equal(select_incremental_repos(flagged, evidence, published), character(0))
+})
+
+test_that("select_confirmation_rows emits last-confirmed-only rows for already-published tools still detected", {
+  evidence <- data.frame(
+    repo_id = c("github.com/a/x", "github.com/b/y", "github.com/c/z", "github.com/c/z"),
+    tool = c("claude", "cursor", "claude", "copilot"),
+    tier = c("D", "D", "D", "PR"),
+    marker = c("CLAUDE.md", ".cursor", "CLAUDE.md", "PR"),
+    agnostic = 0L, stringsAsFactors = FALSE)
+  # A/claude and C/claude are already published; B/cursor and C/copilot are new (no
+  # confirmation row for those - select_incremental_repos already re-onsets them).
+  published <- data.frame(
+    repo_id = c("github.com/a/x", "github.com/c/z"), tool = c("claude", "claude"),
+    first_seen_date = c("2024-01-01", "2024-02-01"), first_seen_censored = 0L,
+    evidence_tiers = "D", authored = 0L, last_confirmed_date = c("2024-01-01", "2024-02-01"),
+    stringsAsFactors = FALSE)
+
+  rows <- select_confirmation_rows(evidence, published, "2026-07-16")
+  expect_setequal(paste(rows$repo_id, rows$tool),
+                  c("github.com/a/x claude", "github.com/c/z claude"))
+  expect_true(all(is.na(rows$first_seen_date)))
+  expect_true(all(is.na(rows$evidence_tiers)))
+  expect_equal(rows$first_seen_censored, c(0L, 0L))
+  expect_equal(rows$authored, c(0L, 0L))
+  expect_equal(rows$last_confirmed_date, rep("2026-07-16", 2))
+})
+
+test_that("select_confirmation_rows returns the empty 7-col frame when nothing is published yet", {
+  evidence <- data.frame(repo_id = "github.com/a/x", tool = "claude", tier = "D",
+                         marker = "CLAUDE.md", agnostic = 0L, stringsAsFactors = FALSE)
+  rows <- select_confirmation_rows(evidence, .ai_empty_signals(), "2026-07-16")
+  expect_equal(nrow(rows), 0)
+  expect_equal(names(rows), names(.ai_empty_signals()))
+})
+
+test_that("a confirmation row reduces against the prior published row: onset frozen, last_confirmed advances", {
+  prior <- data.frame(repo_id = "github.com/a/x", tool = "claude",
+                      first_seen_date = "2024-01-01", first_seen_censored = 0L,
+                      evidence_tiers = "D", authored = 0L,
+                      last_confirmed_date = "2024-01-01", stringsAsFactors = FALSE)
+  evidence <- data.frame(repo_id = "github.com/a/x", tool = "claude", tier = "D",
+                         marker = "CLAUDE.md", agnostic = 0L, stringsAsFactors = FALSE)
+  confirm <- select_confirmation_rows(evidence, prior, "2026-07-16")
+
+  reduced <- ai_onset_reducer(prior, confirm)
+  expect_equal(nrow(reduced), 1)
+  expect_equal(reduced$first_seen_date, "2024-01-01")      # immutable onset untouched
+  expect_equal(reduced$first_seen_censored, 0L)
+  expect_equal(reduced$evidence_tiers, "D")                # prior tier preserved
+  expect_equal(reduced$authored, 0L)
+  expect_equal(reduced$last_confirmed_date, "2026-07-16")  # advances via max()
+})
