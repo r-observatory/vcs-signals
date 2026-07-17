@@ -33,6 +33,75 @@ classify_tree_markers <- function(root_entries, github_entries) {
   do.call(rbind, rows)
 }
 
+# ---- Development-tooling classifier (pure, no I/O) --------------------------
+# Parallel to classify_tree_markers, but the output shape is DIFFERENT: one WIDE row (one 0/1
+# INTEGER per DEV_TOOLING_MARKERS col, plus a readme_source enum and a has_ci rollup), not one
+# row per matched marker. The column set is derived from DEV_TOOLING_MARKERS so the classifier,
+# the DDL (dev_tooling_create_sql), and the empty helper (.devtool_empty) cannot drift. This
+# reads DEV_TOOLING_MARKERS directly and does NOT route through ai_deliberate_markers(): that
+# ambient filter is AI-only, and ambient markers (.positai) ARE dev-tooling evidence.
+
+#' The flag column names, in DEV_TOOLING_MARKERS order. Config-derived.
+dev_tooling_marker_cols <- function() vapply(DEV_TOOLING_MARKERS, function(m) m$col, character(1))
+
+#' The full classifier output column order: the flag cols plus the two computed columns.
+dev_tooling_columns <- function() c(dev_tooling_marker_cols(), "readme_source", "has_ci")
+
+#' Typed 0-row frame with the IDENTICAL column set/types classify_dev_tooling produces.
+.devtool_empty <- function() {
+  base <- setNames(replicate(length(dev_tooling_marker_cols()), integer(0), simplify = FALSE),
+                   dev_tooling_marker_cols())
+  do.call(data.frame, c(base, list(readme_source = character(0), has_ci = integer(0),
+                                    stringsAsFactors = FALSE)))
+}
+
+#' One wide presence row from a repo's root and .github tree entry names. Each flag is 1 if ANY
+#' of its paths is present in the location(s) it names (endsWith for match == "suffix", e.g.
+#' *.Rproj). readme_source is the authoring-source enum (qmd > rmd > md > none, root-only, since
+#' the .Rmd/.qmd variants are .Rbuildignore-stripped). has_ci is the OR of the ci_* systems.
+#' Pure: no network, no file reads. NULL inputs guard to character(0) like classify_tree_markers.
+classify_dev_tooling <- function(root_entries, github_entries) {
+  root_entries <- root_entries %||% character(0)
+  github_entries <- github_entries %||% character(0)
+  hit <- function(m) {
+    hay <- switch(m$location %||% "root",
+                  root   = root_entries,
+                  github = github_entries,
+                  both   = c(root_entries, github_entries))
+    if (identical(m$match %||% "exact", "suffix"))
+      any(vapply(m$paths, function(p) any(endsWith(hay, p)), logical(1)))
+    else any(m$paths %in% hay)
+  }
+  flags <- vapply(DEV_TOOLING_MARKERS, function(m) as.integer(isTRUE(hit(m))), integer(1))
+  names(flags) <- dev_tooling_marker_cols()
+  row <- as.data.frame(as.list(flags), stringsAsFactors = FALSE)
+  row$readme_source <-
+    if ("README.qmd" %in% root_entries) "qmd"
+    else if ("README.Rmd" %in% root_entries) "rmd"
+    else if ("README.md" %in% root_entries) "md"
+    else "none"
+  ci_cols <- grep("^ci_", names(flags), value = TRUE)
+  row$has_ci <- as.integer(any(flags[ci_cols] == 1L))
+  row[, dev_tooling_columns(), drop = FALSE]
+}
+
+#' The CREATE TABLE text for vcs_dev_tooling, built from the config so it matches the classifier
+#' column for column. WITHOUT ROWID is deliberate (no other table in this repo uses it): the hot
+#' path is a repo_id point lookup, so the table IS its own b-tree keyed on repo_id and a lookup
+#' is a single covering seek. Emitted inline because the merger copies this CREATE TABLE text
+#' verbatim from sqlite_master (SQLite strips IF NOT EXISTS but preserves WITHOUT ROWID, and the
+#' merger's rewrite reproduces a valid CREATE TABLE IF NOT EXISTS ... WITHOUT ROWID).
+dev_tooling_create_sql <- function() {
+  marker_ddl <- paste(sprintf("    %s INTEGER", dev_tooling_marker_cols()), collapse = ",\n")
+  sprintf("CREATE TABLE IF NOT EXISTS vcs_dev_tooling (
+    repo_id TEXT NOT NULL,
+    last_scanned TEXT,
+%s,
+    readme_source TEXT,
+    has_ci INTEGER,
+    PRIMARY KEY (repo_id)) WITHOUT ROWID", marker_ddl)
+}
+
 #' The real repository path for a Tier-D config marker's entry name. AI_MARKERS records the
 #' bare entry NAME (matched against tree entry names in classify_tree_markers), but a marker
 #' whose location is "github" actually lives under .github/ in the repo
