@@ -296,8 +296,12 @@ export_ai_shard <- function(path, rows) {
 #'       Task 7): when the budget is below AI_POINT_RESERVE, pause the shard rather than
 #'       let fetch_marker_onset fail closed to NA onset rows that never recover across
 #'       deterministic re-runs;
-#'   (1) page each Tier-D marker's onset to genesis (fetch_marker_onset, exact, GraphQL
-#'       budget) - a fault leaves that marker's onset NA (build_ai_detail tolerates it);
+#'   (1) date each COMMITTED Tier-D marker exactly by paging its REAL repo path's history
+#'       (marker_repo_path prepends .github/ for a github-located marker; fetch_marker_onset,
+#'       GraphQL budget) - a fault leaves that marker's onset NA (build_ai_detail tolerates
+#'       it). An IGNORE-TOKEN marker names a .gitignore/.Rbuildignore entry, not a committed
+#'       path, so it is NOT queried; it takes an honest censored floor of today via
+#'       build_onset_map;
 #'   (2) for each flagged bot-identity tool, one author-email commit search (io$search,
 #'       REST-search budget) - a hit is an EXACT Tier-A onset and adds a Tier-A evidence
 #'       row (authored = 1, since an author-email match means the bot itself authored the
@@ -330,13 +334,27 @@ run_deep <- function(io, out_dir, roster_path, i, N,
     if (nrow(ev) == 0) next
     ev$authored <- 0L   # only a Tier-A author-email hit below sets authored = 1
 
-    # (1) Tier-D marker onsets (exact).
-    marker_paths <- unique(sub("^ignore:", "", ev$marker[ev$tier == "D"]))
+    # (1) Tier-D onsets, keyed by the FULL evidence marker string. A COMMITTED marker (its
+    #     marker is the tree entry name) is dated exactly by paging its REAL repo path's
+    #     history - marker_repo_path prepends .github/ for a github-located marker, which
+    #     GraphQL history(path:) resolves for files, nested paths, and directories alike. An
+    #     IGNORE-TOKEN marker ("ignore:<path>") names a .gitignore/.Rbuildignore entry, not a
+    #     committed path, so its history cannot be dated: it takes an honest censored floor of
+    #     today (build_onset_map stamps first_seen_censored = 1), and no history call is spent
+    #     on a path that does not exist in the tree.
     marker_dates <- list()
-    for (path in marker_paths) {
-      d <- tryCatch(fetch_marker_onset(io, owner, name, path, delay = marker_delay),
+    for (marker in unique(ev$marker[ev$tier == "D"])) {
+      if (startsWith(marker, "ignore:")) {
+        # End-of-day instant so a same-day committed exact (e.g. "...T10:00:00Z") sorts
+        # BEFORE this floor and correctly dominates it in the reducer; a bare date-only
+        # "today" would be a lexicographic prefix of any same-day instant and wrongly win.
+        # (`today` itself stays date-only for the last_confirmed stamp below.)
+        marker_dates[[marker]] <- paste0(today, "T23:59:59Z")
+        next
+      }
+      d <- tryCatch(fetch_marker_onset(io, owner, name, marker_repo_path(marker), delay = marker_delay),
                     error = function(e) NA_character_)
-      if (!is.na(d)) marker_dates[[path]] <- d
+      if (!is.na(d)) marker_dates[[marker]] <- d
     }
 
     # (2) Tier-A author-email commit onsets (exact) for flagged bot-identity tools.

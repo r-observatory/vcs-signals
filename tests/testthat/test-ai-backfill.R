@@ -357,6 +357,66 @@ test_that("run_gate_incremental keeps everything when no published detail exists
   expect_equal(nrow(DBI::dbReadTable(ccon, "vcs_ai_signals")), 0)  # nothing to confirm yet
 })
 
+test_that("run_deep dates a github-located marker via its .github/ real path", {
+  out <- tempfile("out_"); dir.create(out)
+  write_flagged_partial(file.path(out, "vcs-ai-flagged-roster.db"),
+    data.frame(repo_id = "github.com/o/cop", owner = "o", name = "cop", node_id = "R_c",
+               is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_,
+               stringsAsFactors = FALSE),
+    data.frame(repo_id = "github.com/o/cop", tool = "copilot", tier = "D",
+               marker = "copilot-instructions.md", agnostic = 0L, stringsAsFactors = FALSE))
+  # The history query resolves ONLY at the real .github/ path; the bare entry name returns
+  # 0 commits (the old bug). A dated onset therefore proves run_deep queried .github/.
+  io <- list(
+    graphql = function(query) {
+      if (grepl("rateLimit", query, fixed = TRUE))
+        return(list(data = list(rateLimit = list(remaining = 5000, resetAt = "2026-07-18T00:00:00Z"))))
+      if (grepl(".github/copilot-instructions.md", query, fixed = TRUE))
+        return(list(data = list(repository = list(defaultBranchRef = list(target = list(
+          history = list(pageInfo = list(endCursor = "", hasNextPage = FALSE),
+            nodes = list(list(committedDate = "2024-05-01T00:00:00Z")))))))))
+      list(data = list(repository = list(defaultBranchRef = list(target = list(
+        history = list(pageInfo = list(endCursor = "", hasNextPage = FALSE), nodes = list()))))))
+    },
+    search = function(owner, name, query, delay = 0) NA_character_)   # copilot has no author-email
+  run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
+           marker_delay = 0, search_delay = 0)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db"))
+  on.exit(DBI::dbDisconnect(scon))
+  got <- DBI::dbReadTable(scon, "vcs_ai_signals")
+  expect_equal(got$tool, "copilot")
+  expect_equal(got$first_seen_date, "2024-05-01T00:00:00Z")   # dated via .github/ real path
+  expect_equal(got$first_seen_censored, 0L)                   # committed marker -> exact
+})
+
+test_that("run_deep gives an ignore-token detection a censored today floor and spends no history call", {
+  out <- tempfile("out_"); dir.create(out)
+  write_flagged_partial(file.path(out, "vcs-ai-flagged-roster.db"),
+    data.frame(repo_id = "github.com/o/ign", owner = "o", name = "ign", node_id = "R_i",
+               is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_,
+               stringsAsFactors = FALSE),
+    data.frame(repo_id = "github.com/o/ign", tool = "claude", tier = "D",
+               marker = "ignore:.claude", agnostic = 0L, stringsAsFactors = FALSE))
+  # A marker-history query for the non-existent ignore path would be wasted: fault it so the
+  # test proves run_deep never issues one. The rateLimit preflight is the only graphql call.
+  io <- list(
+    graphql = function(query) {
+      if (grepl("history", query, fixed = TRUE))
+        stop("marker history queried for an ignore-token detection")
+      list(data = list())   # rateLimit query -> remaining NULL -> Inf, so the preflight passes
+    },
+    search = function(owner, name, query, delay = 0) NA_character_)   # isolate the floor
+  run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
+           marker_delay = 0, search_delay = 0)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db"))
+  on.exit(DBI::dbDisconnect(scon))
+  got <- DBI::dbReadTable(scon, "vcs_ai_signals")
+  expect_equal(got$tool, "claude")
+  expect_equal(got$first_seen_censored, 1L)                       # honest "<= today" floor
+  expect_equal(got$first_seen_date, paste0(format(Sys.Date()), "T23:59:59Z"))  # end-of-day floor
+  expect_equal(got$evidence_tiers, "D")
+})
+
 test_that("main dispatches gate-incremental to run_gate_incremental", {
   rec <- new.env()
   orig_fn <- run_gate_incremental
