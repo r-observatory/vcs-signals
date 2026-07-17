@@ -653,3 +653,46 @@ test_that("ai-weekly.yml is the 5-job incremental pipeline (Sunday cron, increme
   # AI onsets have no year component, so the year-tag mirror must NOT be present.
   expect_false(grepl("mirror-year-tags", txt, fixed = TRUE))
 })
+
+test_that("a daily-style seed + publish preserves an existing vcs_dev_tooling snapshot", {
+  rel <- tempfile("rel_"); dir.create(rel)
+  io <- list(
+    release_exists = function() length(list.files(rel)) > 0,
+    download = function(pattern, dir) {
+      f <- list.files(rel, pattern = utils::glob2rx(pattern), full.names = TRUE)
+      if (!length(f)) return(FALSE)
+      file.copy(f, file.path(dir, basename(f)), overwrite = TRUE); TRUE },
+    upload = function(path) { file.copy(path, file.path(rel, basename(path)), overwrite = TRUE); TRUE })
+
+  # Prior published state carries a dev-tooling row (built by the weekly merge last week).
+  out1 <- tempfile("o1_"); dir.create(out1)
+  con <- DBI::dbConnect(RSQLite::SQLite(), file.path(out1, "w.db"))
+  ensure_repo_schema(con); ensure_series_schema(con)
+  dv <- classify_dev_tooling(c("renv.lock"), c("workflows"))
+  dv$repo_id <- "github.com/o/r"; dv$last_scanned <- "2026-07-10"
+  DBI::dbWriteTable(con, "vcs_dev_tooling",
+                    dv[c("repo_id", "last_scanned", dev_tooling_columns())], append = TRUE)
+  publish(io, con, out1, tag = "current", source_kind = "live", force_full = TRUE)
+  DBI::dbDisconnect(con)
+
+  # A daily run: seed a fresh working DB from the published recent shard, then publish WITHOUT
+  # rebuilding vcs_dev_tooling (the daily/social passes never touch it). Preservation depends on
+  # seed_working_db carrying the table forward so publish() re-embeds it.
+  out2 <- tempfile("o2_"); dir.create(out2)
+  working2 <- file.path(out2, "_working.db")
+  seed_working_db(io, out2, working2)
+  con2 <- DBI::dbConnect(RSQLite::SQLite(), working2)
+  ensure_repo_schema(con2); ensure_series_schema(con2)
+  publish(io, con2, out2, tag = "current", source_kind = "live", touched_years = character(0))
+  DBI::dbDisconnect(con2)
+
+  chk <- tempfile("chk_"); dir.create(chk)
+  io$download("vcs-signals-summary.db", chk)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(chk, "vcs-signals-summary.db"))
+  on.exit(DBI::dbDisconnect(scon), add = TRUE)
+  got <- DBI::dbReadTable(scon, "vcs_dev_tooling")
+  expect_equal(nrow(got), 1)                       # NOT blanked
+  expect_equal(got$repo_id, "github.com/o/r")
+  expect_equal(got$has_renv, 1L)
+  expect_equal(got$has_ci, 1L)
+})
