@@ -397,6 +397,10 @@ ensure_series_schema <- function(con) {
     first_seen_censored INTEGER NOT NULL DEFAULT 0, evidence_tiers TEXT,
     authored INTEGER NOT NULL DEFAULT 0, last_confirmed_date TEXT,
     PRIMARY KEY (repo_id, tool))")
+  # Dev-tooling presence snapshot, one wide row per repo. WITHOUT ROWID is deliberate (see
+  # dev_tooling_create_sql): a repo_id point lookup is a single covering seek. The DDL is
+  # config-derived so it cannot drift from classify_dev_tooling.
+  DBI::dbExecute(con, dev_tooling_create_sql())
   invisible(TRUE)
 }
 

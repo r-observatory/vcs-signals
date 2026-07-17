@@ -86,3 +86,11 @@ test_that("classifier, empty helper, and DDL share one config-derived column set
   sql <- DBI::dbGetQuery(con, "SELECT sql FROM sqlite_master WHERE name = 'vcs_dev_tooling'")$sql
   expect_true(grepl("WITHOUT ROWID", sql, ignore.case = TRUE))
 })
+
+test_that("ensure_series_schema creates vcs_dev_tooling with the config-derived columns", {
+  con <- new_test_db()
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  expect_true(DBI::dbExistsTable(con, "vcs_dev_tooling"))
+  expect_identical(DBI::dbListFields(con, "vcs_dev_tooling"),
+                   c("repo_id", "last_scanned", dev_tooling_columns()))
+})
