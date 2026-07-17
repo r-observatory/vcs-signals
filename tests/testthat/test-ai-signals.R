@@ -469,3 +469,31 @@ test_that("marker_repo_path prepends .github/ only for github-located markers", 
   # an unknown marker (not in AI_MARKERS) is returned verbatim
   expect_equal(marker_repo_path("not-a-marker"), "not-a-marker")
 })
+
+test_that("ai_deliberate_markers drops ambient markers and keeps the deliberate ones", {
+  paths <- vapply(ai_deliberate_markers(), function(m) m$path, character(1))
+  expect_false(".positai" %in% paths)        # ambient: excluded from the AI signal
+  expect_true("CLAUDE.md" %in% paths)         # deliberate (no class field) kept
+  expect_true("AGENTS.md" %in% paths)         # agnostic but deliberate -> kept
+})
+
+test_that("scan_ignore_tokens never emits an ambient .positai token", {
+  # .positai is registered in AI_MARKERS (for the future dev-tooling signal) but ambient,
+  # so a .Rbuildignore ^\.positai$ entry must produce NO AI evidence.
+  out <- scan_ignore_tokens(character(0), c("^\\.positai$", ".aiderignore"))
+  expect_false("positron" %in% out$tool)      # ambient excluded
+  expect_true("aider" %in% out$tool)          # a real deliberate token still fires
+})
+
+test_that("classify_tree_markers never emits an ambient .positai entry", {
+  out <- classify_tree_markers(c(".positai", "CLAUDE.md"), character(0))
+  expect_setequal(out$tool, "claude")         # .positai dropped, CLAUDE.md kept
+})
+
+test_that("assemble_repo_evidence excludes an ambient-only repo from the AI signal", {
+  tree <- list(root_entries = character(0), github_entries = character(0),
+               gitignore_lines = character(0), rbuildignore_lines = c("^\\.positai$"))
+  ev <- assemble_repo_evidence(tree, NULL)
+  expect_equal(nrow(ev), 0)                    # never flagged, never reaches the threshold/rollups
+  expect_false(repo_has_ai_signal(ev))
+})

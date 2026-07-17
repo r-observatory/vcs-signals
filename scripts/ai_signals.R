@@ -7,13 +7,21 @@ if (!exists("%||%")) `%||%` <- function(a, b) if (is.null(a)) b else a
   data.frame(tool = character(), tier = character(), marker = character(),
              agnostic = logical(), stringsAsFactors = FALSE)
 
+#' The deliberate-adoption subset of AI_MARKERS: every marker whose class is not "ambient".
+#' Ambient markers (an IDE writes them regardless of AI use, e.g. .positai) are excluded from
+#' the AI evidence entirely - they must never reach the naming threshold, the rollups, or the
+#' tool set. A marker with no `class` field defaults to "deliberate", so the existing markers
+#' are unaffected. Recording ambient markers as a dev-tooling datum is a separate signal. Pure.
+ai_deliberate_markers <- function(markers = AI_MARKERS)
+  Filter(function(m) !identical(m$class %||% "deliberate", "ambient"), markers)
+
 #' Tier-D config markers present in the repo's root tree entry names and its
 #' .github tree entry names (both files and dirs appear as entry names). One
 #' row per matched marker; agnostic flags the tool-agnostic AGENTS.md.
 classify_tree_markers <- function(root_entries, github_entries) {
   root_entries <- root_entries %||% character(0)
   github_entries <- github_entries %||% character(0)
-  rows <- lapply(AI_MARKERS, function(m) {
+  rows <- lapply(ai_deliberate_markers(), function(m) {
     present <- if (identical(m$location, "github")) m$path %in% github_entries
                else m$path %in% root_entries
     if (!present) return(NULL)
@@ -58,7 +66,7 @@ scan_ignore_tokens <- function(gitignore_lines, rbuildignore_lines) {
                           rbuildignore_lines %||% character(0)),
                         .ai_norm_ignore, character(1)))
   toks <- toks[nzchar(toks)]
-  rows <- lapply(AI_MARKERS, function(m) {
+  rows <- lapply(ai_deliberate_markers(), function(m) {
     if (isTRUE(m$agnostic)) return(NULL)      # AGENTS.md token is too generic to trust in ignore files
     if (!(m$path %in% toks)) return(NULL)
     data.frame(tool = m$tool, tier = "D", marker = paste0("ignore:", m$path),
