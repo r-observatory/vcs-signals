@@ -25,6 +25,19 @@ classify_tree_markers <- function(root_entries, github_entries) {
   do.call(rbind, rows)
 }
 
+#' The real repository path for a Tier-D config marker's entry name. AI_MARKERS records the
+#' bare entry NAME (matched against tree entry names in classify_tree_markers), but a marker
+#' whose location is "github" actually lives under .github/ in the repo
+#' (copilot-instructions.md -> .github/copilot-instructions.md), so paging its commit history
+#' must use that real path. A root-located marker's path is its name unchanged, and a
+#' directory needs no special handling (GraphQL history(path:) resolves a directory path
+#' directly). An unknown marker (not in AI_MARKERS) is returned verbatim. Pure.
+marker_repo_path <- function(marker) {
+  m <- Find(function(x) identical(x$path, marker), AI_MARKERS)
+  if (is.null(m)) return(marker)
+  if (identical(m$location, "github")) paste0(".github/", m$path) else m$path
+}
+
 #' Normalize one ignore-file line to a bare token: strip inline comment, leading
 #' "./", regex anchors, surrounding whitespace, and one trailing "/" or "*".
 .ai_norm_ignore <- function(line) {

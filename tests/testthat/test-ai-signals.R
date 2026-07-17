@@ -442,3 +442,15 @@ test_that("a confirmation row reduces against the prior published row: onset fro
   expect_equal(reduced$authored, 0L)
   expect_equal(reduced$last_confirmed_date, "2026-07-16")  # advances via max()
 })
+
+test_that("marker_repo_path prepends .github/ only for github-located markers", {
+  # github-located file marker: its real repo path lives under .github/
+  expect_equal(marker_repo_path("copilot-instructions.md"), ".github/copilot-instructions.md")
+  # root file marker: unchanged
+  expect_equal(marker_repo_path("CLAUDE.md"), "CLAUDE.md")
+  # root directory marker: unchanged (GraphQL history(path:) resolves a directory directly)
+  expect_equal(marker_repo_path(".claude"), ".claude")
+  expect_equal(marker_repo_path(".cursor"), ".cursor")
+  # an unknown marker (not in AI_MARKERS) is returned verbatim
+  expect_equal(marker_repo_path("not-a-marker"), "not-a-marker")
+})
