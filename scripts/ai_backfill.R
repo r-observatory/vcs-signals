@@ -490,6 +490,28 @@ run_merge <- function(io, out_dir, parts_dir) {
   DBI::dbExecute(con, "DELETE FROM vcs_signals_summary")
   if (nrow(summary_df) > 0) DBI::dbWriteTable(con, "vcs_signals_summary", summary_df, append = TRUE)
 
+  # Dev-tooling presence snapshot: union this dispatch's cheap shards and fold them OVER the prior
+  # published snapshot (carried into con by seed_working_db), keeping the freshest row per repo_id
+  # (incoming wins on a newer last_scanned). This is the spec's per-repo delete-by-repo_id-then-insert
+  # overwrite, done NON-destructively: run_cheap can pause on GraphQL budget and emit a PARTIAL (or
+  # empty) shard, so a whole-table wipe would drop every repo not scanned this dispatch. Folding
+  # preserves un-scanned repos, exactly as ai_onset_reducer protects vcs_ai_signals. A presence
+  # snapshot has no onset reduce and no node_id reconcile. Runs before publish() so it rides the
+  # existing summary/recent embedding. Independent of the AI onset path above.
+  dev_parts <- list.files(parts_dir, pattern = "^vcs-dev-tooling-.*\\.db$", full.names = TRUE)
+  dev_list <- lapply(dev_parts, read_dev_tooling)
+  dev_df <- if (length(dev_list)) do.call(rbind, dev_list) else .devtool_empty_shard()
+  prior_dev <- if (DBI::dbExistsTable(con, "vcs_dev_tooling"))
+    DBI::dbReadTable(con, "vcs_dev_tooling") else .devtool_empty_shard()
+  merged_dev <- rbind(prior_dev, dev_df)
+  # incoming-wins: order by (repo_id, last_scanned) ascending, keep the last (freshest) row per repo
+  merged_dev <- merged_dev[order(merged_dev$repo_id, merged_dev$last_scanned), , drop = FALSE]
+  merged_dev <- merged_dev[!duplicated(merged_dev$repo_id, fromLast = TRUE), , drop = FALSE]
+  DBI::dbExecute(con, "DELETE FROM vcs_dev_tooling")
+  if (nrow(merged_dev) > 0) DBI::dbWriteTable(con, "vcs_dev_tooling", merged_dev, append = TRUE)
+  message(sprintf("ai merge: %d dev-tooling rows (%d incoming across %d shard(s))",
+                  nrow(merged_dev), nrow(dev_df), length(dev_parts)))
+
   message(sprintf("ai merge: %d prior, %d incoming, %d reduced onset rows",
                   nrow(prior), nrow(incoming), nrow(reduced)))
   invisible(publish(io, con, out_dir, tag = "current", source_kind = "live",

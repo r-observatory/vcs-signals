@@ -290,6 +290,123 @@ test_that("run_merge reduces prior onsets against incoming shard partials and re
   expect_setequal(strsplit(got$evidence_tiers, ",")[[1]], c("A", "D"))
 })
 
+test_that("run_merge unions vcs-dev-tooling shards into the republished summary", {
+  # Local-release fake io (upload copies in, download copies out), matching the run_merge test.
+  rel <- tempfile("rel_"); dir.create(rel)
+  io <- list(
+    release_exists = function() length(list.files(rel)) > 0,
+    download = function(pattern, dir) {
+      f <- list.files(rel, pattern = utils::glob2rx(pattern), full.names = TRUE)
+      if (!length(f)) return(FALSE)
+      file.copy(f, file.path(dir, basename(f)), overwrite = TRUE); TRUE },
+    upload = function(path) { file.copy(path, file.path(rel, basename(path)), overwrite = TRUE); TRUE })
+
+  # Establish an initial (empty) release so run_merge's non-force_full publish has assets to pull.
+  out0 <- tempfile("o0_"); dir.create(out0)
+  con0 <- DBI::dbConnect(RSQLite::SQLite(), file.path(out0, "w.db"))
+  ensure_repo_schema(con0); ensure_series_schema(con0)
+  publish(io, con0, out0, tag = "current", source_kind = "live", force_full = TRUE)
+  DBI::dbDisconnect(con0)
+
+  # This week's cheap dev-tooling shard: two repos.
+  parts <- tempfile("parts_"); dir.create(parts)
+  a <- classify_dev_tooling(c("renv.lock", ".lintr"), c("workflows"))
+  a$repo_id <- "github.com/a/x"; a$last_scanned <- "2026-07-17"
+  b <- classify_dev_tooling(c("Dockerfile"), character(0))
+  b$repo_id <- "github.com/b/y"; b$last_scanned <- "2026-07-17"
+  dev <- rbind(a, b)[c("repo_id", "last_scanned", dev_tooling_columns())]
+  write_dev_tooling_partial(file.path(parts, "vcs-dev-tooling-0.db"), dev)
+
+  out <- tempfile("out_"); dir.create(out)
+  run_merge(io, out, parts)   # no deep shards in parts -> AI onset unchanged; dev tooling added
+
+  chk <- tempfile("chk_"); dir.create(chk)
+  io$download("vcs-signals-summary.db", chk)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(chk, "vcs-signals-summary.db"))
+  on.exit(DBI::dbDisconnect(scon), add = TRUE)
+  got <- DBI::dbReadTable(scon, "vcs_dev_tooling")
+  expect_setequal(got$repo_id, c("github.com/a/x", "github.com/b/y"))
+  expect_equal(got$has_ci[got$repo_id == "github.com/a/x"], 1L)          # workflows -> ci
+  expect_equal(got$has_dockerfile[got$repo_id == "github.com/b/y"], 1L)
+})
+
+test_that("run_merge preserves a prior dev-tooling repo absent from this dispatch's shards", {
+  # A partial weekly run (run_cheap paused on budget) scans only some repos; a repo onset last
+  # week but not in this dispatch's shards must SURVIVE the merge, not be wiped by the fold.
+  rel <- tempfile("rel_"); dir.create(rel)
+  io <- list(
+    release_exists = function() length(list.files(rel)) > 0,
+    download = function(pattern, dir) {
+      f <- list.files(rel, pattern = utils::glob2rx(pattern), full.names = TRUE)
+      if (!length(f)) return(FALSE)
+      file.copy(f, file.path(dir, basename(f)), overwrite = TRUE); TRUE },
+    upload = function(path) { file.copy(path, file.path(rel, basename(path)), overwrite = TRUE); TRUE })
+
+  # Prior published state: repo OLD has a dev-tooling row from an earlier week.
+  out0 <- tempfile("o0_"); dir.create(out0)
+  con0 <- DBI::dbConnect(RSQLite::SQLite(), file.path(out0, "w.db"))
+  ensure_repo_schema(con0); ensure_series_schema(con0)
+  old <- classify_dev_tooling(c(".lintr"), character(0))
+  old$repo_id <- "github.com/old/one"; old$last_scanned <- "2026-07-03"
+  DBI::dbWriteTable(con0, "vcs_dev_tooling",
+                    old[c("repo_id", "last_scanned", dev_tooling_columns())], append = TRUE)
+  publish(io, con0, out0, tag = "current", source_kind = "live", force_full = TRUE)
+  DBI::dbDisconnect(con0)
+
+  # This dispatch's shard covers only a DIFFERENT repo NEW.
+  parts <- tempfile("parts_"); dir.create(parts)
+  nw <- classify_dev_tooling(c("Dockerfile"), character(0))
+  nw$repo_id <- "github.com/new/two"; nw$last_scanned <- "2026-07-17"
+  write_dev_tooling_partial(file.path(parts, "vcs-dev-tooling-0.db"),
+                            nw[c("repo_id", "last_scanned", dev_tooling_columns())])
+
+  out <- tempfile("out_"); dir.create(out)
+  run_merge(io, out, parts)
+
+  chk <- tempfile("chk_"); dir.create(chk)
+  io$download("vcs-signals-summary.db", chk)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(chk, "vcs-signals-summary.db"))
+  on.exit(DBI::dbDisconnect(scon), add = TRUE)
+  got <- DBI::dbReadTable(scon, "vcs_dev_tooling")
+  expect_setequal(got$repo_id, c("github.com/old/one", "github.com/new/two"))  # OLD survives
+  expect_equal(got$has_lintr[got$repo_id == "github.com/old/one"], 1L)
+})
+
+test_that("run_merge with zero dev-tooling shards leaves the prior snapshot intact", {
+  # The unwired-backfill / all-shards-paused case: parts_dir has no vcs-dev-tooling-*.db at all.
+  # The empty incoming union must NOT blank the seeded prior snapshot.
+  rel <- tempfile("rel_"); dir.create(rel)
+  io <- list(
+    release_exists = function() length(list.files(rel)) > 0,
+    download = function(pattern, dir) {
+      f <- list.files(rel, pattern = utils::glob2rx(pattern), full.names = TRUE)
+      if (!length(f)) return(FALSE)
+      file.copy(f, file.path(dir, basename(f)), overwrite = TRUE); TRUE },
+    upload = function(path) { file.copy(path, file.path(rel, basename(path)), overwrite = TRUE); TRUE })
+
+  out0 <- tempfile("o0_"); dir.create(out0)
+  con0 <- DBI::dbConnect(RSQLite::SQLite(), file.path(out0, "w.db"))
+  ensure_repo_schema(con0); ensure_series_schema(con0)
+  keep <- classify_dev_tooling(c("renv.lock"), c("workflows"))
+  keep$repo_id <- "github.com/keep/me"; keep$last_scanned <- "2026-07-03"
+  DBI::dbWriteTable(con0, "vcs_dev_tooling",
+                    keep[c("repo_id", "last_scanned", dev_tooling_columns())], append = TRUE)
+  publish(io, con0, out0, tag = "current", source_kind = "live", force_full = TRUE)
+  DBI::dbDisconnect(con0)
+
+  parts <- tempfile("parts_"); dir.create(parts)   # deliberately EMPTY of dev-tooling shards
+  out <- tempfile("out_"); dir.create(out)
+  run_merge(io, out, parts)
+
+  chk <- tempfile("chk_"); dir.create(chk)
+  io$download("vcs-signals-summary.db", chk)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(chk, "vcs-signals-summary.db"))
+  on.exit(DBI::dbDisconnect(scon), add = TRUE)
+  got <- DBI::dbReadTable(scon, "vcs_dev_tooling")
+  expect_equal(nrow(got), 1)                        # NOT blanked by the empty union
+  expect_equal(got$repo_id, "github.com/keep/me")
+})
+
 test_that("run_gate_incremental narrows the flagged roster to new-tool repos", {
   parts <- tempfile("parts_"); dir.create(parts)
   # Cheap partials: A already-published claude (skip), B new cursor (keep),
