@@ -94,3 +94,11 @@ test_that("ensure_series_schema creates vcs_dev_tooling with the config-derived 
   expect_identical(DBI::dbListFields(con, "vcs_dev_tooling"),
                    c("repo_id", "last_scanned", dev_tooling_columns()))
 })
+
+test_that("ai-weekly.yml uploads and downloads the dev-tooling shards", {
+  yml <- readLines(file.path(.repo_root, ".github", "workflows", "ai-weekly.yml"))
+  # The cheap job uploads the new shard glob, and the merge job downloads the artifact.
+  expect_true(any(grepl("vcs-dev-tooling-\\*\\.db", yml)))
+  expect_true(any(grepl("dev-tooling-\\$\\{\\{ matrix.shard \\}\\}", yml)))  # cheap upload name
+  expect_true(any(grepl("pattern: dev-tooling-\\*", yml)))                    # merge download
+})
