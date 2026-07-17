@@ -95,6 +95,11 @@ jobs:
           name: cheap-${{ matrix.shard }}
           path: out/vcs-ai-cheap-*.db
           if-no-files-found: ignore
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dev-tooling-${{ matrix.shard }}
+          path: out/vcs-dev-tooling-*.db
+          if-no-files-found: ignore
 
   gate:
     needs: cheap
@@ -212,6 +217,11 @@ jobs:
         with:
           name: ai-confirm-shard
           path: parts
+      - uses: actions/download-artifact@v8
+        with:
+          path: parts
+          pattern: dev-tooling-*
+          merge-multiple: true
       - name: Merge and publish
         env:
           VCS_SIGNALS_TOKEN: ${{ secrets.VCS_SIGNALS_TOKEN }}

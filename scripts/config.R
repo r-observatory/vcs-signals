@@ -117,6 +117,79 @@ AI_MARKERS <- list(
   list(path = ".positai",        tool = "positron",  kind = "file", location = "root",   agnostic = FALSE, class = "ambient")
 )
 
+# ---- Development-tooling detection (data-only) ----
+# The single source of truth for the vcs_dev_tooling flag column set. Each entry names a
+# table COLUMN (col) and the tree-entry names that satisfy it (paths: a flag is 1 if ANY is
+# present). location = which fetched tree to check ("root" = HEAD:, "github" = HEAD:.github,
+# "both" = either). match = "exact" set-membership by default, or "suffix" (endsWith) for the
+# *.Rproj case. Detection is existence-of-entry-name only; nothing reads file contents. The
+# classifier (classify_dev_tooling), the DDL (dev_tooling_create_sql), and the empty helper
+# (.devtool_empty) are all derived from these col names, so the column set cannot drift.
+# readme_source (TEXT enum) and has_ci (the OR of the ci_* systems) are COMPUTED additions,
+# not entries here. repo_id / last_scanned are stamped by the cheap pass, not by the classifier.
+DEV_TOOLING_MARKERS <- list(
+  # CI / CD: one distinct system per column; has_ci is the producer-computed OR of these.
+  list(col = "ci_github_actions", paths = c("workflows"),          location = "github"),
+  list(col = "ci_gitlab",         paths = c(".gitlab-ci.yml"),     location = "root"),
+  list(col = "ci_travis",         paths = c(".travis.yml"),        location = "root"),
+  list(col = "ci_appveyor",       paths = c("appveyor.yml"),       location = "root"),
+  list(col = "ci_circleci",       paths = c(".circleci"),          location = "root"),
+  list(col = "ci_tic",            paths = c("tic.R"),              location = "root"),
+  list(col = "ci_jenkins",        paths = c("Jenkinsfile"),        location = "root"),
+  list(col = "ci_azure",          paths = c("azure-pipelines.yml"),location = "root"),
+  list(col = "ci_drone",          paths = c(".drone.yml"),         location = "root"),
+  # Maintenance automation.
+  list(col = "has_dependabot",    paths = c("dependabot.yml"),         location = "github"),
+  list(col = "has_renovate",      paths = c("renovate.json"),          location = "both"),
+  list(col = "has_precommit",     paths = c(".pre-commit-config.yaml"),location = "root"),
+  # Lint / format / editor.
+  list(col = "has_lintr",         paths = c(".lintr"),          location = "root"),
+  list(col = "has_air",           paths = c("air.toml"),        location = "root"),
+  list(col = "has_editorconfig",  paths = c(".editorconfig"),   location = "root"),
+  list(col = "has_vscode",        paths = c(".vscode"),         location = "root"),
+  list(col = "has_rproj",         paths = c(".Rproj"),          location = "root", match = "suffix"),
+  list(col = "has_idea",          paths = c(".idea"),           location = "root"),
+  # Ambient IDE marker. Positron writes .positai regardless of AI use, so it is EXCLUDED from
+  # the AI signal; here is where recording it as a dev-tooling datum finally lands.
+  list(col = "has_positron",      paths = c(".positai"),        location = "root"),
+  # Reproducibility / dev-env.
+  list(col = "has_renv",          paths = c("renv.lock", "renv"),               location = "root"),
+  list(col = "has_data_raw",      paths = c("data-raw"),                        location = "root"),
+  list(col = "has_makefile",      paths = c("Makefile"),                        location = "root"),
+  list(col = "has_dockerfile",    paths = c("Dockerfile"),                      location = "root"),
+  list(col = "has_devcontainer",  paths = c(".devcontainer"),                   location = "root"),
+  list(col = "has_nix",           paths = c("flake.nix", "shell.nix", "default.nix"), location = "root"),
+  list(col = "has_binder",        paths = c(".binder", "runtime.txt", "apt.txt"),     location = "root"),
+  list(col = "has_gitpod",        paths = c(".gitpod.yml"),                     location = "root"),
+  # Coverage service.
+  list(col = "has_codecov",       paths = c("codecov.yml", ".codecov.yml"),     location = "root"),
+  list(col = "has_covrignore",    paths = c(".covrignore"),                     location = "root"),
+  # CRAN process. CRAN-SUBMISSION is the current name; CRAN-RELEASE (pre-2021) is not tracked.
+  list(col = "has_cran_comments", paths = c("cran-comments.md"),  location = "root"),
+  list(col = "has_revdep",        paths = c("revdep"),           location = "root"),
+  list(col = "has_cran_submission", paths = c("CRAN-SUBMISSION"),location = "root"),
+  # Docs source (repo-only). readme_source is computed; has_quarto is a flag.
+  list(col = "has_quarto",        paths = c("_quarto.yml"),      location = "root"),
+  # Research / citation / archival.
+  list(col = "has_citation_cff",     paths = c("CITATION.cff"),      location = "root"),
+  list(col = "has_codemeta",         paths = c("codemeta.json"),     location = "root"),
+  list(col = "has_joss",             paths = c("paper.md"),          location = "root"),
+  list(col = "has_zenodo",           paths = c(".zenodo.json"),      location = "root"),
+  list(col = "has_all_contributors", paths = c(".all-contributorsrc"),location = "root"),
+  # Governance / community.
+  list(col = "has_issue_template", paths = c("ISSUE_TEMPLATE", "ISSUE_TEMPLATE.md"), location = "github"),
+  list(col = "has_pr_template",    paths = c("PULL_REQUEST_TEMPLATE.md"),           location = "github"),
+  list(col = "has_funding",        paths = c("FUNDING.yml"),                        location = "github"),
+  list(col = "has_security",       paths = c("SECURITY.md"),                        location = "both"),
+  list(col = "has_codeowners",     paths = c("CODEOWNERS"),                         location = "both"),
+  list(col = "has_support",        paths = c("SUPPORT.md"),                         location = "both"),
+  list(col = "has_governance",     paths = c("GOVERNANCE.md"),                      location = "root"),
+  # Git-structural.
+  list(col = "has_gitattributes",  paths = c(".gitattributes"),         location = "root"),
+  list(col = "has_gitmodules",     paths = c(".gitmodules"),            location = "root"),
+  list(col = "has_blame_ignore",   paths = c(".git-blame-ignore-revs"), location = "root")
+)
+
 # Tier A bot identities: exact, case-normalized email/login match only.
 AI_BOT_ALLOWLIST <- c(
   "noreply@anthropic.com"      = "claude",
