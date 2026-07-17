@@ -300,15 +300,30 @@ test_that("earliest_agent_pr_date returns the earliest post-cutoff agent created
   expect_true(is.na(earliest_agent_pr_date(NULL)))
 })
 
-test_that("build_onset_map maps Tier-D markers and ignore tokens to exact onsets", {
+test_that("build_onset_map keys marker_dates by the full marker; ignore tokens are censored floors", {
   ev <- data.frame(tool = c("claude", "aider"), tier = c("D", "D"),
                    marker = c("CLAUDE.md", "ignore:.aiderignore"),
                    agnostic = c(FALSE, FALSE), stringsAsFactors = FALSE)
   om <- build_onset_map(ev, marker_dates = list("CLAUDE.md" = "2024-02-01T00:00:00Z",
-                                                ".aiderignore" = "2023-11-01T00:00:00Z"))
+                                                "ignore:.aiderignore" = "2026-07-17"))
+  # committed marker -> exact onset
   expect_equal(om$first_seen_date[om$marker == "CLAUDE.md"], "2024-02-01T00:00:00Z")
-  expect_equal(om$first_seen_date[om$marker == "ignore:.aiderignore"], "2023-11-01T00:00:00Z")
-  expect_true(all(om$first_seen_censored == 0L))            # marker onsets are exact
+  expect_equal(om$first_seen_censored[om$marker == "CLAUDE.md"], 0L)
+  # ignore-token marker -> censored "<=" floor (a .Rbuildignore entry names no committed path)
+  expect_equal(om$first_seen_date[om$marker == "ignore:.aiderignore"], "2026-07-17")
+  expect_equal(om$first_seen_censored[om$marker == "ignore:.aiderignore"], 1L)
+})
+
+test_that("build_onset_map keeps a committed marker and an ignore token for one tool distinct", {
+  ev <- data.frame(tool = c("cursor", "cursor"), tier = c("D", "D"),
+                   marker = c(".cursorrules", "ignore:.cursorrules"),
+                   agnostic = c(FALSE, FALSE), stringsAsFactors = FALSE)
+  om <- build_onset_map(ev, marker_dates = list(".cursorrules" = "2024-01-01T00:00:00Z",
+                                                "ignore:.cursorrules" = "2026-07-17"))
+  expect_equal(nrow(om), 2)
+  expect_equal(om$first_seen_censored[om$marker == ".cursorrules"], 0L)          # committed: exact
+  expect_equal(om$first_seen_date[om$marker == ".cursorrules"], "2024-01-01T00:00:00Z")
+  expect_equal(om$first_seen_censored[om$marker == "ignore:.cursorrules"], 1L)   # token: floor
 })
 
 test_that("build_onset_map records a PR onset exact and a commit onset per its confirmed flag", {

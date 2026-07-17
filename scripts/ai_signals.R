@@ -332,8 +332,10 @@ build_ai_detail <- function(repo_id, raw_evidence, onsets, last_confirmed) {
 
 #' Assemble the per-(tool, marker) onset frame build_ai_detail consumes, from a repo's
 #' evidence plus the fetched onset dates. Each evidence row is matched to its onset source
-#' by tier/marker shape: a Tier-D row (marker is a path, or "ignore:<path>") takes
-#' marker_dates[[<path>]] exact; a PR row (marker == "PR") takes pr_date exact; a Tier
+#' by tier/marker shape: a Tier-D row is keyed by its FULL marker string and takes
+#' marker_dates[[<marker>]] - a committed marker (an entry name) exact, an "ignore:<path>"
+#' token as a censored "<=" floor (a .gitignore/.Rbuildignore entry names no committed path
+#' to date). A PR row (marker == "PR") takes pr_date exact; a Tier
 #' A/B/C row (marker == tier) takes commit_onsets for (tool, tier), exact when that onset's
 #' `confirmed` is TRUE (a structured author match or a scan_trailers confirm) else a
 #' censored floor - a fuzzy message-search candidate is never written as an exact immutable
@@ -351,8 +353,12 @@ build_onset_map <- function(evidence, marker_dates = list(),
     tool <- evidence$tool[i]; tier <- evidence$tier[i]; marker <- evidence$marker[i]
     fs <- NA_character_; fc <- 0L
     if (identical(tier, "D")) {
-      path <- sub("^ignore:", "", marker)
-      fs <- if (path %in% names(marker_dates)) marker_dates[[path]] else NA_character_
+      # Keyed by the FULL marker string, so a committed marker and an ignore token for the
+      # same tool never collide on a shared bare path. A committed marker is exact; an
+      # ignore-token marker names a .gitignore/.Rbuildignore entry (no committed path to
+      # date), so its supplied date (today, from run_deep) is a censored "<=" floor.
+      fs <- if (marker %in% names(marker_dates)) marker_dates[[marker]] else NA_character_
+      fc <- if (startsWith(marker, "ignore:")) 1L else 0L
     } else if (identical(tier, "PR")) {
       fs <- pr_date
     } else {
