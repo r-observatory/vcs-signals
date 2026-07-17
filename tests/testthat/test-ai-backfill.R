@@ -437,6 +437,69 @@ test_that("main dispatches gate-incremental to run_gate_incremental", {
   expect_equal(rec$parts, "myparts")   # read from VCS_PARTS, same as the plain gate
 })
 
+test_that("write_dev_tooling_partial / read_dev_tooling round-trip a stamped snapshot row", {
+  p <- tempfile(fileext = ".db")
+  dv <- classify_dev_tooling(c("renv.lock", "Dockerfile"), c("workflows"))
+  dv$repo_id <- "github.com/o/r"; dv$last_scanned <- "2026-07-17"
+  dv <- dv[c("repo_id", "last_scanned", dev_tooling_columns())]
+  write_dev_tooling_partial(p, dv)
+  got <- read_dev_tooling(p)
+  expect_equal(got$repo_id, "github.com/o/r")
+  expect_equal(got$has_renv, 1L)
+  expect_equal(got$has_dockerfile, 1L)
+  expect_equal(got$has_ci, 1L)
+  expect_identical(names(got), c("repo_id", "last_scanned", dev_tooling_columns()))
+})
+
+test_that("read_dev_tooling degrades to a typed empty frame when the table is absent", {
+  p <- tempfile(fileext = ".db")
+  con <- DBI::dbConnect(RSQLite::SQLite(), p); DBI::dbDisconnect(con)  # empty db, no table
+  got <- read_dev_tooling(p)
+  expect_equal(nrow(got), 0)
+  expect_identical(names(got), c("repo_id", "last_scanned", dev_tooling_columns()))
+})
+
+test_that("run_cheap writes a vcs_dev_tooling row for every fetched repo, including non-AI ones", {
+  out <- tempfile("out_"); dir.create(out)
+  roster <- data.frame(
+    repo_id = c("github.com/a/dev", "github.com/b/gone"),
+    owner = c("a", "b"), name = c("dev", "gone"), node_id = c("R_a", "R_b"),
+    done = 0L, stringsAsFactors = FALSE)
+  roster_path <- file.path(out, "vcs-ai-roster.db"); write_ai_roster(roster_path, roster)
+
+  # r0: a real repo with dev tooling (renv.lock + README.Rmd + a .github/workflows dir) but NO
+  #     AI marker. r1: a gone repo -> null GraphQL alias (honest-NA: no dev-tooling row).
+  io <- list(graphql = function(query) {
+    if (grepl("rootTree", query, fixed = TRUE)) {
+      return(list(data = list(
+        r0 = list(isFork = FALSE, parent = NULL,
+                  rootTree = list(entries = list(
+                    list(name = "renv.lock", type = "blob"),
+                    list(name = "README.Rmd", type = "blob"))),
+                  githubTree = list(entries = list(list(name = "workflows", type = "tree"))),
+                  gitignore = NULL, rbuildignore = NULL),
+        r1 = NULL)))
+    }
+    list(data = list(
+      r0 = list(pullRequests = list(pageInfo = list(endCursor = NA, hasNextPage = FALSE), nodes = list())),
+      r1 = list(pullRequests = list(pageInfo = list(endCursor = NA, hasNextPage = FALSE), nodes = list()))))
+  })
+  run_cheap(io, out, roster_path, 0, 1)
+
+  dev <- read_dev_tooling(file.path(out, "vcs-dev-tooling-0.db"))
+  expect_equal(dev$repo_id, "github.com/a/dev")   # assessed
+  expect_equal(dev$has_renv, 1L)
+  expect_equal(dev$ci_github_actions, 1L)
+  expect_equal(dev$has_ci, 1L)
+  expect_equal(dev$readme_source, "rmd")
+  expect_false("github.com/b/gone" %in% dev$repo_id)  # null alias -> honest-NA, no row
+
+  # r0 has no AI marker, so it is NOT in the AI flagged shard: this proves dev tooling is
+  # accumulated BEFORE the repo_has_ai_signal gate, not gated behind it.
+  fr <- read_flagged(file.path(out, "vcs-ai-cheap-0.db"))
+  expect_equal(nrow(fr$flagged), 0)
+})
+
 test_that("ai-weekly.yml is the 5-job incremental pipeline (Sunday cron, incremental gate, serialized, no year-tag mirror)", {
   wf <- file.path(.repo_root, ".github", "workflows", "ai-weekly.yml")
   expect_true(file.exists(wf))

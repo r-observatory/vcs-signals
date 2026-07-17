@@ -146,6 +146,32 @@ read_flagged <- function(path) {
     evidence = if (DBI::dbExistsTable(con, "evidence")) DBI::dbReadTable(con, "evidence") else .ai_empty_ev())
 }
 
+# ---- dev-tooling partial IO -------------------------------------------------
+# A stateless presence snapshot, written as a SEPARATE shard from the AI flagged/evidence
+# partials (those are scoped to the AI-flagged subset by the downstream gate/deep pipeline).
+.devtool_empty_shard <- function() {
+  out <- data.frame(repo_id = character(0), last_scanned = character(0), stringsAsFactors = FALSE)
+  cbind(out, .devtool_empty())
+}
+
+write_dev_tooling_partial <- function(path, dev_df) {
+  if (file.exists(path)) unlink(path)
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  DBI::dbExecute(con, "PRAGMA journal_mode=DELETE")
+  DBI::dbExecute(con, dev_tooling_create_sql())
+  if (nrow(dev_df) > 0) DBI::dbWriteTable(con, "vcs_dev_tooling", dev_df, append = TRUE)
+  DBI::dbExecute(con, "VACUUM")
+  invisible(path)
+}
+
+read_dev_tooling <- function(path) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  if (DBI::dbExistsTable(con, "vcs_dev_tooling")) DBI::dbReadTable(con, "vcs_dev_tooling")
+  else .devtool_empty_shard()
+}
+
 # ---- cheap pass -------------------------------------------------------------
 #' Cheap Tier-D marker + PR-agent pass over one even mod-N shard of the roster. Batches
 #' TIER_D_BATCH repos through fetch_tree_markers + fetch_pr_agents, assembles evidence,
@@ -164,7 +190,8 @@ run_cheap <- function(io, out_dir, roster_path, i, N, batch_size = TIER_D_BATCH)
   mine <- roster[shard_rows(nrow(roster), i, N), , drop = FALSE]
   message(sprintf("ai cheap shard %d/%d: %d of %d repos", i, N, nrow(mine), nrow(roster)))
 
-  flagged <- list(); evrows <- list(); scanned <- 0L
+  flagged <- list(); evrows <- list(); dev_rows <- list(); scanned <- 0L
+  today <- format(Sys.Date())
   for (idx in unname(chunk(seq_len(nrow(mine)), batch_size))) {
     rl <- graphql_rate_remaining(io)
     if (rl < AI_POINT_RESERVE) {
@@ -180,6 +207,16 @@ run_cheap <- function(io, out_dir, roster_path, i, N, batch_size = TIER_D_BATCH)
       rid <- repos$repo_id[r]
       tree <- if (is.null(trees)) NULL else trees[[rid]]
       pr   <- if (is.null(prs)) NULL else prs[[rid]]
+      # Dev-tooling snapshot for EVERY successfully-fetched repo, before the AI-only gate below.
+      # Honest-NA: a repo whose tree channel errored (trees NULL) or whose alias came back null
+      # (parse_tree_markers degrades a gone/private repo to empty entries with is_fork = NA) is
+      # NOT assessed and gets no row - it is deferred, never written as clean all-zeros.
+      if (!is.null(tree) && !is.na(tree$is_fork)) {
+        dv <- classify_dev_tooling(tree$root_entries, tree$github_entries)
+        dv$repo_id <- rid
+        dv$last_scanned <- today
+        dev_rows[[length(dev_rows) + 1L]] <- dv[c("repo_id", "last_scanned", dev_tooling_columns())]
+      }
       if (is.null(tree) && is.null(pr)) next            # both channels errored -> deferred
       ev <- assemble_repo_evidence(tree, pr)
       if (!repo_has_ai_signal(ev)) next
@@ -198,8 +235,10 @@ run_cheap <- function(io, out_dir, roster_path, i, N, batch_size = TIER_D_BATCH)
   flagged_df <- if (length(flagged)) do.call(rbind, flagged) else .ai_empty_flagged()
   ev_df <- if (length(evrows)) do.call(rbind, evrows) else .ai_empty_ev()
   write_flagged_partial(file.path(out_dir, sprintf("vcs-ai-cheap-%d.db", i)), flagged_df, ev_df)
-  message(sprintf("ai cheap shard %d/%d: %d flagged repos, %d evidence rows",
-                  i, N, nrow(flagged_df), nrow(ev_df)))
+  dev_df <- if (length(dev_rows)) do.call(rbind, dev_rows) else .devtool_empty_shard()
+  write_dev_tooling_partial(file.path(out_dir, sprintf("vcs-dev-tooling-%d.db", i)), dev_df)
+  message(sprintf("ai cheap shard %d/%d: %d flagged repos, %d evidence rows, %d dev-tooling rows",
+                  i, N, nrow(flagged_df), nrow(ev_df), nrow(dev_df)))
 }
 
 # ---- gate -------------------------------------------------------------------
