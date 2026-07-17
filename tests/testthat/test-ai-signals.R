@@ -300,15 +300,30 @@ test_that("earliest_agent_pr_date returns the earliest post-cutoff agent created
   expect_true(is.na(earliest_agent_pr_date(NULL)))
 })
 
-test_that("build_onset_map maps Tier-D markers and ignore tokens to exact onsets", {
+test_that("build_onset_map keys marker_dates by the full marker; ignore tokens are censored floors", {
   ev <- data.frame(tool = c("claude", "aider"), tier = c("D", "D"),
                    marker = c("CLAUDE.md", "ignore:.aiderignore"),
                    agnostic = c(FALSE, FALSE), stringsAsFactors = FALSE)
   om <- build_onset_map(ev, marker_dates = list("CLAUDE.md" = "2024-02-01T00:00:00Z",
-                                                ".aiderignore" = "2023-11-01T00:00:00Z"))
+                                                "ignore:.aiderignore" = "2026-07-17"))
+  # committed marker -> exact onset
   expect_equal(om$first_seen_date[om$marker == "CLAUDE.md"], "2024-02-01T00:00:00Z")
-  expect_equal(om$first_seen_date[om$marker == "ignore:.aiderignore"], "2023-11-01T00:00:00Z")
-  expect_true(all(om$first_seen_censored == 0L))            # marker onsets are exact
+  expect_equal(om$first_seen_censored[om$marker == "CLAUDE.md"], 0L)
+  # ignore-token marker -> censored "<=" floor (a .Rbuildignore entry names no committed path)
+  expect_equal(om$first_seen_date[om$marker == "ignore:.aiderignore"], "2026-07-17")
+  expect_equal(om$first_seen_censored[om$marker == "ignore:.aiderignore"], 1L)
+})
+
+test_that("build_onset_map keeps a committed marker and an ignore token for one tool distinct", {
+  ev <- data.frame(tool = c("cursor", "cursor"), tier = c("D", "D"),
+                   marker = c(".cursorrules", "ignore:.cursorrules"),
+                   agnostic = c(FALSE, FALSE), stringsAsFactors = FALSE)
+  om <- build_onset_map(ev, marker_dates = list(".cursorrules" = "2024-01-01T00:00:00Z",
+                                                "ignore:.cursorrules" = "2026-07-17"))
+  expect_equal(nrow(om), 2)
+  expect_equal(om$first_seen_censored[om$marker == ".cursorrules"], 0L)          # committed: exact
+  expect_equal(om$first_seen_date[om$marker == ".cursorrules"], "2024-01-01T00:00:00Z")
+  expect_equal(om$first_seen_censored[om$marker == "ignore:.cursorrules"], 1L)   # token: floor
 })
 
 test_that("build_onset_map records a PR onset exact and a commit onset per its confirmed flag", {
@@ -441,4 +456,44 @@ test_that("a confirmation row reduces against the prior published row: onset fro
   expect_equal(reduced$evidence_tiers, "D")                # prior tier preserved
   expect_equal(reduced$authored, 0L)
   expect_equal(reduced$last_confirmed_date, "2026-07-16")  # advances via max()
+})
+
+test_that("marker_repo_path prepends .github/ only for github-located markers", {
+  # github-located file marker: its real repo path lives under .github/
+  expect_equal(marker_repo_path("copilot-instructions.md"), ".github/copilot-instructions.md")
+  # root file marker: unchanged
+  expect_equal(marker_repo_path("CLAUDE.md"), "CLAUDE.md")
+  # root directory marker: unchanged (GraphQL history(path:) resolves a directory directly)
+  expect_equal(marker_repo_path(".claude"), ".claude")
+  expect_equal(marker_repo_path(".cursor"), ".cursor")
+  # an unknown marker (not in AI_MARKERS) is returned verbatim
+  expect_equal(marker_repo_path("not-a-marker"), "not-a-marker")
+})
+
+test_that("ai_deliberate_markers drops ambient markers and keeps the deliberate ones", {
+  paths <- vapply(ai_deliberate_markers(), function(m) m$path, character(1))
+  expect_false(".positai" %in% paths)        # ambient: excluded from the AI signal
+  expect_true("CLAUDE.md" %in% paths)         # deliberate (no class field) kept
+  expect_true("AGENTS.md" %in% paths)         # agnostic but deliberate -> kept
+})
+
+test_that("scan_ignore_tokens never emits an ambient .positai token", {
+  # .positai is registered in AI_MARKERS (for the future dev-tooling signal) but ambient,
+  # so a .Rbuildignore ^\.positai$ entry must produce NO AI evidence.
+  out <- scan_ignore_tokens(character(0), c("^\\.positai$", ".aiderignore"))
+  expect_false("positron" %in% out$tool)      # ambient excluded
+  expect_true("aider" %in% out$tool)          # a real deliberate token still fires
+})
+
+test_that("classify_tree_markers never emits an ambient .positai entry", {
+  out <- classify_tree_markers(c(".positai", "CLAUDE.md"), character(0))
+  expect_setequal(out$tool, "claude")         # .positai dropped, CLAUDE.md kept
+})
+
+test_that("assemble_repo_evidence excludes an ambient-only repo from the AI signal", {
+  tree <- list(root_entries = character(0), github_entries = character(0),
+               gitignore_lines = character(0), rbuildignore_lines = c("^\\.positai$"))
+  ev <- assemble_repo_evidence(tree, NULL)
+  expect_equal(nrow(ev), 0)                    # never flagged, never reaches the threshold/rollups
+  expect_false(repo_has_ai_signal(ev))
 })

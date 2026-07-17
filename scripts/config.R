@@ -109,7 +109,12 @@ AI_MARKERS <- list(
   list(path = ".amazonq",        tool = "amazonq",   kind = "dir",  location = "root",   agnostic = FALSE),
   list(path = ".roo",            tool = "roo",       kind = "dir",  location = "root",   agnostic = FALSE),
   list(path = ".roomodes",       tool = "roo",       kind = "file", location = "root",   agnostic = FALSE),
-  list(path = "AGENTS.md",       tool = "agents-md", kind = "file", location = "root",   agnostic = TRUE)
+  list(path = "AGENTS.md",       tool = "agents-md", kind = "file", location = "root",   agnostic = TRUE),
+  # Ambient IDE marker: the editor writes .positai regardless of AI use, so it is EXCLUDED
+  # from the AI signal (ai_deliberate_markers). A marker with no class field defaults to
+  # "deliberate". Recording ambient markers as a dev-tooling datum is deferred to the
+  # separate dev-tooling signal.
+  list(path = ".positai",        tool = "positron",  kind = "file", location = "root",   agnostic = FALSE, class = "ambient")
 )
 
 # Tier A bot identities: exact, case-normalized email/login match only.

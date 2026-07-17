@@ -7,13 +7,21 @@ if (!exists("%||%")) `%||%` <- function(a, b) if (is.null(a)) b else a
   data.frame(tool = character(), tier = character(), marker = character(),
              agnostic = logical(), stringsAsFactors = FALSE)
 
+#' The deliberate-adoption subset of AI_MARKERS: every marker whose class is not "ambient".
+#' Ambient markers (an IDE writes them regardless of AI use, e.g. .positai) are excluded from
+#' the AI evidence entirely - they must never reach the naming threshold, the rollups, or the
+#' tool set. A marker with no `class` field defaults to "deliberate", so the existing markers
+#' are unaffected. Recording ambient markers as a dev-tooling datum is a separate signal. Pure.
+ai_deliberate_markers <- function(markers = AI_MARKERS)
+  Filter(function(m) !identical(m$class %||% "deliberate", "ambient"), markers)
+
 #' Tier-D config markers present in the repo's root tree entry names and its
 #' .github tree entry names (both files and dirs appear as entry names). One
 #' row per matched marker; agnostic flags the tool-agnostic AGENTS.md.
 classify_tree_markers <- function(root_entries, github_entries) {
   root_entries <- root_entries %||% character(0)
   github_entries <- github_entries %||% character(0)
-  rows <- lapply(AI_MARKERS, function(m) {
+  rows <- lapply(ai_deliberate_markers(), function(m) {
     present <- if (identical(m$location, "github")) m$path %in% github_entries
                else m$path %in% root_entries
     if (!present) return(NULL)
@@ -23,6 +31,19 @@ classify_tree_markers <- function(root_entries, github_entries) {
   rows <- Filter(Negate(is.null), rows)
   if (!length(rows)) return(.ai_empty_evidence())
   do.call(rbind, rows)
+}
+
+#' The real repository path for a Tier-D config marker's entry name. AI_MARKERS records the
+#' bare entry NAME (matched against tree entry names in classify_tree_markers), but a marker
+#' whose location is "github" actually lives under .github/ in the repo
+#' (copilot-instructions.md -> .github/copilot-instructions.md), so paging its commit history
+#' must use that real path. A root-located marker's path is its name unchanged, and a
+#' directory needs no special handling (GraphQL history(path:) resolves a directory path
+#' directly). An unknown marker (not in AI_MARKERS) is returned verbatim. Pure.
+marker_repo_path <- function(marker) {
+  m <- Find(function(x) identical(x$path, marker), AI_MARKERS)
+  if (is.null(m)) return(marker)
+  if (identical(m$location, "github")) paste0(".github/", m$path) else m$path
 }
 
 #' Normalize one ignore-file line to a bare token: strip inline comment, leading
@@ -45,7 +66,7 @@ scan_ignore_tokens <- function(gitignore_lines, rbuildignore_lines) {
                           rbuildignore_lines %||% character(0)),
                         .ai_norm_ignore, character(1)))
   toks <- toks[nzchar(toks)]
-  rows <- lapply(AI_MARKERS, function(m) {
+  rows <- lapply(ai_deliberate_markers(), function(m) {
     if (isTRUE(m$agnostic)) return(NULL)      # AGENTS.md token is too generic to trust in ignore files
     if (!(m$path %in% toks)) return(NULL)
     data.frame(tool = m$tool, tier = "D", marker = paste0("ignore:", m$path),
@@ -319,8 +340,10 @@ build_ai_detail <- function(repo_id, raw_evidence, onsets, last_confirmed) {
 
 #' Assemble the per-(tool, marker) onset frame build_ai_detail consumes, from a repo's
 #' evidence plus the fetched onset dates. Each evidence row is matched to its onset source
-#' by tier/marker shape: a Tier-D row (marker is a path, or "ignore:<path>") takes
-#' marker_dates[[<path>]] exact; a PR row (marker == "PR") takes pr_date exact; a Tier
+#' by tier/marker shape: a Tier-D row is keyed by its FULL marker string and takes
+#' marker_dates[[<marker>]] - a committed marker (an entry name) exact, an "ignore:<path>"
+#' token as a censored "<=" floor (a .gitignore/.Rbuildignore entry names no committed path
+#' to date). A PR row (marker == "PR") takes pr_date exact; a Tier
 #' A/B/C row (marker == tier) takes commit_onsets for (tool, tier), exact when that onset's
 #' `confirmed` is TRUE (a structured author match or a scan_trailers confirm) else a
 #' censored floor - a fuzzy message-search candidate is never written as an exact immutable
@@ -338,8 +361,12 @@ build_onset_map <- function(evidence, marker_dates = list(),
     tool <- evidence$tool[i]; tier <- evidence$tier[i]; marker <- evidence$marker[i]
     fs <- NA_character_; fc <- 0L
     if (identical(tier, "D")) {
-      path <- sub("^ignore:", "", marker)
-      fs <- if (path %in% names(marker_dates)) marker_dates[[path]] else NA_character_
+      # Keyed by the FULL marker string, so a committed marker and an ignore token for the
+      # same tool never collide on a shared bare path. A committed marker is exact; an
+      # ignore-token marker names a .gitignore/.Rbuildignore entry (no committed path to
+      # date), so its supplied date (today, from run_deep) is a censored "<=" floor.
+      fs <- if (marker %in% names(marker_dates)) marker_dates[[marker]] else NA_character_
+      fc <- if (startsWith(marker, "ignore:")) 1L else 0L
     } else if (identical(tier, "PR")) {
       fs <- pr_date
     } else {
