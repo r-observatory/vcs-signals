@@ -24,12 +24,37 @@ acquire_cran <- function() {
              url_raw = pdb$URL, bugreports_raw = pdb$BugReports, stringsAsFactors = FALSE)
 }
 
-fetch_views <- function(u) {
-  txt <- tryCatch(paste(readLines(url(u), warn = FALSE), collapse = "\n"),
-                  error = function(e) NA_character_)
-  if (is.na(txt) || !grepl("(^|\n)Package:", txt))
-    stop(sprintf("VIEWS fetch failed or empty: %s", u))
-  txt
+# Retry `fn` on error, sleeping VIEWS_RETRY_WAITS_S between attempts. One more
+# attempt is made than there are waits, and the final attempt's error is the one
+# that propagates, so the caller sees the real cause rather than a retry wrapper.
+# sleep and rand are injected so the suite asserts the schedule without waiting.
+with_retry <- function(fn, waits = VIEWS_RETRY_WAITS_S, sleep = Sys.sleep,
+                       rand = function() stats::runif(1, 1, 1.25)) {
+  for (w in waits) {
+    val <- tryCatch(fn(), error = function(e) e)
+    if (!inherits(val, "error")) return(val)
+    sleep(w * rand())
+  }
+  fn()
+}
+
+.read_url <- function(u) paste(readLines(url(u), warn = FALSE), collapse = "\n")
+
+# A 504 arrives as a read error, but a gateway can also answer 200 with an HTML
+# error page, which read.dcf would then parse into a zero-package data frame and
+# silently shrink the universe. Both shapes are treated as a failed attempt and
+# retried; only the URL-naming error escapes.
+fetch_views <- function(u, read = .read_url, ...) {
+  attempt <- function() {
+    txt <- read(u)
+    if (length(txt) != 1L || is.na(txt) || !grepl("(^|\n)Package:", txt))
+      stop("response body is not VIEWS content")
+    txt
+  }
+  tryCatch(
+    with_retry(attempt, ...),
+    error = function(e)
+      stop(sprintf("VIEWS fetch failed or empty: %s (%s)", u, conditionMessage(e))))
 }
 
 acquire_bioc <- function() {
