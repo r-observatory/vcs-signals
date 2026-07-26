@@ -2,6 +2,9 @@ name: update
 on:
   schedule:
     - cron: "30 6 * * *"
+    # Catch-up. Does nothing unless the day's primary run failed to finish, so a
+    # transient upstream outage costs a few hours rather than the whole day.
+    - cron: "30 11 * * *"
   workflow_dispatch:
     inputs:
       force_full_rebuild:
@@ -9,13 +12,60 @@ on:
         default: false
 permissions:
   contents: write
+  actions: read
 concurrency:
   group: vcs-signals-update
   cancel-in-progress: false
 env:
   TZ: UTC
 jobs:
+  # The workflow-level concurrency group means a catch-up run queues behind a
+  # primary that is still going, so by the time this job runs the primary has
+  # always concluded and its result can simply be read off.
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SCHEDULE: ${{ github.event.schedule }}
+          SELF: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # Every trigger except the catch-up cron always runs.
+          if [ "$SCHEDULE" != "30 11 * * *" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Fail OPEN. This runs only on the catch-up cron, which exists because
+          # the day's data is already at risk, so an Actions API blip must not be
+          # what throws the last attempt away. A redundant catch-up costs one run;
+          # a skipped one costs the day.
+          DONE=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow update.yml \
+                   --status success --created "$(date -u +%Y-%m-%d)" --limit 50 \
+                   --json databaseId \
+                   --jq "[.[] | select(.databaseId != $SELF)] | length" 2>/dev/null) || DONE=""
+          case "$DONE" in
+            ''|*[!0-9]*)
+              echo "Could not read today's run history; running the catch-up rather than risking the day."
+              echo "proceed=true" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+          if [ "$DONE" -gt 0 ]; then
+            echo "Today's update already succeeded; nothing to catch up."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "No successful update today; running the catch-up."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          fi
+
   update:
+    needs: guard
+    if: needs.guard.outputs.proceed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:

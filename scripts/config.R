@@ -8,6 +8,15 @@ VIEWS_URLS <- c(
   workflows  = "https://bioconductor.org/packages/release/workflows/VIEWS"
 )
 
+# Backoff between attempts at a VIEWS fetch, in seconds; one more attempt is made
+# than there are waits. bioconductor.org served 504 for at least eight minutes on
+# 2026-07-26 and took the whole daily run down with it, so the schedule is sized
+# to outlast an outage of that length rather than a momentary blip. Holding the
+# runner idle for a quarter hour is far cheaper than forfeiting the day's run.
+# The first wait is deliberately small so a one-off blip costs seconds; the tail
+# is what covers a sustained outage.
+VIEWS_RETRY_WAITS_S <- c(5, 15, 30, 60, 120, 300, 600)
+
 # Known forge domain -> host key. Checked before the denylist so r-forge survives.
 KNOWN_FORGES <- c(
   "github.com" = "github", "gitlab.com" = "gitlab", "codeberg.org" = "codeberg",
