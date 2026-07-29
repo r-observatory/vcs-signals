@@ -696,3 +696,52 @@ test_that("a daily-style seed + publish preserves an existing vcs_dev_tooling sn
   expect_equal(got$has_renv, 1L)
   expect_equal(got$has_ci, 1L)
 })
+
+test_that("a snapshot written under an older flag set still folds", {
+  # The catalogue grows. If the published snapshot and an incoming shard are stacked
+  # with a plain rbind, adding one column takes the whole merge down and the run
+  # publishes nothing. That is a data outage caused by a column.
+  cols  <- c("repo_id", "last_scanned", dev_tooling_columns())
+  mk <- function(cs, id, ts) {
+    d <- as.data.frame(setNames(as.list(rep(NA_integer_, length(cs))), cs),
+                       stringsAsFactors = FALSE)
+    d$repo_id <- id; d$last_scanned <- ts; d
+  }
+  prior <- mk(setdiff(cols, c("has_llms_txt", "has_agent_skills")), "github.com/a/b", "2026-07-26")
+  incoming <- mk(cols, "github.com/c/d", "2026-07-29")
+
+  out <- bind_dev_tooling(prior, incoming)
+  expect_equal(nrow(out), 2L)
+  expect_true(all(cols %in% names(out)))
+
+  # The older row was scanned before the flag existed, so nobody looked. NA says that;
+  # a 0 would be indistinguishable from a real negative and would understate the flag
+  # until every repository is rescanned.
+  old_row <- out[out$repo_id == "github.com/a/b", , drop = FALSE]
+  expect_true(is.na(old_row$has_agent_skills))
+  expect_true(is.na(old_row$has_llms_txt))
+})
+
+test_that("folding keeps a column only the published side knows", {
+  # A rolled-back ruleset must not destroy data it has stopped reading.
+  cols <- c("repo_id", "last_scanned", dev_tooling_columns())
+  mk <- function(cs, id) {
+    d <- as.data.frame(setNames(as.list(rep(NA_integer_, length(cs))), cs),
+                       stringsAsFactors = FALSE)
+    d$repo_id <- id; d$last_scanned <- "2026-07-29"; d
+  }
+  prior <- mk(c(cols, "has_retired_flag"), "github.com/a/b")
+  prior$has_retired_flag <- 1L
+  out <- bind_dev_tooling(prior, mk(cols, "github.com/c/d"))
+  expect_true("has_retired_flag" %in% names(out))
+  expect_equal(out$has_retired_flag[out$repo_id == "github.com/a/b"], 1L)
+})
+
+test_that("folding an empty side is the other side unchanged", {
+  cols <- c("repo_id", "last_scanned", dev_tooling_columns())
+  d <- as.data.frame(setNames(as.list(rep(NA_integer_, length(cols))), cols),
+                     stringsAsFactors = FALSE)
+  d$repo_id <- "github.com/a/b"
+  expect_equal(nrow(bind_dev_tooling(d, .devtool_empty_shard())), 1L)
+  expect_equal(nrow(bind_dev_tooling(.devtool_empty_shard(), d)), 1L)
+})
