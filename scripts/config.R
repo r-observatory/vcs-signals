@@ -108,7 +108,6 @@ AI_MARKERS <- list(
   list(path = ".aiderignore",    tool = "aider",     kind = "file", location = "root",   agnostic = FALSE),
   list(path = "GEMINI.md",       tool = "gemini",    kind = "file", location = "root",   agnostic = FALSE),
   list(path = ".gemini",         tool = "gemini",    kind = "dir",  location = "root",   agnostic = FALSE),
-  list(path = ".agents",         tool = "gemini",    kind = "dir",  location = "root",   agnostic = FALSE),
   list(path = ".aiexclude",      tool = "gemini",    kind = "file", location = "root",   agnostic = FALSE),
   list(path = ".windsurf",       tool = "windsurf",  kind = "dir",  location = "root",   agnostic = FALSE),
   list(path = ".windsurfrules",  tool = "windsurf",  kind = "file", location = "root",   agnostic = FALSE),
@@ -119,11 +118,37 @@ AI_MARKERS <- list(
   list(path = ".roo",            tool = "roo",       kind = "dir",  location = "root",   agnostic = FALSE),
   list(path = ".roomodes",       tool = "roo",       kind = "file", location = "root",   agnostic = FALSE),
   list(path = "AGENTS.md",       tool = "agents-md", kind = "file", location = "root",   agnostic = TRUE),
+  # Agent-neutral instruction files and directories. .agents/ is where every agent
+  # except Claude Code installs project skills (Codex, Cursor, Gemini CLI, OpenCode,
+  # Amp, Cline, Zed, Warp and ~60 more all target it), so attributing it to any one
+  # product would misreport the rest. AGENT.md is the singular spelling; it is used
+  # broadly as a neutral alias rather than by one tool, so it is agnostic like AGENTS.md.
+  list(path = ".agents",         tool = "agents-dir", kind = "dir",  location = "root",  agnostic = TRUE),
+  list(path = ".agents/skills",  tool = "agents-dir", kind = "dir",  location = "root",  agnostic = TRUE),
+  list(path = "AGENT.md",        tool = "agents-md",  kind = "file", location = "root",  agnostic = TRUE),
+  # Claude Code is the one agent with its own project skills directory; the rest use
+  # .agents/skills above. .claude-plugin marks a plugin marketplace published from the repo.
+  list(path = ".claude/skills",  tool = "claude",    kind = "dir",  location = "root",   agnostic = FALSE),
+  list(path = ".claude/agents",  tool = "claude",    kind = "dir",  location = "root",   agnostic = FALSE),
+  list(path = ".claude-plugin",  tool = "claude",    kind = "dir",  location = "root",   agnostic = FALSE),
+  # xAI. These did not exist when the ruleset was written and the methods note still
+  # says Grok leaves nothing durable; it does now.
+  list(path = "GROK.md",         tool = "grok",      kind = "file", location = "root",   agnostic = FALSE),
+  list(path = ".grok",           tool = "grok",      kind = "dir",  location = "root",   agnostic = FALSE),
+  list(path = ".xai",            tool = "grok",      kind = "dir",  location = "root",   agnostic = FALSE),
+  # Google Antigravity, their agentic editor. Jules is not here: it works through pull
+  # requests and is already covered by AI_PR_AGENT_LOGINS.
+  list(path = ".antigravity",    tool = "antigravity", kind = "dir", location = "root",  agnostic = FALSE),
+  # Review agents. A configured reviewer is tooling adoption, and the tool is named on
+  # the surface, so a reader can tell review from authoring.
+  list(path = ".coderabbit.yaml", tool = "coderabbit", kind = "file", location = "root", agnostic = FALSE),
+  list(path = ".coderabbit.yml",  tool = "coderabbit", kind = "file", location = "root", agnostic = FALSE),
   # Ambient IDE marker: the editor writes .positai regardless of AI use, so it is EXCLUDED
   # from the AI signal (ai_deliberate_markers). A marker with no class field defaults to
   # "deliberate". Recording ambient markers as a dev-tooling datum is deferred to the
   # separate dev-tooling signal.
-  list(path = ".positai",        tool = "positron",  kind = "file", location = "root",   agnostic = FALSE, class = "ambient")
+  list(path = ".positai",        tool = "positron",  kind = "file", location = "root",   agnostic = FALSE, class = "ambient"),
+  list(path = ".idx",            tool = "idx",       kind = "dir",  location = "root",   agnostic = FALSE, class = "ambient")
 )
 
 # ---- Development-tooling detection (data-only) ----
@@ -153,7 +178,7 @@ DEV_TOOLING_MARKERS <- list(
   list(col = "has_precommit",     paths = c(".pre-commit-config.yaml"),location = "root"),
   # Lint / format / editor.
   list(col = "has_lintr",         paths = c(".lintr"),          location = "root"),
-  list(col = "has_air",           paths = c("air.toml"),        location = "root"),
+  list(col = "has_air",           paths = c("air.toml", ".air.toml"), location = "root"),
   list(col = "has_editorconfig",  paths = c(".editorconfig"),   location = "root"),
   list(col = "has_vscode",        paths = c(".vscode"),         location = "root"),
   list(col = "has_rproj",         paths = c(".Rproj"),          location = "root", match = "suffix"),
@@ -179,6 +204,14 @@ DEV_TOOLING_MARKERS <- list(
   list(col = "has_cran_submission", paths = c("CRAN-SUBMISSION"),location = "root"),
   # Docs source (repo-only). readme_source is computed; has_quarto is a flag.
   list(col = "has_quarto",        paths = c("_quarto.yml"),      location = "root"),
+  # Documentation written for language models to read. This is the package describing
+  # itself TO a model, not evidence a model worked on it, so it is a practice and never
+  # an AI-tooling marker.
+  list(col = "has_llms_txt",      paths = c("llms.txt", "llms-full.txt"), location = "root"),
+  # Agent skills the package SHIPS. inst/ is installed, so these are a deliverable for
+  # the package's users, the same kind of thing as a vignette. Distinct from the skills
+  # under .claude/ or .agents/, which are what the maintainer used to build it.
+  list(col = "has_agent_skills",  paths = c("inst/skills"),      location = "root"),
   # Research / citation / archival.
   list(col = "has_citation_cff",     paths = c("CITATION.cff"),      location = "root"),
   list(col = "has_codemeta",         paths = c("codemeta.json"),     location = "root"),
@@ -237,7 +270,7 @@ AI_AUTHOR_SUFFIXES <- list(list(suffix = "(aider)", tool = "aider"))
 # not reset onset.
 AI_MARKER_PREDECESSORS <- c(".cursor" = ".cursorrules")
 # Detection ruleset version, surfaced by the viewer methods note.
-AI_RULESET_VERSION <- "2026-07-15"
+AI_RULESET_VERSION <- "2026-07-29"
 # Evidence-tier strength for deterministic ordering (lower = stronger/earlier on ties).
 TIER_PRIORITY <- c(A = 1L, B = 2L, C = 3L, PR = 4L, D = 5L)
 

@@ -497,3 +497,43 @@ test_that("assemble_repo_evidence excludes an ambient-only repo from the AI sign
   expect_equal(nrow(ev), 0)                    # never flagged, never reaches the threshold/rollups
   expect_false(repo_has_ai_signal(ev))
 })
+
+test_that("the neutral agents directory is not attributed to any one product", {
+  # .agents/ is where Codex, Cursor, Gemini CLI, OpenCode, Amp, Cline, Zed, Warp and
+  # about sixty more agents install project skills. Claude Code is the only one with
+  # its own. Calling the shared directory Gemini would have relabelled all of them.
+  ev <- classify_tree_markers(c(".agents", ".agents/skills"), character(0))
+  expect_false("gemini" %in% ev$tool)
+  expect_true(all(ev$tool == "agents-dir"))
+  expect_true(all(as.logical(ev$agnostic)),
+              info = "a marker naming no product must never name a package on its own")
+})
+
+test_that("Claude Code keeps its own skills directory", {
+  ev <- classify_tree_markers(c(".claude/skills", ".claude/agents"), character(0))
+  expect_true(all(ev$tool == "claude"))
+  expect_false(any(as.logical(ev$agnostic)))
+})
+
+test_that("xAI leaves durable markers now", {
+  # The methods note said Grok leaves nothing to find. GROK.md alone is on several
+  # thousand repositories, so the blind-spot claim no longer holds for it.
+  expect_true("grok" %in% classify_tree_markers(c("GROK.md"), character(0))$tool)
+  expect_true("grok" %in% classify_tree_markers(c(".grok"), character(0))$tool)
+  expect_true("grok" %in% classify_tree_markers(c(".xai"), character(0))$tool)
+})
+
+test_that("an ambient editor config is recorded but never counted as AI", {
+  # .idx is a cloud-IDE environment file written whether or not anyone used AI,
+  # the same reason .positai is excluded.
+  expect_false("idx" %in% classify_tree_markers(c(".idx"), character(0))$tool)
+  expect_true(".idx" %in% vapply(AI_MARKERS, function(m) m$path, character(1)))
+})
+
+test_that("an agnostic marker is not trusted from an ignore file", {
+  # A bare ".agents" line in .gitignore is far too generic to attribute.
+  rows <- scan_ignore_tokens(c(".agents", ".agents/skills"), character(0))
+  expect_equal(nrow(rows), 0L)
+  # A product-specific one still counts.
+  expect_true("claude" %in% scan_ignore_tokens(c(".claude/skills"), character(0))$tool)
+})

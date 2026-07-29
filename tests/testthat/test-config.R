@@ -6,7 +6,17 @@ test_that("config constants load with expected shape", {
   expect_true(is.list(AI_MARKERS) && length(AI_MARKERS) > 10)
   expect_true(all(vapply(AI_MARKERS, function(m) all(c("path","tool","location","agnostic") %in% names(m)), logical(1))))
   expect_false(any(vapply(AI_MARKERS, function(m) m$path == ".replit", logical(1))))   # bare .replit is non-evidence
-  expect_true(sum(vapply(AI_MARKERS, function(m) isTRUE(m$agnostic), logical(1))) == 1) # only agents-md
+  # The agnostic set is exactly the markers that name no product: the two AGENTS.md
+  # spellings and the .agents directory every agent except Claude Code installs into.
+  # Naming it beats counting it, because a new marker landing here by accident is the
+  # failure mode: an agnostic marker never names a package on its own.
+  expect_setequal(
+    vapply(Filter(function(m) isTRUE(m$agnostic), AI_MARKERS), function(m) m$path, character(1)),
+    c("AGENTS.md", "AGENT.md", ".agents", ".agents/skills"))
+  # .agents is where Codex, Cursor, Gemini CLI, OpenCode, Amp and ~60 more install
+  # project skills, so pinning it to any one product misreports every other one.
+  expect_false(any(vapply(AI_MARKERS,
+    function(m) identical(m$path, ".agents") && identical(m$tool, "gemini"), logical(1))))
   expect_identical(unname(AI_BOT_ALLOWLIST["noreply@anthropic.com"]), "claude")
   expect_true("dependabot[bot]" %in% AI_BOT_DENYLIST)
   expect_true(is.character(AI_RULESET_VERSION) && nzchar(AI_RULESET_VERSION))
