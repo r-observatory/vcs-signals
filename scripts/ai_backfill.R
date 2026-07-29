@@ -154,6 +154,31 @@ read_flagged <- function(path) {
   cbind(out, .devtool_empty())
 }
 
+#' Stack two dev-tooling snapshots that may not share a column set.
+#'
+#' The flag catalogue grows, so the published snapshot is written under whatever ruleset
+#' was current when its rows were scanned while an incoming shard carries today's. A plain
+#' rbind errors on that ("numbers of columns of arguments do not match") and takes the
+#' whole merge with it, which is a data outage caused by adding a column.
+#'
+#' Columns absent from one side become NA there, never 0. A repository scanned before a
+#' flag existed was not found to lack it; nobody looked. The 0 would be indistinguishable
+#' from a real negative and would understate every new flag until the whole roster is
+#' rescanned. Column order follows the current catalogue, with any column only the prior
+#' side knows kept on the end rather than silently dropped, so a rolled-back ruleset does
+#' not destroy data it no longer reads.
+bind_dev_tooling <- function(prior, incoming) {
+  if (is.null(prior) || !nrow(prior)) return(incoming)
+  if (is.null(incoming) || !nrow(incoming)) return(prior)
+  want <- c("repo_id", "last_scanned", dev_tooling_columns())
+  cols <- c(want, setdiff(c(names(prior), names(incoming)), want))
+  fill <- function(d) {
+    for (cn in setdiff(cols, names(d))) d[[cn]] <- NA
+    d[, cols, drop = FALSE]
+  }
+  rbind(fill(prior), fill(incoming))
+}
+
 write_dev_tooling_partial <- function(path, dev_df) {
   if (file.exists(path)) unlink(path)
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
@@ -503,7 +528,7 @@ run_merge <- function(io, out_dir, parts_dir) {
   dev_df <- if (length(dev_list)) do.call(rbind, dev_list) else .devtool_empty_shard()
   prior_dev <- if (DBI::dbExistsTable(con, "vcs_dev_tooling"))
     DBI::dbReadTable(con, "vcs_dev_tooling") else .devtool_empty_shard()
-  merged_dev <- rbind(prior_dev, dev_df)
+  merged_dev <- bind_dev_tooling(prior_dev, dev_df)
   # incoming-wins: order by (repo_id, last_scanned) ascending, keep the last (freshest) row per repo
   merged_dev <- merged_dev[order(merged_dev$repo_id, merged_dev$last_scanned), , drop = FALSE]
   merged_dev <- merged_dev[!duplicated(merged_dev$repo_id, fromLast = TRUE), , drop = FALSE]
