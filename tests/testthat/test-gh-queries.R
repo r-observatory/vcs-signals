@@ -31,3 +31,48 @@ test_that("graphql_rate_remaining reads the remaining points, and defaults to In
   io_err <- list(graphql = function(query) stop("network error"))
   expect_equal(graphql_rate_remaining(io_err), Inf)
 })
+
+test_that("subtree entries arrive under their own prefix", {
+  # Prefixing is what lets a marker name the path it occupies without either
+  # classifier growing an argument. It also stops a name inside a subtree from
+  # being mistaken for the same name at the root.
+  repos <- data.frame(repo_id = "github.com/o/n", owner = "o", name = "n",
+                      stringsAsFactors = FALSE)
+  resp <- list(data = list(r0 = list(
+    isFork = FALSE, parent = NULL,
+    rootTree = list(entries = list(list(name = "DESCRIPTION"), list(name = "CLAUDE.md"))),
+    githubTree = list(entries = list(list(name = "workflows"))),
+    claudeTree = list(entries = list(list(name = "skills"), list(name = "settings.json"))),
+    agentsTree = NULL,
+    instTree = list(entries = list(list(name = "skills"), list(name = "CITATION"))),
+    gitignore = NULL, rbuildignore = NULL)))
+
+  out <- parse_tree_markers(resp, repos)[["github.com/o/n"]]
+  expect_true(".claude/skills" %in% out$root_entries)
+  expect_true("inst/skills" %in% out$root_entries)
+  expect_true("CLAUDE.md" %in% out$root_entries)
+  expect_false("skills" %in% out$root_entries)
+  expect_false("CITATION" %in% out$root_entries)
+  expect_equal(out$github_entries, "workflows")
+})
+
+test_that("an absent subtree contributes nothing rather than a false negative", {
+  repos <- data.frame(repo_id = "github.com/o/n", owner = "o", name = "n",
+                      stringsAsFactors = FALSE)
+  resp <- list(data = list(r0 = list(
+    isFork = FALSE, parent = NULL,
+    rootTree = list(entries = list(list(name = "DESCRIPTION"))),
+    githubTree = NULL, claudeTree = NULL, agentsTree = NULL, instTree = NULL,
+    gitignore = NULL, rbuildignore = NULL)))
+  out <- parse_tree_markers(resp, repos)[["github.com/o/n"]]
+  expect_equal(out$root_entries, "DESCRIPTION")
+})
+
+test_that("the tree query asks for the subtrees the markers need", {
+  repos <- data.frame(repo_id = "github.com/o/n", owner = "o", name = "n",
+                      stringsAsFactors = FALSE)
+  q <- build_tree_query(repos)
+  for (expr in c("HEAD:.claude", "HEAD:.agents", "HEAD:inst")) {
+    expect_true(grepl(expr, q, fixed = TRUE), info = expr)
+  }
+})

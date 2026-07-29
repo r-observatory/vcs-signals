@@ -102,3 +102,37 @@ test_that("ai-weekly.yml uploads and downloads the dev-tooling shards", {
   expect_true(any(grepl("dev-tooling-\\$\\{\\{ matrix.shard \\}\\}", yml)))  # cheap upload name
   expect_true(any(grepl("pattern: dev-tooling-\\*", yml)))                    # merge download
 })
+
+test_that("Air is detected under both spellings it ships", {
+  # air.toml and .air.toml are both in wide use (roughly 11k and 9k repositories),
+  # and only the undotted one was listed, so the dotted half went uncounted.
+  expect_equal(classify_dev_tooling(c("air.toml"), character(0))$has_air, 1L)
+  expect_equal(classify_dev_tooling(c(".air.toml"), character(0))$has_air, 1L)
+  expect_equal(classify_dev_tooling(c("DESCRIPTION"), character(0))$has_air, 0L)
+})
+
+test_that("documentation written for models is a practice, never an AI marker", {
+  # llms.txt is the package describing itself TO a model. Counting it as evidence a
+  # model worked on the package would be a different claim entirely.
+  flags <- classify_dev_tooling(c("llms.txt"), character(0))
+  expect_equal(flags$has_llms_txt, 1L)
+  expect_equal(classify_dev_tooling(c("llms-full.txt"), character(0))$has_llms_txt, 1L)
+  expect_equal(nrow(classify_tree_markers(c("llms.txt", "llms-full.txt"), character(0))), 0L)
+})
+
+test_that("skills a package ships are a practice, and skills used to build it are not", {
+  # inst/ is installed, so inst/skills is a deliverable for the package's users. The
+  # skills under .claude/ are what the maintainer used, and belong to the AI signal.
+  ship <- classify_dev_tooling(c("inst/skills", "DESCRIPTION"), character(0))
+  expect_equal(ship$has_agent_skills, 1L)
+  expect_equal(nrow(classify_tree_markers(c("inst/skills"), character(0))), 0L)
+
+  build <- classify_dev_tooling(c(".claude/skills"), character(0))
+  expect_equal(build$has_agent_skills, 0L)
+  expect_true("claude" %in% classify_tree_markers(c(".claude/skills"), character(0))$tool)
+})
+
+test_that("a directory named skills anywhere else is not a shipped skill", {
+  expect_equal(classify_dev_tooling(c("skills"), character(0))$has_agent_skills, 0L)
+  expect_equal(classify_dev_tooling(c("dev/skills"), character(0))$has_agent_skills, 0L)
+})

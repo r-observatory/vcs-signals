@@ -564,6 +564,9 @@ build_tree_query <- function(repos) {
       isFork parent { nameWithOwner }
       rootTree: object(expression: "HEAD:") { ... on Tree { entries { name type } } }
       githubTree: object(expression: "HEAD:.github") { ... on Tree { entries { name type } } }
+      claudeTree: object(expression: "HEAD:.claude") { ... on Tree { entries { name type } } }
+      agentsTree: object(expression: "HEAD:.agents") { ... on Tree { entries { name type } } }
+      instTree: object(expression: "HEAD:inst") { ... on Tree { entries { name type } } }
       gitignore: object(expression: "HEAD:.gitignore") { ... on Blob { text } }
       rbuildignore: object(expression: "HEAD:.Rbuildignore") { ... on Blob { text } }
     }', j - 1L, repos$owner[j], repos$name[j])
@@ -595,8 +598,21 @@ parse_tree_markers <- function(resp, repos) {
                        gitignore_lines = character(0), rbuildignore_lines = character(0))
       next
     }
+    # Subtree entries join root_entries under their own prefix ("\u002eclaude/skills"),
+    # so a marker names the path it actually occupies and neither classifier needs a
+    # new argument or a new location keyword. An absent subtree contributes nothing,
+    # which is the same as the tree being empty: no marker, never a false absence
+    # recorded as a negative.
+    prefixed <- function(tree, prefix) {
+      ns <- entry_names(tree)
+      if (!length(ns)) return(character(0))
+      paste0(prefix, "/", ns)
+    }
     out[[j]] <- list(
-      root_entries = entry_names(r$rootTree),
+      root_entries = c(entry_names(r$rootTree),
+                       prefixed(r$claudeTree, ".claude"),
+                       prefixed(r$agentsTree, ".agents"),
+                       prefixed(r$instTree, "inst")),
       github_entries = entry_names(r$githubTree),
       is_fork = isTRUE(r$isFork),
       parent = .nn(r$parent$nameWithOwner, NA_character_),
