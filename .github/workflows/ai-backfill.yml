@@ -92,6 +92,14 @@ jobs:
           name: cheap-${{ matrix.shard }}
           path: out/vcs-ai-cheap-*.db
           if-no-files-found: ignore
+      # run_cheap writes a dev-tooling partial beside the AI one. Without this the
+      # partial dies with the runner and the merge folds zero rows, so a full backfill
+      # silently leaves the practice snapshot at whatever the last weekly wrote.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dev-tooling-${{ matrix.shard }}
+          path: out/vcs-dev-tooling-*.db
+          if-no-files-found: ignore
 
   gate:
     needs: cheap
@@ -186,6 +194,11 @@ jobs:
         with:
           path: parts
           pattern: shard-*
+          merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          path: parts
+          pattern: dev-tooling-*
           merge-multiple: true
       - name: Merge and publish
         env:
