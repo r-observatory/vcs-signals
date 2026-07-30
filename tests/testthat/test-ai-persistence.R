@@ -41,3 +41,42 @@ test_that("vcs_ai_signals survives a full publish -> re-seed round trip", {
   got <- DBI::dbReadTable(scon, "vcs_ai_signals")
   expect_equal(nrow(got), 1); expect_equal(got$tool, "claude")   # survived seed<->embed<->publish
 })
+
+test_that("a failed history pull aborts instead of looking like a first run", {
+  # seed_working_db used to return FALSE for three different situations, only one of
+  # which was harmless. Once a release exists, the recent shard IS the accumulated
+  # history: failing to pull it leaves an empty working DB, run_merge reads 0 prior
+  # rows, and the published table is deleted and rewritten from one run's shards.
+  out <- tempfile("seed_"); dir.create(out)
+  io <- list(release_exists = function() TRUE,
+             download = function(pattern, dir) FALSE)
+  expect_error(seed_working_db(io, out, file.path(out, "work.db")),
+               "could not be downloaded")
+})
+
+test_that("a download that reports success but leaves no file also aborts", {
+  out <- tempfile("seed_"); dir.create(out)
+  io <- list(release_exists = function() TRUE,
+             download = function(pattern, dir) TRUE)   # lies: writes nothing
+  expect_error(seed_working_db(io, out, file.path(out, "work.db")),
+               "not on disk")
+})
+
+test_that("no release at all is still a legitimate first run", {
+  # The one harmless case must stay harmless, or every bootstrap breaks.
+  out <- tempfile("seed_"); dir.create(out)
+  io <- list(release_exists = function() FALSE,
+             download = function(pattern, dir) stop("must not be called"))
+  expect_false(seed_working_db(io, out, file.path(out, "work.db")))
+})
+
+test_that("a failed asset upload stops the run rather than publishing green", {
+  # publish() writes release notes describing the assets immediately afterwards, and
+  # the merger downstream reads whatever bytes are on the release. A discarded status
+  # meant a 403 produced a green run whose notes described data that never landed.
+  skip_if(nzchar(Sys.which("gh")) == FALSE, "gh not available")
+  expect_error(
+    gh_release_upload("r-observatory/definitely-not-a-real-repo-xyz",
+                      tempfile(fileext = ".db")),
+    "gh release upload failed")
+})

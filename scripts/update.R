@@ -83,12 +83,23 @@ acquire_bioc <- function() {
 # years are correctly left untouched (out of the 400d window, immutable).
 # A no-op (empty working DB, first-run shape) when no release exists yet or
 # the prior recent shard cannot be pulled.
+# Two of the three ways this used to return FALSE were not no-ops at all. Once a
+# release exists, the recent shard IS the accumulated history, and failing to pull it
+# leaves an empty working DB that every caller then treats as "there was no prior
+# data": run_merge reads 0 prior rows, deletes the published table and rewrites it
+# from one run's shards. So a missing release is still a legitimate first-run no-op,
+# but a release that exists and cannot be pulled now aborts, matching the fail-closed
+# contract gh_release_exists and protect_history_pull already follow.
 seed_working_db <- function(io, out_dir, working_path) {
   if (file.exists(working_path)) unlink(working_path)
   if (!isTRUE(io$release_exists())) return(invisible(FALSE))
-  if (!isTRUE(io$download("vcs-signals-recent.db", out_dir))) return(invisible(FALSE))
+  if (!isTRUE(io$download("vcs-signals-recent.db", out_dir)))
+    stop("release 'current' exists but vcs-signals-recent.db could not be downloaded; ",
+         "aborting rather than treating accumulated history as absent")
   prior_path <- file.path(out_dir, "vcs-signals-recent.db")
-  if (!file.exists(prior_path)) return(invisible(FALSE))
+  if (!file.exists(prior_path))
+    stop("vcs-signals-recent.db reported a successful download but is not on disk; ",
+         "aborting rather than treating accumulated history as absent")
 
   pcon <- DBI::dbConnect(RSQLite::SQLite(), prior_path)
   on.exit(DBI::dbDisconnect(pcon), add = TRUE)
@@ -316,9 +327,20 @@ gh_release_download <- function(repo, pattern, dir, tag = "current") {
   is.null(code) || identical(as.integer(code), 0L)
 }
 
+#' Upload one asset, failing closed. Every caller treats an upload as must-succeed:
+#' publish() writes release notes describing the assets straight afterwards, and the
+#' merger downstream reads whatever bytes are on the release. Discarding the status
+#' here meant a 403 or a network fault produced a green run whose notes described data
+#' that never landed, with the previous day's asset still in place. Its two siblings
+#' above both read the status; only this one did not.
 gh_release_upload <- function(repo, path, tag = "current") {
-  system2("gh", c("release", "upload", tag, "--repo", repo, path, "--clobber"),
-          stdout = TRUE, stderr = TRUE)
+  out <- suppressWarnings(system2("gh", c("release", "upload", tag, "--repo", repo,
+                                          path, "--clobber"), stdout = TRUE, stderr = TRUE))
+  status <- attr(out, "status")
+  if (!is.null(status) && !identical(as.integer(status), 0L)) {
+    stop(sprintf("gh release upload failed for %s (exit %s): %s",
+                 path, status, paste(out, collapse = "\n")))
+  }
   invisible(NULL)
 }
 
