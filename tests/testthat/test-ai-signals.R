@@ -537,3 +537,41 @@ test_that("an agnostic marker is not trusted from an ignore file", {
   # A product-specific one still counts.
   expect_true("claude" %in% scan_ignore_tokens(c(".claude/skills"), character(0))$tool)
 })
+
+test_that("a real trailer verifies and a human named Claude does not", {
+  # Commit search does no regex, so both of these come back as hits. The pattern is
+  # what separates them, and without it the trailer channel could mint an exact,
+  # immutable onset for a person.
+  rule <- AI_TRAILER_PATTERNS[[1]]
+  real <- verify_search_hit(rule, "B", list(
+    message = "feat: x\n\nCo-authored-by: Claude <noreply@anthropic.com>", author = "Jane"))
+  expect_true(real$confirmed)
+  expect_equal(real$tool, "claude")
+
+  human <- verify_search_hit(rule, "B", list(
+    message = "fix\n\nCo-authored-by: Claude Dupont <claude@univ.fr>", author = "Jean"))
+  expect_false(human$confirmed)
+  expect_equal(human$tier, "B")
+})
+
+test_that("an unverifiable hit still counts as evidence, only undated", {
+  # The API returned a match but no message to check it against. That is evidence the
+  # search fired; it is not grounds for an exact date.
+  v <- verify_search_hit(AI_TRAILER_PATTERNS[[1]], "B", list(message = NA, author = NA))
+  expect_false(v$confirmed)
+  expect_equal(v$tool, "claude")
+})
+
+test_that("an author suffix verifies against the author, not the message", {
+  rule <- AI_AUTHOR_SUFFIXES[[1]]
+  expect_true(verify_search_hit(rule, "C", list(message = "x", author = "Sam (aider)"))$confirmed)
+  expect_false(verify_search_hit(rule, "C", list(message = "(aider)", author = "Sam"))$confirmed)
+})
+
+test_that("every searchable rule carries the literal query the API needs", {
+  # The regex cannot be handed to commit search. A rule without a query is a rule the
+  # scan silently skips, which is how this channel stayed dark.
+  for (r in c(AI_TRAILER_PATTERNS, AI_AUTHOR_SUFFIXES)) {
+    expect_true(!is.null(r$query) && nzchar(r$query), info = r$tool)
+  }
+})

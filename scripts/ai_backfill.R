@@ -434,6 +434,26 @@ run_deep <- function(io, out_dir, roster_path, i, N,
       extra_ev <- rbind(extra_ev, data.frame(tool = tool, tier = "A", marker = "A",
         agnostic = 0L, authored = 1L, stringsAsFactors = FALSE))
     }
+    # (2b) Tier-B commit trailers and Tier-C author suffixes. These were written into
+    #      the ruleset and never called from any scan, so every published detection was
+    #      a config marker and an AI co-author line was invisible. Each rule is searched
+    #      literally, then verified against its real pattern: a verified hit carries an
+    #      exact onset, an unverified one still counts as evidence but only dates a floor.
+    #      Searched per repo because the flagged roster is what this pass walks.
+    for (spec in c(lapply(AI_TRAILER_PATTERNS, function(r) list(rule = r, tier = "B")),
+                   lapply(AI_AUTHOR_SUFFIXES,  function(r) list(rule = r, tier = "C")))) {
+      q <- spec$rule$query
+      if (is.null(q) || is.na(q) || !nzchar(q)) next
+      hit <- tryCatch(io$search_hit(owner, name, q, search_delay),
+                      error = function(e) list(date = NA_character_))
+      if (is.na(.nn(hit$date, NA_character_))) next
+      v <- verify_search_hit(spec$rule, spec$tier, hit)
+      commit_onsets <- rbind(commit_onsets, data.frame(tool = v$tool, tier = v$tier,
+        first_seen_date = hit$date, confirmed = v$confirmed, stringsAsFactors = FALSE))
+      extra_ev <- rbind(extra_ev, data.frame(tool = v$tool, tier = v$tier, marker = v$tier,
+        agnostic = 0L, authored = 0L, stringsAsFactors = FALSE))
+    }
+
     full_ev <- rbind(ev, extra_ev)
 
     # (3) assemble + guard + collapse.
@@ -550,6 +570,8 @@ main <- function(mode, out_dir) {
     graphql        = default_io(token)$graphql,
     search         = function(owner, name, query, delay = SEARCH_DELAY_S)
                        search_earliest_commit(token, owner, name, query, delay),
+    search_hit     = function(owner, name, query, delay = SEARCH_DELAY_S)
+                       search_earliest_commit_hit(token, owner, name, query, delay),
     release_exists = function() gh_release_exists(RELEASE_REPO),
     download       = function(pattern, dir) gh_release_download(RELEASE_REPO, pattern, dir),
     upload         = function(path) gh_release_upload(RELEASE_REPO, path))
