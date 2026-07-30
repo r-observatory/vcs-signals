@@ -745,3 +745,18 @@ test_that("folding an empty side is the other side unchanged", {
   expect_equal(nrow(bind_dev_tooling(d, .devtool_empty_shard())), 1L)
   expect_equal(nrow(bind_dev_tooling(.devtool_empty_shard(), d)), 1L)
 })
+
+test_that("every workflow that runs the cheap pass keeps its dev-tooling partial", {
+  # run_cheap writes two partials per shard. ai-backfill.yml uploaded only the AI one,
+  # so a full backfill discarded the practice snapshot and its merge folded zero rows:
+  # the whole run succeeded and the flags were silently a week stale. The parity is
+  # checked rather than described, because the two workflows drift independently.
+  skip_if_not(dir.exists("../../.github/workflows"), "workflows not in this checkout")
+  for (wf in c("ai-backfill.yml", "ai-weekly.yml")) {
+    txt <- readLines(file.path("../../.github/workflows", wf), warn = FALSE)
+    expect_true(any(grepl("name: dev-tooling-", txt, fixed = TRUE)),
+                info = paste(wf, "must upload the dev-tooling partial"))
+    expect_true(any(grepl("pattern: dev-tooling-", txt, fixed = TRUE)),
+                info = paste(wf, "must download it into the merge"))
+  }
+})
