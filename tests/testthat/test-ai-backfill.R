@@ -760,3 +760,91 @@ test_that("every workflow that runs the cheap pass keeps its dev-tooling partial
                 info = paste(wf, "must download it into the merge"))
   }
 })
+
+test_that("run_deep records a verified commit trailer as tier B with an exact onset", {
+  # This is the channel that was written and never called: every published detection
+  # was a config marker, and an AI co-author line appeared nowhere.
+  out <- tempfile("out_"); dir.create(out)
+  write_flagged_partial(file.path(out, "vcs-ai-flagged-roster.db"),
+    data.frame(repo_id = "github.com/o/r", owner = "o", name = "r", node_id = "R_1",
+               is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_,
+               stringsAsFactors = FALSE),
+    data.frame(repo_id = "github.com/o/r", tool = "claude", tier = "D", marker = "CLAUDE.md",
+               agnostic = 0L, stringsAsFactors = FALSE))
+  io <- list(
+    graphql = function(query) list(data = list(repository = list(defaultBranchRef = list(
+      target = list(history = list(pageInfo = list(endCursor = "", hasNextPage = FALSE),
+        nodes = list(list(committedDate = "2026-03-01T00:00:00Z")))))))),
+    search = function(owner, name, query, delay = 0) NA_character_,
+    search_hit = function(owner, name, query, delay = 0) {
+      if (!grepl("Co-Authored-By", query, fixed = TRUE))
+        return(list(date = NA_character_, message = NA_character_, author = NA_character_))
+      list(date = "2025-09-15T00:00:00Z",
+           message = "feat: x\n\nCo-authored-by: Claude <noreply@anthropic.com>",
+           author = "Jane")
+    })
+  run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
+           marker_delay = 0, search_delay = 0)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db"))
+  on.exit(DBI::dbDisconnect(scon))
+  got <- DBI::dbReadTable(scon, "vcs_ai_signals")
+
+  expect_true("B" %in% strsplit(got$evidence_tiers, ",\\s*")[[1]])
+  # The trailer predates the marker file, so it wins the onset, and it verified, so
+  # the date is exact rather than a floor.
+  expect_equal(got$first_seen_date, "2025-09-15T00:00:00Z")
+  expect_equal(got$first_seen_censored, 0L)
+})
+
+test_that("an unverified trailer hit dates a floor, never an exact onset", {
+  out <- tempfile("out_"); dir.create(out)
+  write_flagged_partial(file.path(out, "vcs-ai-flagged-roster.db"),
+    data.frame(repo_id = "github.com/o/r", owner = "o", name = "r", node_id = "R_1",
+               is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_,
+               stringsAsFactors = FALSE),
+    data.frame(repo_id = "github.com/o/r", tool = "claude", tier = "D", marker = "CLAUDE.md",
+               agnostic = 0L, stringsAsFactors = FALSE))
+  io <- list(
+    graphql = function(query) list(data = list(repository = list(defaultBranchRef = list(
+      target = list(history = list(pageInfo = list(endCursor = "", hasNextPage = FALSE),
+        nodes = list(list(committedDate = "2026-03-01T00:00:00Z")))))))),
+    search = function(owner, name, query, delay = 0) NA_character_,
+    # A hit on a human named Claude: the search matched, the pattern will not.
+    search_hit = function(owner, name, query, delay = 0) {
+      if (!grepl("Co-Authored-By", query, fixed = TRUE))
+        return(list(date = NA_character_, message = NA_character_, author = NA_character_))
+      list(date = "2025-09-15T00:00:00Z",
+           message = "fix\n\nCo-authored-by: Claude Dupont <claude@univ.fr>", author = "Jean")
+    })
+  # The marker dates exactly at 2026-03, later than the floor's "on or before
+  # 2025-09". That is a contradiction, and the reducer says so and keeps the floor:
+  # an exact date cannot be later than a bound that already excluded it.
+  expect_warning(
+    run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
+             marker_delay = 0, search_delay = 0),
+    "contradiction")
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db"))
+  on.exit(DBI::dbDisconnect(scon))
+  got <- DBI::dbReadTable(scon, "vcs_ai_signals")
+  expect_equal(got$first_seen_censored, 1L)
+  expect_equal(got$first_seen_date, "2025-09-15T00:00:00Z")
+})
+
+test_that("a scan whose io has no trailer channel still runs", {
+  # The older callers build an io without search_hit. They must degrade to the
+  # previous behaviour rather than abort a shard.
+  out <- tempfile("out_"); dir.create(out)
+  write_flagged_partial(file.path(out, "vcs-ai-flagged-roster.db"),
+    data.frame(repo_id = "github.com/o/r", owner = "o", name = "r", node_id = "R_1",
+               is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_,
+               stringsAsFactors = FALSE),
+    data.frame(repo_id = "github.com/o/r", tool = "claude", tier = "D", marker = "CLAUDE.md",
+               agnostic = 0L, stringsAsFactors = FALSE))
+  io <- list(
+    graphql = function(query) list(data = list(repository = list(defaultBranchRef = list(
+      target = list(history = list(pageInfo = list(endCursor = "", hasNextPage = FALSE),
+        nodes = list(list(committedDate = "2026-03-01T00:00:00Z")))))))),
+    search = function(owner, name, query, delay = 0) NA_character_)
+  expect_no_error(run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
+                           marker_delay = 0, search_delay = 0))
+})

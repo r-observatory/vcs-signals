@@ -667,12 +667,27 @@ parse_pr_agents <- function(resp, repos) {
 #' Pure: the earliest-match commit date from a search/commits JSON body, or NA when
 #' total_count is 0, items is empty, or the body does not parse. The match is FUZZY
 #' (substring-ish), so the caller treats this date as a CANDIDATE onset.
-parse_search_commit <- function(body_txt) {
+parse_search_commit <- function(body_txt) parse_search_commit_hit(body_txt)$date
+
+#' The same response, keeping the message and author the date came from.
+#'
+#' Commit search does no regex, so a hit on "Co-Authored-By: Claude" is only a candidate:
+#' it also matches a human named Claude. Returning the message lets the caller run the
+#' real pattern over it and decide whether the date may be recorded as exact. Discarding
+#' the message, as parse_search_commit did, left the caller no way to tell those apart,
+#' which is why the trailer channel was never wired up.
+#'
+#' Returns list(date, message, author) with NA fields when there is no hit.
+parse_search_commit_hit <- function(body_txt) {
+  none <- list(date = NA_character_, message = NA_character_, author = NA_character_)
   body <- tryCatch(jsonlite::fromJSON(body_txt, simplifyVector = FALSE), error = function(e) NULL)
-  if (is.null(body)) return(NA_character_)
+  if (is.null(body)) return(none)
   items <- .nn(body$items, list())
-  if (isTRUE(.nn(body$total_count, length(items)) == 0) || length(items) == 0) return(NA_character_)
-  .nn(items[[1]]$commit$committer$date, NA_character_)
+  if (isTRUE(.nn(body$total_count, length(items)) == 0) || length(items) == 0) return(none)
+  it <- items[[1]]
+  list(date    = .nn(it$commit$committer$date, NA_character_),
+       message = .nn(it$commit$message, NA_character_),
+       author  = .nn(it$commit$author$name, NA_character_))
 }
 
 #' A marker path plus any known predecessor paths (AI_MARKER_PREDECESSORS), probed
@@ -760,6 +775,24 @@ search_earliest_commit <- function(token, owner, name, query, delay = SEARCH_DEL
   status <- attr(out, "status")
   if (!is.null(status) && !identical(as.integer(status), 0L)) return(NA_character_)
   parse_search_commit(paste(out, collapse = "\n"))
+}
+
+#' As search_earliest_commit, but returning the whole hit so the caller can verify it.
+#' Same transport, same pacing, same fail-soft: an error is a hit with NA fields, never
+#' an exception that would abort a shard.
+search_earliest_commit_hit <- function(token, owner, name, query, delay = SEARCH_DELAY_S) {
+  none <- list(date = NA_character_, message = NA_character_, author = NA_character_)
+  old <- Sys.getenv("GH_TOKEN", unset = NA)
+  Sys.setenv(GH_TOKEN = token)
+  on.exit({ if (is.na(old)) Sys.unsetenv("GH_TOKEN") else Sys.setenv(GH_TOKEN = old) }, add = TRUE)
+  q <- sprintf("repo:%s/%s %s", owner, name, query)
+  out <- suppressWarnings(system2("gh", c("api", "-X", "GET", "search/commits",
+    "-f", paste0("q=", q), "-f", "sort=committer-date", "-f", "order=asc", "-f", "per_page=1"),
+    stdout = TRUE))
+  if (delay > 0) Sys.sleep(delay)
+  status <- attr(out, "status")
+  if (!is.null(status) && !identical(as.integer(status), 0L)) return(none)
+  parse_search_commit_hit(paste(out, collapse = "\n"))
 }
 
 #' Cheap Tier-D marker pass over a chunk of repos, batched TIER_D_BATCH at a time. Runs

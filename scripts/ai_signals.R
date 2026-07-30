@@ -172,6 +172,26 @@ scan_trailers <- function(messages) {
   .ai_rows(tools, "B")
 }
 
+#' Verify a commit-search hit against the real rule it was searched for.
+#'
+#' Commit search does no regex, so a hit is a candidate. Running the actual pattern over
+#' the returned message (or the suffix over the author name) is what separates a genuine
+#' trailer from a human named Claude. A verified hit may carry an exact onset; an
+#' unverified one is still evidence the tier fired, but its date is only a floor.
+#'
+#' Returns list(tool, tier, confirmed). Pure.
+verify_search_hit <- function(rule, tier, hit) {
+  msg <- .nn(hit$message, NA_character_)
+  aut <- .nn(hit$author, NA_character_)
+  confirmed <- if (identical(tier, "B")) {
+    !is.na(msg) && nrow(scan_trailers(msg)) > 0 &&
+      any(grepl(rule$pattern, tolower(msg), perl = TRUE))
+  } else {
+    !is.na(aut) && any(endsWith(trimws(aut), rule$suffix))
+  }
+  list(tool = rule$tool, tier = tier, confirmed = isTRUE(confirmed))
+}
+
 #' Tier C: an author display name ends with a known agent suffix.
 match_author_suffix <- function(author_names) {
   nm <- author_names %||% character(0)
