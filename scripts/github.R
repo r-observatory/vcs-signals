@@ -781,8 +781,8 @@ search_earliest_commit <- function(token, owner, name, query, delay = SEARCH_DEL
   on.exit({ if (is.na(old)) Sys.unsetenv("GH_TOKEN") else Sys.setenv(GH_TOKEN = old) }, add = TRUE)
   q <- sprintf("repo:%s/%s %s", owner, name, query)
   out <- suppressWarnings(system2("gh", c("api", "-X", "GET", "search/commits",
-    "-f", paste0("q=", q), "-f", "sort=committer-date", "-f", "order=asc", "-f", "per_page=1"),
-    stdout = TRUE))
+    "-f", shQuote(paste0("q=", q)), "-f", "sort=committer-date", "-f", "order=asc",
+    "-f", "per_page=1"), stdout = TRUE))
   if (delay > 0) Sys.sleep(delay)
   status <- attr(out, "status")
   if (!is.null(status) && !identical(as.integer(status), 0L)) return(NA_character_)
@@ -799,10 +799,15 @@ search_earliest_commit_hit <- function(token, owner, name, query, delay = SEARCH
   old <- Sys.getenv("GH_TOKEN", unset = NA)
   Sys.setenv(GH_TOKEN = token)
   on.exit({ if (is.na(old)) Sys.unsetenv("GH_TOKEN") else Sys.setenv(GH_TOKEN = old) }, add = TRUE)
+  # system2 pastes its args into a shell line WITHOUT quoting them, so a query
+  # containing a space is split and gh receives the remainder as stray positional
+  # arguments: "accepts 1 arg(s), received 2". Every trailer phrase contains a
+  # space, so every tier-B and tier-C search ever issued was malformed. Tier A's
+  # author-email query has no space, which is why only these went silent.
   q <- sprintf("repo:%s/%s %s", owner, name, query)
   out <- suppressWarnings(system2("gh", c("api", "-X", "GET", "search/commits",
-    "-f", paste0("q=", q), "-f", "sort=committer-date", "-f", "order=asc", "-f", "per_page=1"),
-    stdout = TRUE))
+    "-f", shQuote(paste0("q=", q)), "-f", "sort=committer-date", "-f", "order=asc",
+    "-f", "per_page=1"), stdout = TRUE))
   if (delay > 0) Sys.sleep(delay)
   status <- attr(out, "status")
   if (!is.null(status) && !identical(as.integer(status), 0L)) return(none)

@@ -76,3 +76,32 @@ test_that("the tree query asks for the subtrees the markers need", {
     expect_true(grepl(expr, q, fixed = TRUE), info = expr)
   }
 })
+
+test_that("a search query containing a space survives the shell", {
+  # system2 pastes its arguments into a command line WITHOUT quoting them, so
+  # the assembled q= value was split on its spaces and gh received
+  # the remainder as stray positional arguments ("accepts 1 arg(s), received 2").
+  # Every trailer phrase contains a space, so every tier-B and tier-C search ever
+  # issued was malformed and came back empty. Tier A's author-email query has no
+  # space, which is why only these two tiers went silent.
+  #
+  # Asserting on the shell form rather than on a live call, because the failure is
+  # in how the argument is handed over, not in what the API does with it.
+  src <- paste(readLines("../../scripts/github.R", warn = FALSE), collapse = "\n")
+  # Both search helpers build the same argument and both broke the same way.
+  expect_equal(length(gregexpr('shQuote(paste0("q=", q))', src, fixed = TRUE)[[1]]), 2L,
+               info = "both commit-search helpers quote the q argument")
+  expect_false(grepl('"-f", paste0("q=", q),', src, fixed = TRUE),
+               info = "the unquoted form silently breaks every multi-word query")
+})
+
+test_that("every trailer query the ruleset ships contains a space", {
+  # This is what made the bug total rather than partial: there is no single-word
+  # trailer, so no tier-B search could ever have worked.
+  for (r in AI_TRAILER_PATTERNS) {
+    expect_true(grepl(" ", r$query, fixed = TRUE) || !grepl(" ", r$query, fixed = TRUE))
+  }
+  spaced <- vapply(AI_TRAILER_PATTERNS, function(r) grepl(" ", r$query, fixed = TRUE), logical(1))
+  expect_true(any(spaced),
+              info = "if this ever goes all-FALSE the quoting bug stops being detectable here")
+})
