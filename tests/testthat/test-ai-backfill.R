@@ -513,7 +513,7 @@ test_that("run_deep gives an ignore-token detection a censored today floor and s
                is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_,
                stringsAsFactors = FALSE),
     data.frame(repo_id = "github.com/o/ign", tool = "claude", tier = "D",
-               marker = "ignore:.claude", agnostic = 0L, stringsAsFactors = FALSE))
+               marker = "gitignore:.claude", agnostic = 0L, stringsAsFactors = FALSE))
   # A marker-history query for the non-existent ignore path would be wasted: fault it so the
   # test proves run_deep never issues one. The rateLimit preflight is the only graphql call.
   io <- list(

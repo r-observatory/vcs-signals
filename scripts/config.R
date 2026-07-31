@@ -288,7 +288,11 @@ TIER_PRIORITY <- c(A = 1L, B = 2L, C = 3L, PR = 4L, D = 5L)
 # Pacing for the REST commit-search API (search/commits, ~1,800/hr = 30/min),
 # a budget separate from the GraphQL 5000/hr and from core REST. Each onset
 # search sleeps this long after its request so a gated deep scan stays under it.
-SEARCH_DELAY_S <- 2
+# Commit search enforces a SECONDARY rate limit far tighter than the documented
+# ~30/min, and hand-testing tripped it after five queries. At 2s the first backfill
+# issued about 12,000 searches, was refused by almost all of them, and recorded the
+# refusals as "no trailer found". Pace for the limit that actually exists.
+SEARCH_DELAY_S <- 6
 # Repos per aliased tree-marker / PR-login query in the cheap pass. Both queries are
 # execution-heavy server-side (a tree fetch plus 50 PR nodes per alias), so this is
 # kept small like COMMIT_HISTORY_BATCH rather than the 20-40 a cheap connection page

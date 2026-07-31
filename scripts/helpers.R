@@ -392,11 +392,23 @@ ensure_series_schema <- function(con) {
     ai_tool_count INTEGER, ai_tools TEXT, ai_latest_tool TEXT, ai_latest_date TEXT,
     first_seen TEXT, last_seen TEXT, PRIMARY KEY (package, origin))")
   DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS pipeline_state (key TEXT PRIMARY KEY, value TEXT)")
+  # `markers` is the set of markers that fired, comma-joined the way evidence_tiers
+  # beside it already is: "CLAUDE.md,gitignore:.claude". It is what lets a reader ask
+  # HOW a package was detected rather than only that it was, and the two spellings
+  # distinguish a committed file from an ignore-file entry.
   DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_ai_signals (
     repo_id TEXT NOT NULL, tool TEXT NOT NULL, first_seen_date TEXT,
     first_seen_censored INTEGER NOT NULL DEFAULT 0, evidence_tiers TEXT,
+    markers TEXT,
     authored INTEGER NOT NULL DEFAULT 0, last_confirmed_date TEXT,
     PRIMARY KEY (repo_id, tool))")
+  # A database written before markers existed keeps its rows; the column arrives empty
+  # and fills on the next scan. Dropping and rebuilding would discard onset history.
+  have <- tryCatch(DBI::dbGetQuery(con, "PRAGMA table_info(vcs_ai_signals)")$name,
+                   error = function(e) character(0))
+  if (length(have) && !("markers" %in% have)) {
+    DBI::dbExecute(con, "ALTER TABLE vcs_ai_signals ADD COLUMN markers TEXT")
+  }
   # Dev-tooling presence snapshot, one wide row per repo. WITHOUT ROWID is deliberate (see
   # dev_tooling_create_sql): a repo_id point lookup is a single covering seek. The DDL is
   # config-derived so it cannot drift from classify_dev_tooling.

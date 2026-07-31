@@ -127,21 +127,46 @@ marker_repo_path <- function(marker) {
   x
 }
 
+#' TRUE when a Tier-D marker names an ignore-file entry rather than a committed path.
+#' Two decisions hang on this: such a marker has no path whose history can be walked,
+#' so it costs no fetch, and its date can only ever be a censored floor. Defined once
+#' so neither can drift from the format scan_ignore_tokens produces.
+ai_is_ignore_marker <- function(marker) {
+  grepl("^(gitignore|rbuildignore):", marker)
+}
+
 #' Tier-D evidence from a whole-entry match of an ignore-file token against a
 #' marker path. Anchored equality only (never a substring), so tokens like
 #' codex_output or a gemini-protocol path do not collide.
+#' The two ignore files are scanned SEPARATELY and a marker names the one it came
+#' from: "gitignore:.claude", not the old "ignore:.claude", which unioned both
+#' and left no way to tell a build-time exclusion from a source-control one. A path in
+#' both files yields two rows on purpose; they collapse per (repo, tool) downstream and
+#' the pair is a real fact about the repository, not a duplicate.
+#'
+#' Ambient markers stay OUT of this frame. .positai belongs in the dev-tooling signal,
+#' not here: the AI gate flags a repository on any row this returns, so emitting an
+#' ambient one would pull a repository whose only marker is an editor artifact into the
+#' AI roster. Recording a gitignored .positai needs the dev-tooling classifier to see
+#' the ignore lines, which is a separate change to its signature.
 scan_ignore_tokens <- function(gitignore_lines, rbuildignore_lines) {
-  toks <- unique(vapply(c(gitignore_lines %||% character(0),
-                          rbuildignore_lines %||% character(0)),
-                        .ai_norm_ignore, character(1)))
-  toks <- toks[nzchar(toks)]
-  rows <- lapply(ai_deliberate_markers(), function(m) {
-    if (isTRUE(m$agnostic)) return(NULL)      # AGENTS.md token is too generic to trust in ignore files
-    if (!(m$path %in% toks)) return(NULL)
-    data.frame(tool = m$tool, tier = "D", marker = paste0("ignore:", m$path),
-               agnostic = FALSE, stringsAsFactors = FALSE)
-  })
-  rows <- Filter(Negate(is.null), rows)
+  sources <- list(gitignore = gitignore_lines, rbuildignore = rbuildignore_lines)
+  rows <- list()
+  for (src in names(sources)) {
+    toks <- unique(vapply(sources[[src]] %||% character(0), .ai_norm_ignore, character(1)))
+    toks <- toks[nzchar(toks)]
+    if (!length(toks)) next
+    for (m in ai_deliberate_markers()) {
+      # AGENTS.md and the shared .agents directory are too generic to trust as a
+      # bare token in an ignore file.
+      if (isTRUE(m$agnostic)) next
+      if (!(m$path %in% toks)) next
+      rows[[length(rows) + 1L]] <- data.frame(
+        tool = m$tool, tier = "D",
+        marker = paste0(src, ":", m$path),
+        agnostic = FALSE, stringsAsFactors = FALSE)
+    }
+  }
   if (!length(rows)) return(.ai_empty_evidence())
   do.call(rbind, rows)
 }
@@ -303,10 +328,15 @@ order_ai_tools <- function(ai_rows) {
     fs <- min(floors); fc <- 1L
   }
   tiers <- sort(unique(unlist(lapply(g$evidence_tiers, .ai_split_tiers))))
+  # Every marker that fired for this repository and tool, not just the one that won
+  # the onset: a maintainer who commits CLAUDE.md AND gitignores .claude has told you
+  # something neither marker says alone.
+  marks <- sort(unique(unlist(lapply(g$markers, .ai_split_tiers))))
   lc <- g$last_confirmed_date[!is.na(g$last_confirmed_date)]
   data.frame(repo_id = g$repo_id[1], tool = g$tool[1], first_seen_date = fs,
              first_seen_censored = fc,
              evidence_tiers = if (length(tiers)) paste(tiers, collapse = ",") else NA_character_,
+             markers = if (length(marks)) paste(marks, collapse = ",") else NA_character_,
              authored = as.integer(any(as.integer(g$authored) == 1L, na.rm = TRUE)),
              last_confirmed_date = if (length(lc)) max(lc) else NA_character_,
              stringsAsFactors = FALSE)
@@ -315,6 +345,7 @@ order_ai_tools <- function(ai_rows) {
 .ai_empty_signals <- function()
   data.frame(repo_id = character(), tool = character(), first_seen_date = character(),
              first_seen_censored = integer(), evidence_tiers = character(),
+             markers = character(),
              authored = integer(), last_confirmed_date = character(),
              stringsAsFactors = FALSE)
 
@@ -421,6 +452,7 @@ build_ai_detail <- function(repo_id, raw_evidence, onsets, last_confirmed) {
     first_seen_date = onsets$first_seen_date[m],
     first_seen_censored = pmax(onset_c, guard_c),
     evidence_tiers = ev$tier,
+    markers = ev$marker,
     authored = as.integer(ev$authored),
     last_confirmed_date = last_confirmed,
     stringsAsFactors = FALSE)
@@ -455,7 +487,7 @@ build_onset_map <- function(evidence, marker_dates = list(),
       # ignore-token marker names a .gitignore/.Rbuildignore entry (no committed path to
       # date), so its supplied date (today, from run_deep) is a censored "<=" floor.
       fs <- if (marker %in% names(marker_dates)) marker_dates[[marker]] else NA_character_
-      fc <- if (startsWith(marker, "ignore:")) 1L else 0L
+      fc <- if (ai_is_ignore_marker(marker)) 1L else 0L
     } else if (identical(tier, "PR")) {
       fs <- pr_date
     } else {
