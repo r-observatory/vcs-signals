@@ -662,3 +662,109 @@ test_that("the ignore predicate matches what the scanner writes, and nothing els
   # Nor a path that merely mentions the word.
   expect_false(ai_is_ignore_marker(".aiderignore"))
 })
+
+test_that("the bisect finds the revision that added a line, in log time", {
+  # The whole justification for bisecting rather than walking: a file with 64
+  # revisions must cost a handful of blob fetches, not 64.
+  probes <- 0
+  present <- function(added_at) function(i) { probes <<- probes + 1; i >= added_at }
+
+  probes <- 0
+  r <- bisect_ignore_onset(64, present(50))
+  expect_equal(r$index, 50L)
+  expect_true(r$exact)
+  expect_lt(probes, 12, label = "probe count for 64 revisions")
+
+  probes <- 0
+  expect_equal(bisect_ignore_onset(1000, present(937))$index, 937L)
+  expect_lt(probes, 16, label = "probe count for 1000 revisions")
+})
+
+test_that("a line already present at the oldest revision is a floor, not an exact date", {
+  # Bisection cannot see before the history it was given. If the token is already
+  # there at the start, the true addition is earlier and the date only bounds it.
+  r <- bisect_ignore_onset(40, function(i) TRUE)
+  expect_equal(r$index, 1L)
+  expect_false(r$exact)
+})
+
+test_that("a token in no revision produces no onset at all", {
+  r <- bisect_ignore_onset(40, function(i) FALSE)
+  expect_true(is.na(r$index))
+  expect_false(r$exact)
+})
+
+test_that("an empty history is not an onset", {
+  expect_true(is.na(bisect_ignore_onset(0, function(i) TRUE)$index))
+})
+
+test_that("the token check reads whole entries, the way the scanner does", {
+  expect_true(ignore_text_has_token("*.tmp\n.claude\nbuild/\n", ".claude"))
+  expect_true(ignore_text_has_token("^\\.claude$\n", ".claude"))     # Rbuildignore regex form
+  # A substring must not count, or codex_output would date .codex.
+  expect_false(ignore_text_has_token("codex_output/\n", ".codex"))
+  expect_false(ignore_text_has_token("", ".claude"))
+  expect_false(ignore_text_has_token(NA, ".claude"))
+})
+
+test_that("a bisected ignore date is exact, and an unbisected one stays a floor", {
+  ev <- data.frame(tool = c("claude", "cursor"), tier = c("D", "D"),
+                   marker = c("gitignore:.claude", "gitignore:.cursor"),
+                   agnostic = c(0L, 0L), stringsAsFactors = FALSE)
+  om <- build_onset_map(ev,
+    marker_dates = list("gitignore:.claude" = "2025-03-01T00:00:00Z",
+                        "gitignore:.cursor" = "2026-07-30T23:59:59Z"),
+    exact_markers = "gitignore:.claude")
+  expect_equal(om$first_seen_censored[om$marker == "gitignore:.claude"], 0L)
+  expect_equal(om$first_seen_censored[om$marker == "gitignore:.cursor"], 1L)
+})
+
+test_that("the bisect finds the revision that added the line, in log2 probes", {
+  # The whole reason to bisect rather than walk: an ignore file with 64 revisions
+  # costs a handful of blob fetches, not 64. If this ever degrades to a scan the
+  # cost goes up by an order of magnitude and nothing else would notice.
+  probes <- 0
+  added_at <- function(k) function(i) { probes <<- probes + 1; i >= k }
+
+  probes <- 0
+  r <- bisect_ignore_onset(64L, added_at(50L))
+  expect_equal(r$index, 50L)
+  expect_true(r$exact)
+  expect_lt(probes, 12L)
+
+  probes <- 0
+  r2 <- bisect_ignore_onset(1000L, added_at(783L))
+  expect_equal(r2$index, 783L)
+  expect_lt(probes, 15L, label = "a thousand revisions still cost a handful of probes")
+})
+
+test_that("a line already present at the oldest revision is a floor, not an exact date", {
+  # The addition predates the history we can see, so the date we can name is only a
+  # bound. Calling it exact would invent a first appearance out of where our view
+  # happens to start.
+  r <- bisect_ignore_onset(40L, function(i) TRUE)
+  expect_equal(r$index, 1L)
+  expect_false(r$exact)
+})
+
+test_that("a line in no revision yields nothing rather than a guess", {
+  r <- bisect_ignore_onset(40L, function(i) FALSE)
+  expect_true(is.na(r$index))
+  expect_false(r$exact)
+})
+
+test_that("an empty history is not an answer", {
+  expect_true(is.na(bisect_ignore_onset(0L, function(i) TRUE)$index))
+})
+
+test_that("token presence is judged by the same rule that detected it", {
+  # scan_ignore_tokens matches whole normalised entries, so the bisect must too, or
+  # it would date a different line from the one that produced the detection.
+  txt <- "*.tmp\n# a comment\n.claude/\n!keep\n"
+  expect_true(ignore_text_has_token(txt, ".claude"))
+  expect_false(ignore_text_has_token(txt, ".cursor"))
+  # A substring must not count, the same collision scan_ignore_tokens rejects.
+  expect_false(ignore_text_has_token("codex_output\n", ".codex"))
+  expect_false(ignore_text_has_token(NA, ".claude"))
+  expect_false(ignore_text_has_token("", ".claude"))
+})

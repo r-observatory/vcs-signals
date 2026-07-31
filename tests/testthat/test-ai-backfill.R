@@ -906,3 +906,95 @@ test_that("Tier A takes the earliest across a tool's identities", {
   expect_equal(got$first_seen_date, "2025-02-02T00:00:00Z")
   expect_equal(got$authored, 1L)
 })
+
+#' One ignore-file history page, newest first, shaped as the GraphQL response.
+#' A named helper because the literal is five levels of nesting deep and a paren
+#' tower in a fixture is a test that fails for the wrong reason.
+ab_history_resp <- function(oids, dates) {
+  nodes <- lapply(seq_along(oids), function(i)
+    list(oid = oids[i], committedDate = paste0(dates[i], "T00:00:00Z")))
+  history <- list(pageInfo = list(endCursor = "", hasNextPage = FALSE), nodes = nodes)
+  list(data = list(repository = list(defaultBranchRef = list(target = list(history = history)))))
+}
+
+test_that("run_deep dates an ignore entry from the commit that added it", {
+  # Every ignore-derived detection used to be stamped at the scan date, which is why
+  # most of the onset table was a floor sitting on whichever day we last ran. The
+  # line itself can be dated by bisecting the ignore file's history.
+  out <- tempfile("out_"); dir.create(out)
+  write_flagged_partial(file.path(out, "vcs-ai-flagged-roster.db"),
+    data.frame(repo_id = "github.com/o/r", owner = "o", name = "r", node_id = "R_1",
+               is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_,
+               stringsAsFactors = FALSE),
+    data.frame(repo_id = "github.com/o/r", tool = "claude", tier = "D",
+               marker = "gitignore:.claude", agnostic = 0L, stringsAsFactors = FALSE))
+
+  oids  <- c("c3", "c2", "c1")                                  # newest first, as GraphQL returns
+  dates <- c("2026-05-01", "2026-03-01", "2026-01-01")
+  io <- list(search = function(...) NA_character_,
+             search_hit = function(...) list(date = NA_character_, unavailable = FALSE),
+             graphql = function(q) {
+               if (grepl("history", q, fixed = TRUE)) return(ab_history_resp(oids, dates))
+               # The token arrives in c2, so it is absent in c1 and present after.
+               oid <- sub('.*expression: "([^:]+):.*', "\\1", q)
+               txt <- if (oid %in% c("c2", "c3")) "*.tmp\n.claude\n" else "*.tmp\n"
+               list(data = list(repository = list(object = list(text = txt))))
+             })
+
+  run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
+           marker_delay = 0, search_delay = 0)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db"))
+  on.exit(DBI::dbDisconnect(scon))
+  got <- DBI::dbReadTable(scon, "vcs_ai_signals")
+
+  expect_equal(got$first_seen_date, "2026-03-01T00:00:00Z")
+  expect_equal(got$first_seen_censored, 0L,
+               label = "absent before that commit and present at it, so the date is exact")
+})
+
+test_that("an ignore entry present at the oldest revision stays a floor", {
+  # A tighter floor than the scan date, and still a floor: the line was added before
+  # anything we can see.
+  out <- tempfile("out_"); dir.create(out)
+  write_flagged_partial(file.path(out, "vcs-ai-flagged-roster.db"),
+    data.frame(repo_id = "github.com/o/r", owner = "o", name = "r", node_id = "R_1",
+               is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_,
+               stringsAsFactors = FALSE),
+    data.frame(repo_id = "github.com/o/r", tool = "claude", tier = "D",
+               marker = "gitignore:.claude", agnostic = 0L, stringsAsFactors = FALSE))
+  io <- list(search = function(...) NA_character_,
+             search_hit = function(...) list(date = NA_character_, unavailable = FALSE),
+             graphql = function(q) {
+               if (grepl("history", q, fixed = TRUE)) {
+                 return(ab_history_resp(c("c2", "c1"), c("2026-05-01", "2026-01-01")))
+               }
+               list(data = list(repository = list(object = list(text = "*.tmp\n.claude\n"))))
+             })
+  run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
+           marker_delay = 0, search_delay = 0)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db"))
+  on.exit(DBI::dbDisconnect(scon))
+  got <- DBI::dbReadTable(scon, "vcs_ai_signals")
+  expect_equal(got$first_seen_date, "2026-01-01T00:00:00Z")
+  expect_equal(got$first_seen_censored, 1L)
+})
+
+test_that("an unreadable ignore history falls back to the scan date, not to silence", {
+  out <- tempfile("out_"); dir.create(out)
+  write_flagged_partial(file.path(out, "vcs-ai-flagged-roster.db"),
+    data.frame(repo_id = "github.com/o/r", owner = "o", name = "r", node_id = "R_1",
+               is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_,
+               stringsAsFactors = FALSE),
+    data.frame(repo_id = "github.com/o/r", tool = "claude", tier = "D",
+               marker = "gitignore:.claude", agnostic = 0L, stringsAsFactors = FALSE))
+  io <- list(search = function(...) NA_character_,
+             search_hit = function(...) list(date = NA_character_, unavailable = FALSE),
+             graphql = function(q) list(errors = list(list(message = "nope"))))
+  run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
+           marker_delay = 0, search_delay = 0)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db"))
+  on.exit(DBI::dbDisconnect(scon))
+  got <- DBI::dbReadTable(scon, "vcs_ai_signals")
+  expect_equal(got$first_seen_censored, 1L,
+               label = "a detection we could not date is still a detection")
+})

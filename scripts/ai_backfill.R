@@ -422,13 +422,31 @@ run_deep <- function(io, out_dir, roster_path, i, N,
     #     today (build_onset_map stamps first_seen_censored = 1), and no history call is spent
     #     on a path that does not exist in the tree.
     marker_dates <- list()
+    exact_ignores <- character(0)
     for (marker in unique(ev$marker[ev$tier == "D"])) {
       if (ai_is_ignore_marker(marker)) {
-        # End-of-day instant so a same-day committed exact (e.g. "...T10:00:00Z") sorts
-        # BEFORE this floor and correctly dominates it in the reducer; a bare date-only
-        # "today" would be a lexicographic prefix of any same-day instant and wrongly win.
-        # (`today` itself stays date-only for the last_confirmed stamp below.)
-        marker_dates[[marker]] <- paste0(today, "T23:59:59Z")
+        # Bisect the ignore file's own history for the commit that added the line.
+        # Stamping the scan date instead is what left most of the onset table sitting
+        # on whichever day we last ran, and it is the reason the curve can only chart
+        # a third of the detections.
+        parts <- strsplit(marker, ":", fixed = TRUE)[[1]]
+        file  <- if (identical(parts[1], "rbuildignore")) ".Rbuildignore" else ".gitignore"
+        token <- paste(parts[-1], collapse = ":")
+        got <- tryCatch(fetch_ignore_onset(io, owner, name, file, token, delay = marker_delay),
+                        error = function(e) list(date = NA_character_, exact = FALSE))
+        if (!is.na(got$date) && isTRUE(got$exact)) {
+          marker_dates[[marker]] <- got$date
+          exact_ignores <- c(exact_ignores, marker)
+        } else if (!is.na(got$date)) {
+          # Present at the oldest revision we can see, so the line predates the history.
+          # A tighter floor than the scan date, and still a floor.
+          marker_dates[[marker]] <- got$date
+        } else {
+          # End-of-day instant so a same-day committed exact sorts BEFORE this floor and
+          # dominates it in the reducer; a bare date-only "today" would be a lexicographic
+          # prefix of any same-day instant and wrongly win.
+          marker_dates[[marker]] <- paste0(today, "T23:59:59Z")
+        }
         next
       }
       d <- tryCatch(fetch_marker_onset(io, owner, name, marker_repo_path(marker), delay = marker_delay),
@@ -481,7 +499,8 @@ run_deep <- function(io, out_dir, roster_path, i, N,
     full_ev <- rbind(ev, extra_ev)
 
     # (3) assemble + guard + collapse.
-    onsets <- build_onset_map(full_ev, marker_dates, commit_onsets, mine$pr_onset_date[r])
+    onsets <- build_onset_map(full_ev, marker_dates, commit_onsets, mine$pr_onset_date[r],
+                              exact_markers = exact_ignores)
     guarded <- apply_fork_guard(full_ev, isTRUE(mine$is_fork[r] == 1L), mine$parent[r], character(0))
     detail <- build_ai_detail(rid, guarded, onsets, today)
     if (nrow(detail) > 0) acc[[length(acc) + 1L]] <- detail
