@@ -609,3 +609,43 @@ test_that("the search delay is paced for the limit that actually exists", {
   # 2s issued ~12,000 searches on one backfill and was refused by nearly all of them.
   expect_true(SEARCH_DELAY_S >= 5)
 })
+
+test_that("an ignore marker names which ignore file it came from", {
+  # "ignore:.claude" could not tell a build-time exclusion from a source-control
+  # one, so a reader asking how a package was detected got no usable answer.
+  r <- scan_ignore_tokens(c(".claude"), character(0))
+  expect_equal(r$marker, "ignore:gitignore:.claude")
+
+  r2 <- scan_ignore_tokens(character(0), c(".cursor"))
+  expect_equal(r2$marker, "ignore:rbuildignore:.cursor")
+})
+
+test_that("a path in both ignore files is recorded twice, on purpose", {
+  # The pair is a real fact about the repository. They collapse per (repo, tool)
+  # downstream, so two rows here cost nothing and carry more.
+  r <- scan_ignore_tokens(c(".claude"), c(".claude"))
+  expect_equal(nrow(r), 2L)
+  expect_setequal(r$marker,
+                  c("ignore:gitignore:.claude", "ignore:rbuildignore:.claude"))
+  expect_true(all(r$tool == "claude"))
+})
+
+test_that("an ambient marker in an ignore file stays out of the AI evidence", {
+  # Positron writes .positai whether or not anyone used AI. Emitting it here would
+  # not merely add a row: the gate flags a repository on ANY evidence row, so a
+  # repository whose only marker is an editor artifact would be pulled into the AI
+  # roster and scanned as an adopter. Recording it belongs in the dev-tooling signal.
+  r <- scan_ignore_tokens(c(".positai"), character(0))
+  expect_equal(nrow(r), 0L)
+
+  # A deliberate marker beside it still fires.
+  both <- scan_ignore_tokens(c(".positai", ".claude"), character(0))
+  expect_equal(both$tool, "claude")
+  expect_equal(both$marker, "ignore:gitignore:.claude")
+})
+
+test_that("the neutral markers stay untrusted as bare ignore tokens", {
+  # ".agents" or "AGENTS.md" in a .gitignore names no product and is far too
+  # generic to attribute to one.
+  expect_equal(nrow(scan_ignore_tokens(c(".agents", "AGENTS.md"), character(0))), 0L)
+})

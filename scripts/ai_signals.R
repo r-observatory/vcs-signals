@@ -130,18 +130,35 @@ marker_repo_path <- function(marker) {
 #' Tier-D evidence from a whole-entry match of an ignore-file token against a
 #' marker path. Anchored equality only (never a substring), so tokens like
 #' codex_output or a gemini-protocol path do not collide.
+#' The two ignore files are scanned SEPARATELY and a marker names the one it came
+#' from: "ignore:gitignore:.claude", not the old "ignore:.claude", which unioned both
+#' and left no way to tell a build-time exclusion from a source-control one. A path in
+#' both files yields two rows on purpose; they collapse per (repo, tool) downstream and
+#' the pair is a real fact about the repository, not a duplicate.
+#'
+#' Ambient markers stay OUT of this frame. .positai belongs in the dev-tooling signal,
+#' not here: the AI gate flags a repository on any row this returns, so emitting an
+#' ambient one would pull a repository whose only marker is an editor artifact into the
+#' AI roster. Recording a gitignored .positai needs the dev-tooling classifier to see
+#' the ignore lines, which is a separate change to its signature.
 scan_ignore_tokens <- function(gitignore_lines, rbuildignore_lines) {
-  toks <- unique(vapply(c(gitignore_lines %||% character(0),
-                          rbuildignore_lines %||% character(0)),
-                        .ai_norm_ignore, character(1)))
-  toks <- toks[nzchar(toks)]
-  rows <- lapply(ai_deliberate_markers(), function(m) {
-    if (isTRUE(m$agnostic)) return(NULL)      # AGENTS.md token is too generic to trust in ignore files
-    if (!(m$path %in% toks)) return(NULL)
-    data.frame(tool = m$tool, tier = "D", marker = paste0("ignore:", m$path),
-               agnostic = FALSE, stringsAsFactors = FALSE)
-  })
-  rows <- Filter(Negate(is.null), rows)
+  sources <- list(gitignore = gitignore_lines, rbuildignore = rbuildignore_lines)
+  rows <- list()
+  for (src in names(sources)) {
+    toks <- unique(vapply(sources[[src]] %||% character(0), .ai_norm_ignore, character(1)))
+    toks <- toks[nzchar(toks)]
+    if (!length(toks)) next
+    for (m in ai_deliberate_markers()) {
+      # AGENTS.md and the shared .agents directory are too generic to trust as a
+      # bare token in an ignore file.
+      if (isTRUE(m$agnostic)) next
+      if (!(m$path %in% toks)) next
+      rows[[length(rows) + 1L]] <- data.frame(
+        tool = m$tool, tier = "D",
+        marker = paste0("ignore:", src, ":", m$path),
+        agnostic = FALSE, stringsAsFactors = FALSE)
+    }
+  }
   if (!length(rows)) return(.ai_empty_evidence())
   do.call(rbind, rows)
 }
