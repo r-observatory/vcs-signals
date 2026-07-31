@@ -848,3 +848,61 @@ test_that("a scan whose io has no trailer channel still runs", {
   expect_no_error(run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
                            marker_delay = 0, search_delay = 0))
 })
+
+test_that("Tier A searches every allowlisted identity, not just email-shaped ones", {
+  # The allowlist holds two shapes and only one was ever searched. Filtering on
+  # grepl("@") silently skipped five of six identities, so no Copilot, Cursor,
+  # Devin, Jules or OpenHands commit could be found by Tier A however well the
+  # query was formed. That looked exactly like those tools not being used.
+  expect_equal(.ai_author_queries("claude"), "author-email:noreply@anthropic.com")
+  expect_equal(.ai_author_queries("copilot"), "author:copilot-swe-agent[bot]")
+  expect_equal(.ai_author_queries("cursor"), "author:cursor[bot]")
+  expect_equal(.ai_author_queries("devin"), "author:devin-ai-integration[bot]")
+  expect_equal(.ai_author_queries("jules"), "author:google-labs-jules[bot]")
+  expect_equal(.ai_author_queries("openhands"), "author:openhands-agent")
+
+  # An email takes author-email:, a login takes author:. Mixing them finds nothing.
+  expect_true(all(grepl("^author-email:", .ai_author_queries("claude"))))
+  expect_true(all(grepl("^author:", .ai_author_queries("copilot"))))
+
+  # A tool with no allowlisted identity searches nothing rather than erroring.
+  expect_equal(.ai_author_queries("gemini"), character(0))
+})
+
+test_that("every allowlisted identity is reachable by some Tier A query", {
+  # The regression guard: an identity added to the allowlist that no query shape
+  # covers is an identity that can never be detected, and nothing else would say so.
+  for (tool in unique(unname(AI_BOT_ALLOWLIST))) {
+    expect_true(length(.ai_author_queries(tool)) > 0, info = tool)
+  }
+  expect_equal(length(unlist(lapply(unique(unname(AI_BOT_ALLOWLIST)), .ai_author_queries))),
+               length(AI_BOT_ALLOWLIST),
+               info = "one query per allowlisted identity, none dropped")
+})
+
+test_that("Tier A takes the earliest across a tool's identities", {
+  # A bot that changed login keeps its onset rather than restarting it.
+  out <- tempfile("out_"); dir.create(out)
+  write_flagged_partial(file.path(out, "vcs-ai-flagged-roster.db"),
+    data.frame(repo_id = "github.com/o/r", owner = "o", name = "r", node_id = "R_1",
+               is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_,
+               stringsAsFactors = FALSE),
+    data.frame(repo_id = "github.com/o/r", tool = "copilot", tier = "D",
+               marker = "copilot-instructions.md", agnostic = 0L, stringsAsFactors = FALSE))
+  io <- list(
+    graphql = function(query) list(data = list(repository = list(defaultBranchRef = list(
+      target = list(history = list(pageInfo = list(endCursor = "", hasNextPage = FALSE),
+        nodes = list(list(committedDate = "2026-06-01T00:00:00Z")))))))),
+    search = function(owner, name, query, delay = 0) "2025-02-02T00:00:00Z",
+    search_hit = function(owner, name, query, delay = 0)
+      list(date = NA_character_, message = NA_character_, author = NA_character_,
+           unavailable = FALSE))
+  run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
+           marker_delay = 0, search_delay = 0)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db"))
+  on.exit(DBI::dbDisconnect(scon))
+  got <- DBI::dbReadTable(scon, "vcs_ai_signals")
+  expect_true("A" %in% strsplit(got$evidence_tiers, ",\\s*")[[1]])
+  expect_equal(got$first_seen_date, "2025-02-02T00:00:00Z")
+  expect_equal(got$authored, 1L)
+})

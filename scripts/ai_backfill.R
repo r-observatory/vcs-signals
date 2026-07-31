@@ -348,10 +348,23 @@ export_ai_shard <- function(path, rows) {
 #' tool has no email in AI_BOT_ALLOWLIST (marker-only tools like cursor/gemini/windsurf).
 #' The author-email qualifier is an EXACT match, so a hit is a confirmed Tier-A onset,
 #' unlike a fuzzy message-token search (a floor). Internal.
-.ai_author_email <- function(tool) {
-  em <- names(AI_BOT_ALLOWLIST)[AI_BOT_ALLOWLIST == tool]
-  em <- em[grepl("@", em)]
-  if (length(em)) em[1] else NA_character_
+#' Every Tier-A search term for a tool, one per allowlisted identity.
+#'
+#' The allowlist holds two shapes and only one was ever searched: an email
+#' (noreply@anthropic.com) and a bot login (copilot-swe-agent[bot], cursor[bot],
+#' devin-ai-integration[bot], google-labs-jules[bot], openhands-agent). The old
+#' helper filtered on grepl("@"), so five of the six identities were silently
+#' skipped and no Copilot, Cursor, Devin, Jules or OpenHands commit could ever be
+#' found by Tier A, however well the query was formed.
+#'
+#' An email goes to author-email:, a login to author:. Returns character(0) when a
+#' tool has no allowlisted identity, so the caller simply searches nothing.
+.ai_author_queries <- function(tool) {
+  ids <- names(AI_BOT_ALLOWLIST)[AI_BOT_ALLOWLIST == tool]
+  if (!length(ids)) return(character(0))
+  vapply(ids, function(id) {
+    if (grepl("@", id, fixed = TRUE)) paste0("author-email:", id) else paste0("author:", id)
+  }, character(1), USE.NAMES = FALSE)
 }
 
 # ---- deep onset scan --------------------------------------------------------
@@ -426,13 +439,17 @@ run_deep <- function(io, out_dir, roster_path, i, N,
     # (2) Tier-A author-email commit onsets (exact) for flagged bot-identity tools.
     commit_onsets <- NULL; extra_ev <- NULL
     for (tool in unique(ev$tool[!as.logical(ev$agnostic)])) {
-      email <- .ai_author_email(tool)
-      if (is.na(email)) next
-      d <- tryCatch(io$search(owner, name, sprintf("author-email:%s", email), search_delay),
-                    error = function(e) NA_character_)
-      if (is.na(d)) next
+      # Every allowlisted identity for the tool, not just an email-shaped one.
+      hits <- character(0)
+      for (term in .ai_author_queries(tool)) {
+        d <- tryCatch(io$search(owner, name, term, search_delay),
+                      error = function(e) NA_character_)
+        if (!is.na(d)) hits <- c(hits, d)
+      }
+      if (!length(hits)) next
+      # The earliest across identities: a bot that changed login keeps its onset.
       commit_onsets <- rbind(commit_onsets, data.frame(tool = tool, tier = "A",
-        first_seen_date = d, confirmed = TRUE, stringsAsFactors = FALSE))
+        first_seen_date = min(hits), confirmed = TRUE, stringsAsFactors = FALSE))
       extra_ev <- rbind(extra_ev, data.frame(tool = tool, tier = "A", marker = "A",
         agnostic = 0L, authored = 1L, stringsAsFactors = FALSE))
     }
