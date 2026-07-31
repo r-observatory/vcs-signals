@@ -679,15 +679,27 @@ parse_search_commit <- function(body_txt) parse_search_commit_hit(body_txt)$date
 #'
 #' Returns list(date, message, author) with NA fields when there is no hit.
 parse_search_commit_hit <- function(body_txt) {
-  none <- list(date = NA_character_, message = NA_character_, author = NA_character_)
+  none <- list(date = NA_character_, message = NA_character_, author = NA_character_,
+               unavailable = FALSE)
+  unavailable <- list(date = NA_character_, message = NA_character_, author = NA_character_,
+                      unavailable = TRUE)
   body <- tryCatch(jsonlite::fromJSON(body_txt, simplifyVector = FALSE), error = function(e) NULL)
-  if (is.null(body)) return(none)
+  if (is.null(body)) return(unavailable)   # unparseable is not an answer
+
+  # A throttled or errored search returns HTTP 200-shaped JSON carrying `message` and
+  # no `total_count`, and gh exits 0 for it. Reading that as an empty result made a
+  # refused question indistinguishable from "this repository has no trailer", which
+  # is how tier B came back as a confident zero across the entire roster while
+  # igraph/rigraph alone had 53 matching commits.
+  if (is.null(body$total_count) && !is.null(body$message)) return(unavailable)
+
   items <- .nn(body$items, list())
   if (isTRUE(.nn(body$total_count, length(items)) == 0) || length(items) == 0) return(none)
   it <- items[[1]]
   list(date    = .nn(it$commit$committer$date, NA_character_),
        message = .nn(it$commit$message, NA_character_),
-       author  = .nn(it$commit$author$name, NA_character_))
+       author  = .nn(it$commit$author$name, NA_character_),
+       unavailable = FALSE)
 }
 
 #' A marker path plus any known predecessor paths (AI_MARKER_PREDECESSORS), probed
@@ -781,7 +793,9 @@ search_earliest_commit <- function(token, owner, name, query, delay = SEARCH_DEL
 #' Same transport, same pacing, same fail-soft: an error is a hit with NA fields, never
 #' an exception that would abort a shard.
 search_earliest_commit_hit <- function(token, owner, name, query, delay = SEARCH_DELAY_S) {
-  none <- list(date = NA_character_, message = NA_character_, author = NA_character_)
+  # A transport failure is also a refused question, not an absence of trailers.
+  none <- list(date = NA_character_, message = NA_character_, author = NA_character_,
+               unavailable = TRUE)
   old <- Sys.getenv("GH_TOKEN", unset = NA)
   Sys.setenv(GH_TOKEN = token)
   on.exit({ if (is.na(old)) Sys.unsetenv("GH_TOKEN") else Sys.setenv(GH_TOKEN = old) }, add = TRUE)

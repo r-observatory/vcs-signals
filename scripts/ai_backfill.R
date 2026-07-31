@@ -385,6 +385,7 @@ run_deep <- function(io, out_dir, roster_path, i, N,
   today <- format(Sys.Date())
 
   acc <- list()
+  unavailable <- 0L   # searches the API refused, kept apart from searches that missed
   for (r in seq_len(nrow(mine))) {
     rl <- graphql_rate_remaining(io)
     if (rl < AI_POINT_RESERVE) {
@@ -445,7 +446,12 @@ run_deep <- function(io, out_dir, roster_path, i, N,
       q <- spec$rule$query
       if (is.null(q) || is.na(q) || !nzchar(q)) next
       hit <- tryCatch(io$search_hit(owner, name, q, search_delay),
-                      error = function(e) list(date = NA_character_))
+                      error = function(e) list(date = NA_character_, unavailable = TRUE))
+      # A refused question is not an absence of trailers. Count it, leave the repo
+      # without a tier-B row, and record nothing either way: the alternative is what
+      # happened on the first run, where throttling produced a confident zero across
+      # the whole roster.
+      if (isTRUE(hit$unavailable)) { unavailable <- unavailable + 1L; next }
       if (is.na(.nn(hit$date, NA_character_))) next
       v <- verify_search_hit(spec$rule, spec$tier, hit)
       commit_onsets <- rbind(commit_onsets, data.frame(tool = v$tool, tier = v$tier,
@@ -465,6 +471,14 @@ run_deep <- function(io, out_dir, roster_path, i, N,
   rows <- if (length(acc)) do.call(rbind, acc) else .ai_empty_signals()
   export_ai_shard(file.path(out_dir, sprintf("vcs-ai-shard-%d.db", i)), rows)
   message(sprintf("ai deep shard %d/%d: %d onset detail rows", i, N, nrow(rows)))
+  # Said out loud, because a run that could not ask is not a run that found nothing,
+  # and the difference is invisible in the published table.
+  if (unavailable > 0L) {
+    message(sprintf(
+      "ai deep shard %d/%d: WARNING %d commit search(es) were refused (rate limit or error); ",
+      i, N, unavailable),
+      "tier B and C are UNDER-COUNTED for this shard, not absent")
+  }
 }
 
 # ---- merge ------------------------------------------------------------------

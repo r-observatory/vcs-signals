@@ -575,3 +575,37 @@ test_that("every searchable rule carries the literal query the API needs", {
     expect_true(!is.null(r$query) && nzchar(r$query), info = r$tool)
   }
 })
+
+test_that("a refused search is not an absence of trailers", {
+  # The whole tier-B zero across the roster came from this: a throttled search
+  # returns 200-shaped JSON with a message and no total_count, gh exits 0, and
+  # reading it as an empty result makes a refused question indistinguishable from
+  # a repository that genuinely has none.
+  throttled <- parse_search_commit_hit(
+    '{"message":"You have exceeded a secondary rate limit","documentation_url":"..."}')
+  expect_true(throttled$unavailable)
+  expect_true(is.na(throttled$date))
+
+  garbage <- parse_search_commit_hit("not json at all")
+  expect_true(garbage$unavailable)
+})
+
+test_that("a genuine miss is still a genuine miss", {
+  # The distinction is worthless if an honest zero also reads as unavailable.
+  miss <- parse_search_commit_hit('{"total_count":0,"items":[]}')
+  expect_false(miss$unavailable)
+  expect_true(is.na(miss$date))
+})
+
+test_that("a real hit carries its evidence and is not marked unavailable", {
+  hit <- parse_search_commit_hit(paste0(
+    '{"total_count":1,"items":[{"commit":{"committer":{"date":"2026-03-01T00:00:00Z"},',
+    '"message":"feat","author":{"name":"Jane"}}}]}'))
+  expect_false(hit$unavailable)
+  expect_equal(hit$date, "2026-03-01T00:00:00Z")
+})
+
+test_that("the search delay is paced for the limit that actually exists", {
+  # 2s issued ~12,000 searches on one backfill and was refused by nearly all of them.
+  expect_true(SEARCH_DELAY_S >= 5)
+})
