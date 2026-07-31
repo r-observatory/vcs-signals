@@ -127,11 +127,19 @@ marker_repo_path <- function(marker) {
   x
 }
 
+#' TRUE when a Tier-D marker names an ignore-file entry rather than a committed path.
+#' Two decisions hang on this: such a marker has no path whose history can be walked,
+#' so it costs no fetch, and its date can only ever be a censored floor. Defined once
+#' so neither can drift from the format scan_ignore_tokens produces.
+ai_is_ignore_marker <- function(marker) {
+  grepl("^(gitignore|rbuildignore):", marker)
+}
+
 #' Tier-D evidence from a whole-entry match of an ignore-file token against a
 #' marker path. Anchored equality only (never a substring), so tokens like
 #' codex_output or a gemini-protocol path do not collide.
 #' The two ignore files are scanned SEPARATELY and a marker names the one it came
-#' from: "ignore:gitignore:.claude", not the old "ignore:.claude", which unioned both
+#' from: "gitignore:.claude", not the old "ignore:.claude", which unioned both
 #' and left no way to tell a build-time exclusion from a source-control one. A path in
 #' both files yields two rows on purpose; they collapse per (repo, tool) downstream and
 #' the pair is a real fact about the repository, not a duplicate.
@@ -155,7 +163,7 @@ scan_ignore_tokens <- function(gitignore_lines, rbuildignore_lines) {
       if (!(m$path %in% toks)) next
       rows[[length(rows) + 1L]] <- data.frame(
         tool = m$tool, tier = "D",
-        marker = paste0("ignore:", src, ":", m$path),
+        marker = paste0(src, ":", m$path),
         agnostic = FALSE, stringsAsFactors = FALSE)
     }
   }
@@ -472,7 +480,7 @@ build_onset_map <- function(evidence, marker_dates = list(),
       # ignore-token marker names a .gitignore/.Rbuildignore entry (no committed path to
       # date), so its supplied date (today, from run_deep) is a censored "<=" floor.
       fs <- if (marker %in% names(marker_dates)) marker_dates[[marker]] else NA_character_
-      fc <- if (startsWith(marker, "ignore:")) 1L else 0L
+      fc <- if (ai_is_ignore_marker(marker)) 1L else 0L
     } else if (identical(tier, "PR")) {
       fs <- pr_date
     } else {

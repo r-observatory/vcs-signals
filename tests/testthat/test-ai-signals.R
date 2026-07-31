@@ -25,7 +25,7 @@ test_that("scan_ignore_tokens anchors whole entries and ignores comments and wor
   expect_true("aider" %in% out$tool)                         # .aiderignore is a real AI_MARKERS aider path
   expect_true("cursor" %in% out$tool)
   expect_false("codex" %in% out$tool)                        # substring collision rejected
-  expect_true(all(grepl("^ignore:", out$marker)))
+  expect_true(all(ai_is_ignore_marker(out$marker)))          # named by the file they came from
 })
 
 test_that("scan_ignore_tokens returns typed empty frame on no match", {
@@ -302,28 +302,28 @@ test_that("earliest_agent_pr_date returns the earliest post-cutoff agent created
 
 test_that("build_onset_map keys marker_dates by the full marker; ignore tokens are censored floors", {
   ev <- data.frame(tool = c("claude", "aider"), tier = c("D", "D"),
-                   marker = c("CLAUDE.md", "ignore:.aiderignore"),
+                   marker = c("CLAUDE.md", "gitignore:.aiderignore"),
                    agnostic = c(FALSE, FALSE), stringsAsFactors = FALSE)
   om <- build_onset_map(ev, marker_dates = list("CLAUDE.md" = "2024-02-01T00:00:00Z",
-                                                "ignore:.aiderignore" = "2026-07-17"))
+                                                "gitignore:.aiderignore" = "2026-07-17"))
   # committed marker -> exact onset
   expect_equal(om$first_seen_date[om$marker == "CLAUDE.md"], "2024-02-01T00:00:00Z")
   expect_equal(om$first_seen_censored[om$marker == "CLAUDE.md"], 0L)
   # ignore-token marker -> censored "<=" floor (a .Rbuildignore entry names no committed path)
-  expect_equal(om$first_seen_date[om$marker == "ignore:.aiderignore"], "2026-07-17")
-  expect_equal(om$first_seen_censored[om$marker == "ignore:.aiderignore"], 1L)
+  expect_equal(om$first_seen_date[om$marker == "gitignore:.aiderignore"], "2026-07-17")
+  expect_equal(om$first_seen_censored[om$marker == "gitignore:.aiderignore"], 1L)
 })
 
 test_that("build_onset_map keeps a committed marker and an ignore token for one tool distinct", {
   ev <- data.frame(tool = c("cursor", "cursor"), tier = c("D", "D"),
-                   marker = c(".cursorrules", "ignore:.cursorrules"),
+                   marker = c(".cursorrules", "gitignore:.cursorrules"),
                    agnostic = c(FALSE, FALSE), stringsAsFactors = FALSE)
   om <- build_onset_map(ev, marker_dates = list(".cursorrules" = "2024-01-01T00:00:00Z",
-                                                "ignore:.cursorrules" = "2026-07-17"))
+                                                "gitignore:.cursorrules" = "2026-07-17"))
   expect_equal(nrow(om), 2)
   expect_equal(om$first_seen_censored[om$marker == ".cursorrules"], 0L)          # committed: exact
   expect_equal(om$first_seen_date[om$marker == ".cursorrules"], "2024-01-01T00:00:00Z")
-  expect_equal(om$first_seen_censored[om$marker == "ignore:.cursorrules"], 1L)   # token: floor
+  expect_equal(om$first_seen_censored[om$marker == "gitignore:.cursorrules"], 1L)   # token: floor
 })
 
 test_that("build_onset_map records a PR onset exact and a commit onset per its confirmed flag", {
@@ -611,13 +611,13 @@ test_that("the search delay is paced for the limit that actually exists", {
 })
 
 test_that("an ignore marker names which ignore file it came from", {
-  # "ignore:.claude" could not tell a build-time exclusion from a source-control
+  # "gitignore:.claude" could not tell a build-time exclusion from a source-control
   # one, so a reader asking how a package was detected got no usable answer.
   r <- scan_ignore_tokens(c(".claude"), character(0))
-  expect_equal(r$marker, "ignore:gitignore:.claude")
+  expect_equal(r$marker, "gitignore:.claude")
 
   r2 <- scan_ignore_tokens(character(0), c(".cursor"))
-  expect_equal(r2$marker, "ignore:rbuildignore:.cursor")
+  expect_equal(r2$marker, "rbuildignore:.cursor")
 })
 
 test_that("a path in both ignore files is recorded twice, on purpose", {
@@ -625,8 +625,7 @@ test_that("a path in both ignore files is recorded twice, on purpose", {
   # downstream, so two rows here cost nothing and carry more.
   r <- scan_ignore_tokens(c(".claude"), c(".claude"))
   expect_equal(nrow(r), 2L)
-  expect_setequal(r$marker,
-                  c("ignore:gitignore:.claude", "ignore:rbuildignore:.claude"))
+  expect_setequal(r$marker, c("gitignore:.claude", "rbuildignore:.claude"))
   expect_true(all(r$tool == "claude"))
 })
 
@@ -641,11 +640,25 @@ test_that("an ambient marker in an ignore file stays out of the AI evidence", {
   # A deliberate marker beside it still fires.
   both <- scan_ignore_tokens(c(".positai", ".claude"), character(0))
   expect_equal(both$tool, "claude")
-  expect_equal(both$marker, "ignore:gitignore:.claude")
+  expect_equal(both$marker, "gitignore:.claude")
 })
 
 test_that("the neutral markers stay untrusted as bare ignore tokens", {
   # ".agents" or "AGENTS.md" in a .gitignore names no product and is far too
   # generic to attribute to one.
   expect_equal(nrow(scan_ignore_tokens(c(".agents", "AGENTS.md"), character(0))), 0L)
+})
+
+test_that("the ignore predicate matches what the scanner writes, and nothing else", {
+  # Two decisions hang on this: an ignore marker names no committed path, so it costs
+  # no history fetch and can only ever carry a censored floor. If the predicate and
+  # the format ever drift, a gitignored marker silently becomes an exact onset.
+  r <- scan_ignore_tokens(c(".claude"), c(".cursor"))
+  expect_true(all(ai_is_ignore_marker(r$marker)))
+
+  # A committed path must not match, or its history would never be walked.
+  expect_false(ai_is_ignore_marker("CLAUDE.md"))
+  expect_false(ai_is_ignore_marker(".claude/skills"))
+  # Nor a path that merely mentions the word.
+  expect_false(ai_is_ignore_marker(".aiderignore"))
 })

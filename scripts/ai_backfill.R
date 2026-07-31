@@ -403,13 +403,14 @@ run_deep <- function(io, out_dir, roster_path, i, N,
     #     marker is the tree entry name) is dated exactly by paging its REAL repo path's
     #     history - marker_repo_path prepends .github/ for a github-located marker, which
     #     GraphQL history(path:) resolves for files, nested paths, and directories alike. An
-    #     IGNORE-TOKEN marker ("ignore:<path>") names a .gitignore/.Rbuildignore entry, not a
+    #     IGNORE-TOKEN marker ("gitignore:<path>" / "rbuildignore:<path>") names an entry in
+    #     that file rather than a
     #     committed path, so its history cannot be dated: it takes an honest censored floor of
     #     today (build_onset_map stamps first_seen_censored = 1), and no history call is spent
     #     on a path that does not exist in the tree.
     marker_dates <- list()
     for (marker in unique(ev$marker[ev$tier == "D"])) {
-      if (startsWith(marker, "ignore:")) {
+      if (ai_is_ignore_marker(marker)) {
         # End-of-day instant so a same-day committed exact (e.g. "...T10:00:00Z") sorts
         # BEFORE this floor and correctly dominates it in the reducer; a bare date-only
         # "today" would be a lexicographic prefix of any same-day instant and wrongly win.
