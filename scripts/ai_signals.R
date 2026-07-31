@@ -471,7 +471,8 @@ build_ai_detail <- function(repo_id, raw_evidence, onsets, last_confirmed) {
 #' onset. Pure: all dates/confirms are passed in. A row with no resolved onset keeps
 #' first_seen_date NA (build_ai_detail leaves it NA in the detail row).
 build_onset_map <- function(evidence, marker_dates = list(),
-                            commit_onsets = NULL, pr_date = NA_character_) {
+                            commit_onsets = NULL, pr_date = NA_character_,
+                            exact_markers = character(0)) {
   empty <- data.frame(tool = character(), marker = character(),
                       first_seen_date = character(), first_seen_censored = integer(),
                       stringsAsFactors = FALSE)
@@ -483,11 +484,11 @@ build_onset_map <- function(evidence, marker_dates = list(),
     fs <- NA_character_; fc <- 0L
     if (identical(tier, "D")) {
       # Keyed by the FULL marker string, so a committed marker and an ignore token for the
-      # same tool never collide on a shared bare path. A committed marker is exact; an
-      # ignore-token marker names a .gitignore/.Rbuildignore entry (no committed path to
-      # date), so its supplied date (today, from run_deep) is a censored "<=" floor.
+      # same tool never collide on a shared bare path. A committed marker is exact. An
+      # ignore-token marker is a floor UNLESS the caller bisected its ignore file's history
+      # and proved the line absent before that commit, which is what exact_markers carries.
       fs <- if (marker %in% names(marker_dates)) marker_dates[[marker]] else NA_character_
-      fc <- if (ai_is_ignore_marker(marker)) 1L else 0L
+      fc <- if (ai_is_ignore_marker(marker) && !(marker %in% exact_markers)) 1L else 0L
     } else if (identical(tier, "PR")) {
       fs <- pr_date
     } else {
@@ -537,4 +538,40 @@ build_ai_rollups <- function(ai_signals) {
   parts <- Filter(Negate(is.null), parts)
   if (!length(parts)) return(.ai_empty_rollups())
   do.call(rbind, parts)
+}
+
+#' Locate the earliest revision in `commits` (oldest first) at which `token` is present,
+#' by bisection over a `present(i)` predicate.
+#'
+#' Returns list(index, exact). `index` is NA when the token is absent from every
+#' revision tested. `exact` is TRUE only when the token is ABSENT at the oldest
+#' revision and present at the found one, which together prove the line was added
+#' inside the history we can see. When the oldest revision already carries it, the
+#' true addition is at or before the start of history and the date is only a floor.
+#'
+#' Pure: the caller supplies `present`, so this is testable without any network, and
+#' the count of probes is asserted in the tests because the whole point is log2(n).
+#'
+#' A token added, removed and re-added would fool a bisect. That is why `exact` rests
+#' on the absent-at-oldest check rather than on the boundary alone: a clean absent to
+#' present transition across the whole visible history is a single addition.
+bisect_ignore_onset <- function(n, present) {
+  if (n <= 0) return(list(index = NA_integer_, exact = FALSE))
+  if (!isTRUE(present(n))) return(list(index = NA_integer_, exact = FALSE))  # never present
+  if (isTRUE(present(1L))) return(list(index = 1L, exact = FALSE))           # present at the start
+  lo <- 1L; hi <- n                       # present(lo) FALSE, present(hi) TRUE
+  while (hi - lo > 1L) {
+    mid <- lo + (hi - lo) %/% 2L
+    if (isTRUE(present(mid))) hi <- mid else lo <- mid
+  }
+  list(index = hi, exact = TRUE)
+}
+
+#' Whether an ignore file's text names `token` as a whole entry, using the same
+#' normalisation scan_ignore_tokens applies to a line.
+ignore_text_has_token <- function(text, token) {
+  if (is.null(text) || is.na(text) || !nzchar(text)) return(FALSE)
+  lines <- strsplit(text, "\n", fixed = TRUE)[[1]]
+  toks <- vapply(lines, .ai_norm_ignore, character(1))
+  token %in% toks[nzchar(toks)]
 }

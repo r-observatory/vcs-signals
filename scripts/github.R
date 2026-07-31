@@ -868,3 +868,96 @@ fetch_pr_agents <- function(io, repos, batch_size = TIER_D_BATCH) {
   }
   out
 }
+
+# --- Ignore-file onset bisect --------------------------------------------------
+# An ignore-file marker names an entry inside .gitignore or .Rbuildignore, not a
+# committed path, so history(path:) can date the FILE but not the LINE. Every such
+# detection was therefore stamped at the scan date, which is why most of the onset
+# table is a floor sitting on whichever day we last ran.
+#
+# The line can be dated by bisecting the ignore file's own history: fetch the blob
+# at the midpoint commit and ask whether the token is present. log2(n) blob fetches
+# instead of n, so a file with 64 revisions costs 6 lookups.
+
+#' One page of an ignore file's history, carrying the commit oid alongside the date
+#' so a later query can address that exact revision.
+build_ignore_history_query <- function(owner, name, path, after = NULL) {
+  after_arg <- if (is.null(after) || is.na(after)) "null" else sprintf('"%s"', after)
+  sprintf('query { repository(owner: "%s", name: "%s") {
+    defaultBranchRef { target { ... on Commit {
+      history(first: 100, path: "%s", after: %s) {
+        pageInfo { endCursor hasNextPage }
+        nodes { oid committedDate }
+      }
+    } } }
+  } }', owner, name, path, after_arg)
+}
+
+#' Parse one page to list(commits = data.frame(oid, date), end_cursor, has_next).
+#' Degrades to empty when any level is null, the same contract parse_marker_history
+#' already follows.
+parse_ignore_history <- function(resp) {
+  empty <- list(commits = data.frame(oid = character(), date = character(),
+                                     stringsAsFactors = FALSE),
+                end_cursor = NA_character_, has_next = FALSE)
+  h <- resp$data$repository$defaultBranchRef$target$history
+  if (is.null(h)) return(empty)
+  nodes <- .nn(h$nodes, list())
+  if (!length(nodes)) return(empty)
+  list(
+    commits = data.frame(
+      oid  = vapply(nodes, function(n) .nn(n$oid, NA_character_), character(1)),
+      date = vapply(nodes, function(n) .nn(n$committedDate, NA_character_), character(1)),
+      stringsAsFactors = FALSE),
+    end_cursor = .nn(h$pageInfo$endCursor, NA_character_),
+    has_next   = isTRUE(.nn(h$pageInfo$hasNextPage, FALSE)))
+}
+
+#' The ignore file's contents at one commit.
+build_blob_at_query <- function(owner, name, oid, path) {
+  sprintf('query { repository(owner: "%s", name: "%s") {
+    object(expression: "%s:%s") { ... on Blob { text } }
+  } }', owner, name, oid, path)
+}
+
+#' Date the commit that added `token` to an ignore file, by bisecting its history.
+#'
+#' Returns list(date, exact). date is NA when the file has no history we can read or
+#' the token appears in no revision; exact is FALSE when the token is already present
+#' at the oldest revision, since the addition then predates what we can see.
+#'
+#' Pages the full history first (cheap, one query per 100 revisions), then spends
+#' log2(n) blob fetches on the bisect. A fetch fault mid-bisect aborts and returns NA
+#' rather than a guess, matching fetch_marker_onset's fail-closed contract.
+fetch_ignore_onset <- function(io, owner, name, file, token, delay = 0) {
+  commits <- NULL; after <- NULL
+  repeat {
+    resp <- tryCatch(io$graphql(build_ignore_history_query(owner, name, file, after)),
+                     error = function(e) NULL)
+    if (is.null(resp) || !is.null(resp$errors) || is.null(resp$data))
+      return(list(date = NA_character_, exact = FALSE))
+    if (delay > 0) Sys.sleep(delay)
+    pg <- parse_ignore_history(resp)
+    if (nrow(pg$commits)) commits <- rbind(commits, pg$commits)
+    if (!isTRUE(pg$has_next) || is.na(pg$end_cursor) || !nzchar(pg$end_cursor)) break
+    after <- pg$end_cursor
+  }
+  if (is.null(commits) || !nrow(commits)) return(list(date = NA_character_, exact = FALSE))
+
+  # history(path:) is newest first; the bisect wants oldest first.
+  commits <- commits[rev(seq_len(nrow(commits))), , drop = FALSE]
+
+  faulted <- FALSE
+  present <- function(i) {
+    if (faulted) return(NA)
+    r <- tryCatch(io$graphql(build_blob_at_query(owner, name, commits$oid[i], file)),
+                  error = function(e) NULL)
+    if (delay > 0) Sys.sleep(delay)
+    if (is.null(r) || !is.null(r$errors) || is.null(r$data)) { faulted <<- TRUE; return(NA) }
+    ignore_text_has_token(.nn(r$data$repository$object$text, NA_character_), token)
+  }
+
+  hit <- bisect_ignore_onset(nrow(commits), present)
+  if (faulted || is.na(hit$index)) return(list(date = NA_character_, exact = FALSE))
+  list(date = commits$date[hit$index], exact = isTRUE(hit$exact))
+}
