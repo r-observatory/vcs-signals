@@ -4,7 +4,48 @@ test_that("ensure_series_schema creates vcs_ai_signals with the (repo_id, tool) 
   expect_true(DBI::dbExistsTable(con, "vcs_ai_signals"))
   cols <- DBI::dbGetQuery(con, "PRAGMA table_info(vcs_ai_signals)")
   expect_setequal(cols$name, c("repo_id","tool","first_seen_date","first_seen_censored",
-                               "evidence_tiers","authored","last_confirmed_date"))
+                               "evidence_tiers","markers","authored","last_confirmed_date"))
   pk <- cols$name[cols$pk > 0][order(cols$pk[cols$pk > 0])]
   expect_equal(pk, c("repo_id","tool"))
+})
+
+test_that("a database written before markers existed gains the column, keeping its rows", {
+  # The onset table is accumulated history: rebuilding it to add a column would
+  # discard every date the pipeline has ever established. The column arrives empty
+  # and fills on the next scan.
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  DBI::dbExecute(con, "CREATE TABLE vcs_ai_signals (
+    repo_id TEXT NOT NULL, tool TEXT NOT NULL, first_seen_date TEXT,
+    first_seen_censored INTEGER NOT NULL DEFAULT 0, evidence_tiers TEXT,
+    authored INTEGER NOT NULL DEFAULT 0, last_confirmed_date TEXT,
+    PRIMARY KEY (repo_id, tool))")
+  DBI::dbExecute(con, "INSERT INTO vcs_ai_signals
+    (repo_id, tool, first_seen_date, evidence_tiers) VALUES ('github.com/o/n','claude','2025-06-01','D')")
+
+  ensure_series_schema(con)
+
+  cols <- DBI::dbGetQuery(con, "PRAGMA table_info(vcs_ai_signals)")$name
+  expect_true("markers" %in% cols)
+  got <- DBI::dbGetQuery(con, "SELECT * FROM vcs_ai_signals")
+  expect_equal(nrow(got), 1L, info = "the prior onset survives the migration")
+  expect_equal(got$first_seen_date, "2025-06-01")
+  expect_true(is.na(got$markers))
+})
+
+test_that("the reducer publishes every marker that fired, not just the winner", {
+  # A maintainer who commits CLAUDE.md AND gitignores .claude has said something
+  # neither marker says alone, and the winning onset would have shown only one.
+  prior <- .ai_empty_signals()
+  incoming <- data.frame(
+    repo_id = rep("github.com/o/n", 2), tool = rep("claude", 2),
+    first_seen_date = c("2025-06-01", "2026-07-18T23:59:59Z"),
+    first_seen_censored = c(0L, 1L), evidence_tiers = c("D", "D"),
+    markers = c("CLAUDE.md", "gitignore:.claude"),
+    authored = c(0L, 0L), last_confirmed_date = c("2026-07-30", "2026-07-30"),
+    stringsAsFactors = FALSE)
+  out <- ai_onset_reducer(prior, incoming)
+  expect_equal(nrow(out), 1L)
+  expect_equal(out$markers, "CLAUDE.md,gitignore:.claude")
+  expect_equal(out$first_seen_date, "2025-06-01", info = "the committed marker still wins the onset")
 })

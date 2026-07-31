@@ -328,10 +328,15 @@ order_ai_tools <- function(ai_rows) {
     fs <- min(floors); fc <- 1L
   }
   tiers <- sort(unique(unlist(lapply(g$evidence_tiers, .ai_split_tiers))))
+  # Every marker that fired for this repository and tool, not just the one that won
+  # the onset: a maintainer who commits CLAUDE.md AND gitignores .claude has told you
+  # something neither marker says alone.
+  marks <- sort(unique(unlist(lapply(g$markers, .ai_split_tiers))))
   lc <- g$last_confirmed_date[!is.na(g$last_confirmed_date)]
   data.frame(repo_id = g$repo_id[1], tool = g$tool[1], first_seen_date = fs,
              first_seen_censored = fc,
              evidence_tiers = if (length(tiers)) paste(tiers, collapse = ",") else NA_character_,
+             markers = if (length(marks)) paste(marks, collapse = ",") else NA_character_,
              authored = as.integer(any(as.integer(g$authored) == 1L, na.rm = TRUE)),
              last_confirmed_date = if (length(lc)) max(lc) else NA_character_,
              stringsAsFactors = FALSE)
@@ -340,6 +345,7 @@ order_ai_tools <- function(ai_rows) {
 .ai_empty_signals <- function()
   data.frame(repo_id = character(), tool = character(), first_seen_date = character(),
              first_seen_censored = integer(), evidence_tiers = character(),
+             markers = character(),
              authored = integer(), last_confirmed_date = character(),
              stringsAsFactors = FALSE)
 
@@ -446,6 +452,7 @@ build_ai_detail <- function(repo_id, raw_evidence, onsets, last_confirmed) {
     first_seen_date = onsets$first_seen_date[m],
     first_seen_censored = pmax(onset_c, guard_c),
     evidence_tiers = ev$tier,
+    markers = ev$marker,
     authored = as.integer(ev$authored),
     last_confirmed_date = last_confirmed,
     stringsAsFactors = FALSE)
