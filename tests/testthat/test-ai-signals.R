@@ -35,6 +35,9 @@ test_that("scan_ignore_tokens returns typed empty frame on no match", {
 })
 
 test_that("match_bot_identity matches allowlist exactly, rejects denylist and lookalikes", {
+  # AI_BOT_ALLOWLIST, not AI_PR_AGENT_LOGINS: this list feeds the REST commit
+  # search, whose author: qualifier wants the "[bot]" suffix that GraphQL strips.
+  # The two lists look alike and want opposite shapes; see the note in config.R.
   out <- match_bot_identity(c("NoReply@Anthropic.com", "someone@example.com"),
                             c("dependabot[bot]", "devin-ai-integration[bot]"))
   expect_setequal(out$tool, c("claude", "devin"))
@@ -59,9 +62,27 @@ test_that("match_author_suffix flags the (aider) suffix only", {
 })
 
 test_that("detect_pr_agents matches agent logins, never generic bots", {
-  out <- detect_pr_agents(c("Copilot", "dependabot[bot]", "cursor[bot]"))
+  out <- detect_pr_agents(c("copilot-swe-agent", "dependabot", "cursor"))
   expect_setequal(out$tool, c("copilot", "cursor"))
   expect_true(all(out$tier == "PR"))
+})
+
+test_that("detect_pr_agents matches logins in the shape GraphQL returns them", {
+  # The allowlist used to carry the "[bot]" suffix while author { login } returns
+  # it stripped, so four of six identities could never match and the channel
+  # published a confident zero. Feeding the allowlist its own keys back is what
+  # hid it: that passes whatever the suffix is. These are the strings GitHub
+  # actually returned when probed, not strings taken from the ruleset.
+  seen_on_github <- c("copilot-swe-agent", "devin-ai-integration",
+                      "google-labs-jules", "cursor", "openhands-agent")
+  out <- detect_pr_agents(seen_on_github)
+  expect_setequal(out$tool, c("copilot", "devin", "jules", "cursor", "openhands"))
+})
+
+test_that("detect_pr_agents does not fire on a human account sharing an agent name", {
+  # A bare "copilot" is a person's login, not the agent, so it must not count.
+  expect_equal(nrow(detect_pr_agents("copilot")), 0L)
+  expect_equal(nrow(detect_pr_agents(c("dependabot", "github-actions", "renovate"))), 0L)
 })
 
 mk <- function(tool, date, censored = 0L, tiers, authored = 0L, agnostic = FALSE)
@@ -268,7 +289,7 @@ test_that("assemble_repo_evidence unions Tier-D markers, ignore tokens, and post
                is_fork = FALSE, parent = NA_character_,
                gitignore_lines = c(".aiderignore", "*.o"), rbuildignore_lines = character(0))
   pr <- list(prs = data.frame(
-    login = c("octocat", "Copilot", "cursor[bot]"),
+    login = c("octocat", "copilot-swe-agent", "cursor"),
     typename = c("User", "Bot", "Bot"),
     created_at = c("2019-01-01T00:00:00Z", "2024-05-01T00:00:00Z", "2022-06-01T00:00:00Z"),
     stringsAsFactors = FALSE), has_next = FALSE)
@@ -276,7 +297,7 @@ test_that("assemble_repo_evidence unions Tier-D markers, ignore tokens, and post
   expect_true("claude" %in% ev$tool[ev$tier == "D"])            # .claude marker
   expect_true("aider" %in% ev$tool[ev$tier == "D"])             # .aiderignore token
   expect_true("copilot" %in% ev$tool[ev$tier == "PR"])          # post-cutoff agent PR
-  expect_false("cursor" %in% ev$tool[ev$tier == "PR"])          # cursor[bot] PR predates the cutoff -> rejected
+  expect_false("cursor" %in% ev$tool[ev$tier == "PR"])          # the cursor PR predates the cutoff -> rejected
 })
 
 test_that("repo_has_ai_signal is the any-evidence gate; absence never counts as clean", {
@@ -288,7 +309,7 @@ test_that("repo_has_ai_signal is the any-evidence gate; absence never counts as 
 
 test_that("earliest_agent_pr_date returns the earliest post-cutoff agent createdAt, NA otherwise", {
   pr <- list(prs = data.frame(
-    login = c("devin-ai-integration[bot]", "Copilot", "octocat"),
+    login = c("devin-ai-integration", "copilot-swe-agent", "octocat"),
     typename = c("Bot", "Bot", "User"),
     created_at = c("2024-09-01T00:00:00Z", "2024-03-01T00:00:00Z", "2018-01-01T00:00:00Z"),
     stringsAsFactors = FALSE), has_next = TRUE)

@@ -247,12 +247,30 @@ AI_BOT_DENYLIST <- c(
   "codecov[bot]", "allcontributors[bot]", "web-flow", "lintr-bot", "styler-bot"
 )
 # PR-authorship channel: agent logins that open PRs (exact, lowercase).
+# PR channel (GraphQL). Spelled WITHOUT the "[bot]" suffix, because
+# author { login } returns a bot's login stripped. Four of the six entries here
+# used to carry the suffix, so they matched nothing and the channel published a
+# confident zero across the whole roster while copilot-swe-agent was opening
+# pull requests in the roster's busiest repositories.
+#
+# These are NOT the same strings as AI_BOT_ALLOWLIST above, and the difference
+# is not an oversight. The two lists feed different APIs, which want opposite
+# shapes. Measured against dotnet/runtime:
+#
+#   REST  search/commits  author:copilot-swe-agent[bot]  -> 982 hits
+#   REST  search/commits  author:copilot-swe-agent       ->   0 hits
+#   GraphQL author { login }                             -> "copilot-swe-agent"
+#
+# So AI_BOT_ALLOWLIST keeps its suffixes and this list drops them. Making them
+# agree would break whichever one is changed.
+#
+# Bare "copilot" is deliberately absent: it is a person's account, not the
+# agent, and including it would trade a false zero for a false positive.
 AI_PR_AGENT_LOGINS <- c(
-  "copilot"                    = "copilot",
-  "copilot-swe-agent[bot]"     = "copilot",
-  "devin-ai-integration[bot]"  = "devin",
-  "google-labs-jules[bot]"     = "jules",
-  "cursor[bot]"                = "cursor",
+  "copilot-swe-agent"          = "copilot",
+  "devin-ai-integration"       = "devin",
+  "google-labs-jules"          = "jules",
+  "cursor"                     = "cursor",
   "openhands-agent"            = "openhands"
 )
 # Tier B commit-message trailers. Anchored to the canonical bot identity so a

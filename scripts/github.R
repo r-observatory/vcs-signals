@@ -622,15 +622,23 @@ parse_tree_markers <- function(resp, repos) {
   out
 }
 
-#' One aliased multi-repo query for the oldest 50 PRs per repo (CREATED_AT ASC),
+#' One aliased multi-repo query for the newest 50 PRs per repo (CREATED_AT DESC),
 #' each with author { login __typename } and createdAt, plus pageInfo so the
 #' orchestrator can decide which repos need further paging toward the agent era.
 #' Always page 1: a single shared `after` cursor across aliases is meaningless,
 #' so per-repo follow-up paging is the orchestrator's job (Plan B2).
+#'
+#' NEWEST first. It used to ask for the fifty OLDEST while AI_PR_CUTOFF discards
+#' everything before 2023, so any repository with more than fifty lifetime pull
+#' requests was structurally unable to produce PR evidence: its whole page
+#' predated the agent era. cynkra/dm has 1,819 PRs, and page one under ASC spans
+#' July to October 2019. The same request under DESC spans 2026. Ordering costs
+#' nothing either way, and hasNextPage below now says when even fifty was not
+#' enough rather than leaving a truncated window looking like a complete one.
 build_pr_agent_query <- function(repos) {
   parts <- vapply(seq_len(nrow(repos)), function(j) {
     sprintf('r%d: repository(owner: "%s", name: "%s") {
-      pullRequests(first: 50, orderBy: {field: CREATED_AT, direction: ASC}) {
+      pullRequests(first: 50, orderBy: {field: CREATED_AT, direction: DESC}) {
         pageInfo { endCursor hasNextPage }
         nodes { author { login __typename } createdAt }
       }
@@ -845,7 +853,7 @@ fetch_tree_markers <- function(io, repos, batch_size = TIER_D_BATCH) {
 
 #' Cheap PR-agent pass over a chunk of repos, batched TIER_D_BATCH at a time. Same
 #' halve-and-retry contract as fetch_tree_markers, over build_pr_agent_query /
-#' parse_pr_agents. Page 1 only (oldest 50 PRs, CREATED_AT ASC): a young repo's earliest
+#' parse_pr_agents. Page 1 only (newest 50 PRs, CREATED_AT DESC): a young repo's whole
 #' agent PR is on page 1 and is the exact onset; per-repo follow-up paging toward the
 #' agent era for large old repos is deferred (Plan C). Returns a named list keyed by
 #' repo_id, each value list(prs, has_next); a deferred repo is absent.
