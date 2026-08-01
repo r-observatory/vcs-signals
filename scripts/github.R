@@ -687,10 +687,15 @@ parse_search_commit <- function(body_txt) parse_search_commit_hit(body_txt)$date
 #'
 #' Returns list(date, message, author) with NA fields when there is no hit.
 parse_search_commit_hit <- function(body_txt) {
+  # total_count is the number of commits in this repository matching the query,
+  # which is the difference between "this tool has touched this repo" and "this
+  # many of its commits carry the signature". It was read twice below and thrown
+  # away. NA where nothing was measured: a refusal must not record a zero, which
+  # is the tier-B bug relocated to a new column.
   none <- list(date = NA_character_, message = NA_character_, author = NA_character_,
-               unavailable = FALSE)
+               total_count = 0L, unavailable = FALSE)
   unavailable <- list(date = NA_character_, message = NA_character_, author = NA_character_,
-                      unavailable = TRUE)
+                      total_count = NA_integer_, unavailable = TRUE)
   body <- tryCatch(jsonlite::fromJSON(body_txt, simplifyVector = FALSE), error = function(e) NULL)
   if (is.null(body)) return(unavailable)   # unparseable is not an answer
 
@@ -704,9 +709,10 @@ parse_search_commit_hit <- function(body_txt) {
   items <- .nn(body$items, list())
   if (isTRUE(.nn(body$total_count, length(items)) == 0) || length(items) == 0) return(none)
   it <- items[[1]]
-  list(date    = .nn(it$commit$committer$date, NA_character_),
-       message = .nn(it$commit$message, NA_character_),
-       author  = .nn(it$commit$author$name, NA_character_),
+  list(date        = .nn(it$commit$committer$date, NA_character_),
+       message     = .nn(it$commit$message, NA_character_),
+       author      = .nn(it$commit$author$name, NA_character_),
+       total_count = as.integer(.nn(body$total_count, length(items))),
        unavailable = FALSE)
 }
 

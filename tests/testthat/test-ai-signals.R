@@ -611,6 +611,28 @@ test_that("a refused search is not an absence of trailers", {
   expect_true(garbage$unavailable)
 })
 
+test_that("the number of matching commits is kept, and only when it was measured", {
+  # total_count is already in the response and was read twice to decide whether
+  # there was a hit, then dropped. It is the count of commits carrying the
+  # signature, which is the difference between "this repo has touched Claude"
+  # and "forty of its commits are co-authored".
+  hit <- parse_search_commit_hit(paste0(
+    '{"total_count":137,"items":[{"commit":{"committer":{"date":"2026-03-01T00:00:00Z"},',
+    '"message":"feat","author":{"name":"Jane"}}}]}'))
+  expect_equal(hit$total_count, 137L)
+
+  # A measured zero is a real finding and keeps its zero.
+  miss <- parse_search_commit_hit('{"total_count":0,"items":[]}')
+  expect_equal(miss$total_count, 0L)
+
+  # A refusal measured nothing. Recording 0 here is the tier-B bug again in a
+  # new column: it would publish "no AI commits" for a question never answered.
+  throttled <- parse_search_commit_hit(
+    '{"message":"You have exceeded a secondary rate limit"}')
+  expect_true(is.na(throttled$total_count))
+  expect_true(parse_search_commit_hit("not json at all")$total_count |> is.na())
+})
+
 test_that("a genuine miss is still a genuine miss", {
   # The distinction is worthless if an honest zero also reads as unavailable.
   miss <- parse_search_commit_hit('{"total_count":0,"items":[]}')
