@@ -342,6 +342,98 @@ order_ai_tools <- function(ai_rows) {
              stringsAsFactors = FALSE)
 }
 
+#' Every (tier, tool) that has a detection rule, and could therefore detect.
+#'
+#' The four tiers keep their rules in four differently shaped tables, so this is
+#' the one place that states the inventory as a flat set of channels.
+ai_rule_inventory <- function() {
+  tool_of <- function(xs) vapply(xs, function(x) x$tool, character(1))
+  inv <- rbind(
+    data.frame(tier = "A", tool = unname(AI_BOT_ALLOWLIST), stringsAsFactors = FALSE),
+    data.frame(tier = "B", tool = unname(tool_of(AI_TRAILER_PATTERNS)), stringsAsFactors = FALSE),
+    data.frame(tier = "C", tool = unname(tool_of(AI_AUTHOR_SUFFIXES)), stringsAsFactors = FALSE),
+    data.frame(tier = "D", tool = unname(tool_of(AI_MARKERS)), stringsAsFactors = FALSE))
+  inv <- unique(inv)
+  inv[order(inv$tier, inv$tool), , drop = FALSE]
+}
+
+#' Channels that detected nothing across the entire roster.
+#'
+#' Five detection bugs shipped a confident zero and survived a green suite,
+#' because a zero from a broken query is indistinguishable from a zero from an
+#' unused tool. Nothing looked at the published counts.
+#'
+#' The granularity is the whole point and it is measured: tier A totals 103
+#' detections, so a tier-level check sees a healthy channel, while per tool it
+#' reads claude 50, copilot 53, and cursor/devin/jules/openhands 0. Four of six
+#' identities have never produced a detection. So this is per (tier, tool),
+#' never per tier.
+#'
+#' A genuine zero is possible. It goes in AI_SILENT_CHANNELS_KNOWN with a reason
+#' and a date, which is a claim someone made and can be re-examined, rather than
+#' a blank that reads as absence.
+ai_silent_channels <- function(signals, known = AI_SILENT_CHANNELS_KNOWN) {
+  inv <- ai_rule_inventory()
+  seen <- character(0)
+  if (!is.null(signals) && nrow(signals) > 0) {
+    seen <- unique(unlist(lapply(seq_len(nrow(signals)), function(i) {
+      tiers <- .ai_split_tiers(signals$evidence_tiers[i])
+      if (!length(tiers)) return(character(0))
+      paste(tiers, signals$tool[i], sep = "\t")
+    }), use.names = FALSE))
+  }
+  silent <- inv[!(paste(inv$tier, inv$tool, sep = "\t") %in% seen), , drop = FALSE]
+  if (!is.null(known) && nrow(known) > 0) {
+    silent <- silent[!(paste(silent$tier, silent$tool, sep = "\t") %in%
+                       paste(known$tier, known$tool, sep = "\t")), , drop = FALSE]
+  }
+  rownames(silent) <- NULL
+  silent
+}
+
+#' Report the canary at merge time, and stop when a channel is silent with
+#' nothing said about it.
+#'
+#' Silence that someone has examined is recorded in AI_SILENT_CHANNELS_KNOWN and
+#' printed every run: an "open" entry is a question with a date on it, and
+#' printing it is what keeps it from rotting into an assumed absence. Silence
+#' nobody has examined stops the merge, because a zero published as fact is the
+#' failure this exists to prevent.
+ai_canary_check <- function(signals, known = AI_SILENT_CHANNELS_KNOWN,
+                            roster_n = NA_integer_,
+                            min_roster = AI_CANARY_MIN_ROSTER) {
+  # "Nothing anywhere on the roster" is only evidence when there is a roster. On
+  # a handful of repos a zero means nothing, so the check would be noise. The
+  # gate reads the roster, never the detection count: a scan that collapsed to
+  # zero detections must still be caught, and gating on detections would make
+  # the worst case the one that skips silently.
+  if (!is.na(roster_n) && roster_n < min_roster) {
+    message(sprintf("AI detection canary: skipped, roster of %d is below %d",
+                    roster_n, min_roster))
+    return(invisible(ai_silent_channels(signals, known)[0, , drop = FALSE]))
+  }
+  unexplained <- ai_silent_channels(signals, known)
+  inv <- ai_rule_inventory()
+  message(sprintf("AI detection canary: %d channels with a rule, %d silent (%d recorded, %d unexplained)",
+                  nrow(inv), nrow(known) + nrow(unexplained), nrow(known), nrow(unexplained)))
+  open <- known[known$status == "open", , drop = FALSE]
+  if (nrow(open) > 0) {
+    message("  open questions, re-reported so they stay visible:")
+    for (i in seq_len(nrow(open)))
+      message(sprintf("    %s/%-9s %s (since %s)", open$tier[i], open$tool[i],
+                      open$reason[i], open$recorded_on[i]))
+  }
+  if (nrow(unexplained) > 0) {
+    stop(sprintf(paste0("AI detection canary: %d channel(s) detected nothing on the whole roster ",
+                        "and are not recorded in AI_SILENT_CHANNELS_KNOWN: %s. ",
+                        "Either the rule is broken or the zero is real; record which, with a date."),
+                 nrow(unexplained),
+                 paste(unexplained$tier, unexplained$tool, sep = "/", collapse = ", ")),
+         call. = FALSE)
+  }
+  invisible(unexplained)
+}
+
 .ai_empty_signals <- function()
   data.frame(repo_id = character(), tool = character(), first_seen_date = character(),
              first_seen_censored = integer(), evidence_tiers = character(),

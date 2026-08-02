@@ -563,6 +563,14 @@ run_merge <- function(io, out_dir, parts_dir) {
   DBI::dbExecute(con, "DELETE FROM vcs_ai_signals")
   if (nrow(reduced) > 0) DBI::dbWriteTable(con, "vcs_ai_signals", reduced, append = TRUE)
 
+  # Every one of the detection bugs was visible here as a channel at exactly zero
+  # across the roster, and nothing looked. This looks, per (tier, tool): a
+  # tier-level check would have seen tier A's 103 detections and called it healthy
+  # while four of its six identities had never produced one.
+  roster_n <- tryCatch(
+    DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM repos")$n[1], error = function(e) NA_integer_)
+  ai_canary_check(reduced, roster_n = roster_n)
+
   # Rebuild the summary so ai_* rollups reflect the merged onsets. Non-AI columns come
   # from the seeded series_latest; descriptive + release facts carry forward from the
   # prior summary (no fresh gauge collection this run, so compute_release_facts = FALSE).

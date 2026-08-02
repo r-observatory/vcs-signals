@@ -381,3 +381,40 @@ AI_PR_CUTOFF <- "2023-01-01"
 # run_cheap and run_deep both check graphql_rate_remaining(io) against this reserve
 # before spending down the shared token, pausing rather than faulting when it is low.
 AI_POINT_RESERVE <- 1500L
+
+# Channels known to be silent, each with the evidence someone gathered and the
+# date they gathered it. The canary reports every (tier, tool) that has a rule
+# and no detection anywhere on the roster; an entry here is a dated claim about
+# one of those zeros, not a way to make the report quiet.
+#
+# status = "genuine": we looked and the zero is real.
+# status = "open":    we looked, the zero is not yet explained, and the reason
+#                     says what would settle it. These are re-reported every run
+#                     so they cannot rot into silence, which is the whole thing
+#                     this table exists to prevent.
+# Below this many repos in the merged roster, a channel at zero is not evidence
+# of anything and the canary stands down. Production merges ~15,000; fixtures
+# merge a handful.
+AI_CANARY_MIN_ROSTER <- 200L
+
+AI_SILENT_CHANNELS_KNOWN <- read.csv(text = trimws('
+tier,tool,status,reason,recorded_on
+D,amazonq,genuine,".amazonq is scanned on every shard and no roster repo has it",2026-08-01
+D,grok,genuine,"GROK.md/.grok/.xai scanned on every shard, absent from the roster",2026-08-01
+D,idx,genuine,".idx is scanned on every shard and no roster repo has it",2026-08-01
+D,junie,genuine,".junie is scanned on every shard and no roster repo has it",2026-08-01
+D,positron,genuine,".positai is scanned on every shard and no roster repo has it",2026-08-01
+D,roo,genuine,".roo/.roomodes scanned on every shard, absent from the roster",2026-08-01
+B,devin,open,"rule added 2026-08-01; no deep scan has run with it yet",2026-08-01
+B,jules,open,"rule added 2026-08-01; no deep scan has run with it yet",2026-08-01
+B,openhands,open,"rule added 2026-08-01; no deep scan has run with it yet",2026-08-01
+B,aider,open,"rule on main since 2026-07-15 but every trailer search was malformed until 2026-07-30; needs one clean scan",2026-08-01
+B,cursor,open,"rule on main since 2026-07-15 but every trailer search was malformed until 2026-07-30; needs one clean scan",2026-08-01
+B,gemini,open,"rule on main since 2026-07-15 but every trailer search was malformed until 2026-07-30; needs one clean scan",2026-08-01
+B,replit,open,"only Replit-Commit-Author remains after the prose rule was deleted; unseen in any sampled commit",2026-08-01
+B,windsurf,open,"rule on main since 2026-07-15 but every trailer search was malformed until 2026-07-30; needs one clean scan",2026-08-01
+A,cursor,open,"identity added by the six-identity fix; unresolved whether the deep-pass gate reaches it",2026-08-01
+A,devin,open,"no marker rule fires for devin, so the marker-gated deep pass may never issue the search",2026-08-01
+A,jules,open,"no marker rule fires for jules, so the marker-gated deep pass may never issue the search",2026-08-01
+A,openhands,open,"no marker rule fires for openhands, so the marker-gated deep pass may never issue the search",2026-08-01
+'), stringsAsFactors = FALSE)
