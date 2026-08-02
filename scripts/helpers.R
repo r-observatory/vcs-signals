@@ -422,6 +422,13 @@ ensure_series_schema <- function(con) {
   DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_ai_rule_inventory (
     tier TEXT NOT NULL, tool TEXT NOT NULL, ruleset_version TEXT,
     PRIMARY KEY (tier, tool)) WITHOUT ROWID")
+  # Which channels found nothing anywhere, and whether anyone has explained it.
+  # Published so a consumer can tell a measured zero from a question nobody has
+  # answered, instead of rendering both as "0 repos".
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_ai_silent_channels (
+    tier TEXT NOT NULL, tool TEXT NOT NULL, status TEXT NOT NULL,
+    reason TEXT, recorded_on TEXT,
+    PRIMARY KEY (tier, tool)) WITHOUT ROWID")
   invisible(TRUE)
 }
 

@@ -424,14 +424,40 @@ ai_canary_check <- function(signals, known = AI_SILENT_CHANNELS_KNOWN,
                       open$reason[i], open$recorded_on[i]))
   }
   if (nrow(unexplained) > 0) {
-    stop(sprintf(paste0("AI detection canary: %d channel(s) detected nothing on the whole roster ",
-                        "and are not recorded in AI_SILENT_CHANNELS_KNOWN: %s. ",
-                        "Either the rule is broken or the zero is real; record which, with a date."),
-                 nrow(unexplained),
-                 paste(unexplained$tier, unexplained$tool, sep = "/", collapse = ", ")),
-         call. = FALSE)
+    message(sprintf("  UNEXPLAINED, and the run will fail once the data is out: %s",
+                    paste(unexplained$tier, unexplained$tool, sep = "/", collapse = ", ")))
   }
   invisible(unexplained)
+}
+
+#' The canary's finding, shaped for publication.
+#'
+#' Every silent channel, whether recorded or not, so a consumer can say which
+#' zeros were measured and which were never asked. A page that shows "0 repos"
+#' beside a channel nobody could reach is asserting something we do not know.
+ai_silent_channel_table <- function(signals, known = AI_SILENT_CHANNELS_KNOWN) {
+  unexplained <- ai_silent_channels(signals, known)
+  rows <- NULL
+  if (nrow(known) > 0) {
+    rows <- rbind(rows, data.frame(tier = known$tier, tool = known$tool,
+      status = known$status, reason = known$reason,
+      recorded_on = known$recorded_on, stringsAsFactors = FALSE))
+  }
+  if (nrow(unexplained) > 0) {
+    rows <- rbind(rows, data.frame(tier = unexplained$tier, tool = unexplained$tool,
+      status = "unexplained", reason = NA_character_,
+      recorded_on = NA_character_, stringsAsFactors = FALSE))
+  }
+  if (is.null(rows)) rows <- data.frame(tier = character(), tool = character(),
+    status = character(), reason = character(), recorded_on = character(),
+    stringsAsFactors = FALSE)
+  # A recorded channel that started detecting is no longer silent, so it is not
+  # in the published table at all: the allowlist is a claim about a zero, and
+  # the zero is gone.
+  live <- paste(rows$tier, rows$tool, sep = "\t") %in%
+          paste(ai_silent_channels(signals, NULL)$tier,
+                ai_silent_channels(signals, NULL)$tool, sep = "\t")
+  rows[live, , drop = FALSE]
 }
 
 .ai_empty_signals <- function()

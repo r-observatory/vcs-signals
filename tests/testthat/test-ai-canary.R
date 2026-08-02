@@ -68,8 +68,36 @@ test_that("the canary stands down on a roster too small to mean anything", {
 test_that("the canary gates on the roster, never on the detection count", {
   # A scan that collapsed to zero detections is the case that most needs
   # catching. Gating on rows-found would make it the case that skips.
-  expect_error(suppressMessages(ai_canary_check(.ai_empty_signals(), roster_n = 15000L)),
-               "detected nothing on the whole roster")
+  got <- suppressMessages(ai_canary_check(.ai_empty_signals(), roster_n = 15000L))
+  expect_true(nrow(got) > 10)
+})
+
+test_that("the canary reports rather than throws, so the caller controls the ordering", {
+  # It used to stop() where it stood, which was before publish(), so one quiet
+  # tool channel also withheld that run's dev-tooling and summary rows. Those
+  # are not implicated by a tool going quiet, and a week of collateral
+  # staleness is worse than a red build standing beside fresh data.
+  expect_no_error(suppressMessages(ai_canary_check(.ai_empty_signals(), roster_n = 15000L)))
+})
+
+test_that("the published table separates a measured zero from an unasked question", {
+  # A page rendering "0 repos" for a channel nobody could reach is asserting
+  # something we do not know.
+  tbl <- ai_silent_channel_table(.ai_empty_signals())
+  expect_true(all(c("tier", "tool", "status", "reason", "recorded_on") %in% names(tbl)))
+  expect_true(any(tbl$status == "unexplained"))
+  expect_true(any(tbl$status == "genuine"))
+  # An unexplained row carries no reason, and must not borrow one.
+  expect_true(all(is.na(tbl$reason[tbl$status == "unexplained"])))
+})
+
+test_that("a channel that started detecting leaves the silent table entirely", {
+  # The allowlist is a claim about a zero. Once the zero is gone the claim is
+  # spent, and leaving the row published would report a live channel as silent.
+  rows <- data.frame(repo_id = "a", tool = "amazonq", evidence_tiers = "D",
+                     stringsAsFactors = FALSE)
+  tbl <- ai_silent_channel_table(rows)
+  expect_false(any(tbl$tier == "D" & tbl$tool == "amazonq"))
 })
 
 test_that("the inventory states each tier's breadth, which the tiers do not share", {

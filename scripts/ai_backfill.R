@@ -578,7 +578,16 @@ run_merge <- function(io, out_dir, parts_dir) {
   # while four of its six identities had never produced one.
   roster_n <- tryCatch(
     DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM repos")$n[1], error = function(e) NA_integer_)
-  ai_canary_check(reduced, roster_n = roster_n)
+  canary_unexplained <- ai_canary_check(reduced, roster_n = roster_n)
+
+  # The finding is published, not withheld. Failing before publish would hold
+  # back the dev-tooling and summary data too, none of which is implicated by a
+  # tool channel going quiet; a week of collateral staleness is a worse outcome
+  # than a red build beside fresh data. The run still fails, at the end.
+  silent_tbl <- ai_silent_channel_table(reduced)
+  DBI::dbExecute(con, "DELETE FROM vcs_ai_silent_channels")
+  if (nrow(silent_tbl) > 0)
+    DBI::dbWriteTable(con, "vcs_ai_silent_channels", silent_tbl, append = TRUE)
 
   # Republish the rule inventory so a consumer can state each tier's breadth
   # from data rather than asserting it.
@@ -634,8 +643,21 @@ run_merge <- function(io, out_dir, parts_dir) {
 
   message(sprintf("ai merge: %d prior, %d incoming, %d reduced onset rows",
                   nrow(prior), nrow(incoming), nrow(reduced)))
-  invisible(publish(io, con, out_dir, tag = "current", source_kind = "live",
-                    touched_years = character(0)))
+  out <- publish(io, con, out_dir, tag = "current", source_kind = "live",
+                 touched_years = character(0))
+
+  # Raised after the data is out, so the alarm costs a red build and not a
+  # week of stale dev-tooling rows.
+  if (nrow(canary_unexplained) > 0) {
+    stop(sprintf(paste0("AI detection canary: %d channel(s) detected nothing on the whole roster ",
+                        "and are not recorded in AI_SILENT_CHANNELS_KNOWN: %s. ",
+                        "Either the rule is broken or the zero is real; record which, with a date."),
+                 nrow(canary_unexplained),
+                 paste(canary_unexplained$tier, canary_unexplained$tool,
+                       sep = "/", collapse = ", ")),
+         call. = FALSE)
+  }
+  invisible(out)
 }
 
 # ---- CLI dispatch -----------------------------------------------------------
