@@ -405,16 +405,16 @@ D,idx,genuine,".idx is scanned on every shard and no roster repo has it",2026-08
 D,junie,genuine,".junie is scanned on every shard and no roster repo has it",2026-08-01
 D,positron,genuine,".positai is scanned on every shard and no roster repo has it",2026-08-01
 D,roo,genuine,".roo/.roomodes scanned on every shard, absent from the roster",2026-08-01
-B,devin,open,"rule added 2026-08-01; no deep scan has run with it yet",2026-08-01
-B,jules,open,"rule added 2026-08-01; no deep scan has run with it yet",2026-08-01
-B,openhands,open,"rule added 2026-08-01; no deep scan has run with it yet",2026-08-01
+B,devin,open,"rule added 2026-08-01, unscanned; and it can only fire on a repo some OTHER tool already flagged",2026-08-01
+B,jules,open,"rule added 2026-08-01, unscanned; and it can only fire on a repo some OTHER tool already flagged",2026-08-01
+B,openhands,open,"rule added 2026-08-01, unscanned; and it can only fire on a repo some OTHER tool already flagged",2026-08-01
 B,aider,open,"rule on main since 2026-07-15 but every trailer search was malformed until 2026-07-30; needs one clean scan",2026-08-01
 B,cursor,open,"rule on main since 2026-07-15 but every trailer search was malformed until 2026-07-30; needs one clean scan",2026-08-01
 B,gemini,open,"rule on main since 2026-07-15 but every trailer search was malformed until 2026-07-30; needs one clean scan",2026-08-01
 B,replit,open,"only Replit-Commit-Author remains after the prose rule was deleted; unseen in any sampled commit",2026-08-01
 B,windsurf,open,"rule on main since 2026-07-15 but every trailer search was malformed until 2026-07-30; needs one clean scan",2026-08-01
-A,cursor,open,"identity added by the six-identity fix; unresolved whether the deep-pass gate reaches it",2026-08-01
-A,devin,open,"no marker rule fires for devin, so the marker-gated deep pass may never issue the search",2026-08-01
-A,jules,open,"no marker rule fires for jules, so the marker-gated deep pass may never issue the search",2026-08-01
-A,openhands,open,"no marker rule fires for openhands, so the marker-gated deep pass may never issue the search",2026-08-01
+A,cursor,open,"reachable, not gated: 52 repos carry a tier-D cursor marker so the cursor[bot] search was issued and found nothing; cause still unsettled",2026-08-01
+A,devin,open,"tier A iterates cheap-pass evidence, which devin can only enter via the PR channel; that channel matched nothing until the login-shape fix, still unscanned",2026-08-01
+A,jules,open,"tier A iterates cheap-pass evidence, which jules can only enter via the PR channel; that channel matched nothing until the login-shape fix, still unscanned",2026-08-01
+A,openhands,open,"tier A iterates cheap-pass evidence, which openhands can only enter via the PR channel; that channel matched nothing until the login-shape fix, still unscanned",2026-08-01
 '), stringsAsFactors = FALSE)
