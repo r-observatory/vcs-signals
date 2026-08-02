@@ -110,3 +110,20 @@ test_that("the inventory states each tier's breadth, which the tiers do not shar
   expect_true(all(c("A", "B", "C", "D") %in% names(per_tier)))
   expect_equal(anyDuplicated(paste(inv$tier, inv$tool)), 0L)
 })
+
+test_that("a pkgdown site is recognised, in each shape maintainers actually use", {
+  # The most common documentation site in the R ecosystem was not detectable at
+  # all, while _quarto.yml beside it was. coatless-rpkg/livelink ships both a
+  # root _pkgdown.yml and a pkgdown/ directory and registered neither.
+  expect_equal(classify_dev_tooling(c("_pkgdown.yml"), character(0))$has_pkgdown, 1L)
+  expect_equal(classify_dev_tooling(c("_pkgdown.yaml"), character(0))$has_pkgdown, 1L)
+  expect_equal(classify_dev_tooling(c("pkgdown"), character(0))$has_pkgdown, 1L)
+  expect_equal(classify_dev_tooling(c("DESCRIPTION"), character(0))$has_pkgdown, 0L)
+})
+
+test_that("a vignettes directory is recognised", {
+  # Nothing in the database counted vignettes: not the repository scan, and not
+  # the code metrics, which carry no documentation columns at all.
+  expect_equal(classify_dev_tooling(c("vignettes"), character(0))$has_vignettes, 1L)
+  expect_equal(classify_dev_tooling(c("R", "man"), character(0))$has_vignettes, 0L)
+})

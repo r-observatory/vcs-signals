@@ -423,6 +423,19 @@ ensure_series_schema <- function(con) {
   # dev_tooling_create_sql): a repo_id point lookup is a single covering seek. The DDL is
   # config-derived so it cannot drift from classify_dev_tooling.
   DBI::dbExecute(con, dev_tooling_create_sql())
+  # CREATE TABLE IF NOT EXISTS is a no-op against a table that already exists, so
+  # a marker added to the ruleset never reached a published database: the next
+  # merge would then write rows carrying a column the table has no room for.
+  # Reconciled generically rather than one ALTER per marker, so the next marker
+  # added does not have to remember to come back here.
+  dt_have <- tryCatch(DBI::dbGetQuery(con, "PRAGMA table_info(vcs_dev_tooling)")$name,
+                      error = function(e) character(0))
+  if (length(dt_have)) {
+    for (col in setdiff(dev_tooling_columns(), dt_have)) {
+      DBI::dbExecute(con, sprintf("ALTER TABLE vcs_dev_tooling ADD COLUMN %s %s",
+                                  col, if (identical(col, "readme_source")) "TEXT" else "INTEGER"))
+    }
+  }
   # The rule inventory, republished on every merge. A tier's breadth is a fact
   # about the ruleset, and until now the viewer asserted it in prose: tier C
   # scans one pattern for one tool while tier D scans 19, so presenting them

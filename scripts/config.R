@@ -204,6 +204,16 @@ DEV_TOOLING_MARKERS <- list(
   list(col = "has_cran_submission", paths = c("CRAN-SUBMISSION"),location = "root"),
   # Docs source (repo-only). readme_source is computed; has_quarto is a flag.
   list(col = "has_quarto",        paths = c("_quarto.yml"),      location = "root"),
+  # pkgdown is the most common documentation site in the ecosystem and was the
+  # conspicuous absence here: _quarto.yml was detectable and this was not. Three
+  # shapes, because maintainers use all three: the config at the root under
+  # either extension, and a pkgdown/ directory holding templates or extra pages.
+  list(col = "has_pkgdown",       paths = c("_pkgdown.yml", "_pkgdown.yaml", "pkgdown"),
+                                                                 location = "root"),
+  # Vignettes were counted by nothing at all: not this scan, and not the code
+  # metrics, which carry no documentation columns. Presence only, because the
+  # repository tree says a vignettes/ directory exists and not how much is in it.
+  list(col = "has_vignettes",     paths = c("vignettes"),        location = "root"),
   # Documentation written for language models to read. This is the package describing
   # itself TO a model, not evidence a model worked on it, so it is a practice and never
   # an AI-tooling marker.

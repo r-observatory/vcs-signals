@@ -70,3 +70,29 @@ test_that("a database written before the counts existed gains them, keeping its 
   expect_equal(got$first_seen_date, "2024-01-01")   # history survived
   expect_true(is.na(got$authored_commits))          # arrives as "nobody asked"
 })
+
+test_that("a published dev-tooling table gains a newly added marker column", {
+  # Adding has_pkgdown to the ruleset would otherwise write rows carrying a
+  # column the published table has no room for, because CREATE TABLE IF NOT
+  # EXISTS does nothing to a table that already exists.
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:"); on.exit(DBI::dbDisconnect(con))
+  old_cols <- setdiff(dev_tooling_columns(), c("has_pkgdown", "has_vignettes"))
+  DBI::dbExecute(con, sprintf(
+    "CREATE TABLE vcs_dev_tooling (repo_id TEXT PRIMARY KEY, last_scanned TEXT, %s)",
+    paste(paste(old_cols, "INTEGER"), collapse = ", ")))
+  DBI::dbExecute(con, "INSERT INTO vcs_dev_tooling (repo_id, last_scanned)
+                       VALUES ('R1', '2026-07-01')")
+  ensure_series_schema(con)
+
+  cols <- DBI::dbGetQuery(con, "PRAGMA table_info(vcs_dev_tooling)")$name
+  expect_true(all(dev_tooling_columns() %in% cols))
+  got <- DBI::dbGetQuery(con, "SELECT * FROM vcs_dev_tooling")
+  expect_equal(nrow(got), 1L)                  # the row survived
+  expect_true(is.na(got$has_pkgdown))          # arrives unscanned, not as a 0
+
+  # And a fresh scan's row can actually be written into it.
+  fresh <- classify_dev_tooling(c("_pkgdown.yml", "vignettes"), character(0))
+  fresh$repo_id <- "R2"; fresh$last_scanned <- "2026-08-02"
+  expect_no_error(DBI::dbWriteTable(con, "vcs_dev_tooling",
+    fresh[c("repo_id", "last_scanned", dev_tooling_columns())], append = TRUE))
+})
