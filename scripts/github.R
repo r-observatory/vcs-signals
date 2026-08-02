@@ -808,8 +808,11 @@ search_earliest_commit <- function(token, owner, name, query, delay = SEARCH_DEL
 #' an exception that would abort a shard.
 search_earliest_commit_hit <- function(token, owner, name, query, delay = SEARCH_DELAY_S) {
   # A transport failure is also a refused question, not an absence of trailers.
+  # total_count is NA for the same reason the parser's is: nothing was measured,
+  # and a caller reading a missing field would get NULL rather than a number it
+  # could tell apart from a real zero.
   none <- list(date = NA_character_, message = NA_character_, author = NA_character_,
-               unavailable = TRUE)
+               total_count = NA_integer_, unavailable = TRUE)
   old <- Sys.getenv("GH_TOKEN", unset = NA)
   Sys.setenv(GH_TOKEN = token)
   on.exit({ if (is.na(old)) Sys.unsetenv("GH_TOKEN") else Sys.setenv(GH_TOKEN = old) }, add = TRUE)

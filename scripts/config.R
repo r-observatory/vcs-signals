@@ -280,7 +280,14 @@ AI_PR_AGENT_LOGINS <- c(
 # fails the pattern is a fuzzy candidate and is recorded as a censored floor, never as an
 # exact onset, so a person named Claude cannot mint an immutable date.
 AI_TRAILER_PATTERNS <- list(
-  list(pattern = "co-authored-by:\\s*claude\\s*<noreply@anthropic\\.com>", tool = "claude",
+  # The name carries a model between "Claude" and the address in practice:
+  # sampling four roster repositories returned 79 trailers, of which 79 were
+  # "Claude Sonnet 4.5", "Claude Opus 4.8 (1M context)" and the like, and none
+  # were the bare form this pattern used to demand. Every tier-B hit was failing
+  # verification and taking a floor date instead of an exact one. [^<\n] keeps
+  # the match on one line and still requires the name to begin with Claude, so
+  # "Claudia" at the same address does not qualify.
+  list(pattern = "co-authored-by:\\s*claude\\b[^<\\n]*<noreply@anthropic\\.com>", tool = "claude",
        query = "\"Co-Authored-By: Claude\""),
   list(pattern = "generated with \\[?claude code",                          tool = "claude",
        query = "\"Generated with Claude Code\""),

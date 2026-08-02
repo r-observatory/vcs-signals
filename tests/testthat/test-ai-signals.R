@@ -597,6 +597,29 @@ test_that("every searchable rule carries the literal query the API needs", {
   }
 })
 
+test_that("the trailer pattern matches the trailers Claude actually writes", {
+  # Sampled from four roster repositories: 79 of 79 real trailers name a model
+  # between "Claude" and the address, and NONE were the bare "Claude <...>" the
+  # pattern required. Every tier-B hit was therefore failing verification and
+  # taking a floor date instead of an exact one.
+  real <- c(
+    "Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>",
+    "Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+    "Co-Authored-By: Claude Opus 4.1 <noreply@anthropic.com>",
+    "Co-Authored-By: Claude <noreply@anthropic.com>"
+  )
+  p <- Filter(function(x) x$tool == "claude" && grepl("Co-Authored-By", x$query, fixed = TRUE),
+              AI_TRAILER_PATTERNS)[[1]]$pattern
+  for (s in real) expect_true(grepl(p, tolower(s), perl = TRUE), info = s)
+
+  # A different person at the same address is not a thing, but a different name
+  # entirely must not match: the name still has to start with Claude.
+  expect_false(grepl(p, tolower("Co-Authored-By: Claudia Smith <noreply@anthropic.com>"), perl = TRUE))
+  expect_false(grepl(p, tolower("Co-Authored-By: Jane <jane@example.com>"), perl = TRUE))
+  # And the trailer must not be allowed to swallow a following line.
+  expect_false(grepl(p, tolower("Co-Authored-By: Claude\nSigned-off-by: x <noreply@anthropic.com>"), perl = TRUE))
+})
+
 test_that("a refused search is not an absence of trailers", {
   # The whole tier-B zero across the roster came from this: a throttled search
   # returns 200-shaped JSON with a message and no total_count, gh exits 0, and
