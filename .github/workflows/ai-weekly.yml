@@ -3,6 +3,11 @@ on:
   schedule:
     - cron: "0 7 * * 0"
   workflow_dispatch:
+    inputs:
+      full_gate:
+        description: "Re-deep-scan every flagged repo, not only new-tool adoptions"
+        type: boolean
+        default: false
 permissions:
   contents: write
 concurrency:
@@ -125,13 +130,26 @@ jobs:
       # The incremental gate downloads the published vcs_ai_signals detail (the baseline) and
       # narrows the flagged roster to repos carrying a tool not yet onset, so the deep matrix
       # only re-onsets genuinely new adoptions. GH_TOKEN downloads the published summary asset.
+      # full_gate walks the whole flagged roster instead. Needed after a ruleset
+      # change, because the incremental gate keys on (repo_id, tool) already
+      # published and so never revisits a repo whose rules were wrong when it was
+      # scanned. It re-onsets rather than replaces: the reducer merges incoming
+      # evidence with prior, so nothing established is lost and a stale floor is
+      # overwritten by the exact date that supersedes it.
       - name: Narrow flagged repos to new-tool adoptions
         env:
           VCS_SIGNALS_TOKEN: ${{ secrets.VCS_SIGNALS_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VCS_OUT: out
           VCS_PARTS: parts
-        run: Rscript scripts/ai_backfill.R gate-incremental
+          FULL_GATE: ${{ inputs.full_gate }}
+        run: |
+          if [ "$FULL_GATE" = "true" ]; then
+            echo "full gate: re-deep-scanning every flagged repo"
+            Rscript scripts/ai_backfill.R gate
+          else
+            Rscript scripts/ai_backfill.R gate-incremental
+          fi
       - uses: actions/upload-artifact@v7
         with:
           name: ai-flagged-roster
