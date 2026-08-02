@@ -411,6 +411,11 @@ run_deep <- function(io, out_dir, roster_path, i, N,
     ev <- evidence[evidence$repo_id == rid, c("tool", "tier", "marker", "agnostic"), drop = FALSE]
     if (nrow(ev) == 0) next
     ev$authored <- 0L   # only a Tier-A author-email hit below sets authored = 1
+    # Cheap-pass evidence is markers and PRs: no commit search ran for it, so both
+    # counts are "nobody asked" rather than zero. The tier-A and tier-B blocks
+    # below append rows that carry real numbers.
+    ev$authored_commits <- NA_integer_
+    ev$assisted_commits <- NA_integer_
 
     # (1) Tier-D onsets, keyed by the FULL evidence marker string. A COMMITTED marker (its
     #     marker is the tree entry name) is dated exactly by paging its REAL repo path's
@@ -466,19 +471,39 @@ run_deep <- function(io, out_dir, roster_path, i, N,
       # tier A is the one that was still guessing, and it is the tier whose
       # zeros the canary reports.
       hits <- character(0)
+      # The author qualifier is an exact match, so its total_count is the number
+      # of commits this identity authored here. A refused search contributes
+      # nothing, leaving the count NA rather than 0.
+      n_authored <- NA_integer_
+      asked <- FALSE
       for (term in .ai_author_queries(tool)) {
         hit <- tryCatch(io$search_hit(owner, name, term, search_delay),
                         error = function(e) list(date = NA_character_, unavailable = TRUE))
         if (isTRUE(hit$unavailable)) { unavailable <- unavailable + 1L; next }
+        asked <- TRUE
+        n_authored <- .ai_max_count(c(n_authored, .nn(hit$total_count, NA_integer_)))
         d <- .nn(hit$date, NA_character_)
         if (!is.na(d)) hits <- c(hits, d)
       }
-      if (!length(hits)) next
+      # A search that ran and matched nothing is a measured zero, and writing NA
+      # there would claim nobody looked. A hit whose count did not come back is
+      # not zero either: we are holding the commit that proves at least one.
+      if (asked && is.na(n_authored)) n_authored <- if (length(hits)) 1L else 0L
+      if (!length(hits)) {
+        # Asked, and the answer was none. That is a measured zero and it belongs
+        # on the tool's existing evidence rather than being dropped with the
+        # onset: writing NA here would claim nobody looked, which is the
+        # honest-NA rule broken in the direction people forget. No tier-A row is
+        # added, because nothing was detected.
+        if (asked) ev$authored_commits[ev$tool == tool] <- n_authored
+        next
+      }
       # The earliest across identities: a bot that changed login keeps its onset.
       commit_onsets <- rbind(commit_onsets, data.frame(tool = tool, tier = "A",
         first_seen_date = min(hits), confirmed = TRUE, stringsAsFactors = FALSE))
       extra_ev <- rbind(extra_ev, data.frame(tool = tool, tier = "A", marker = "A",
-        agnostic = 0L, authored = 1L, stringsAsFactors = FALSE))
+        agnostic = 0L, authored = 1L, authored_commits = n_authored,
+        assisted_commits = NA_integer_, stringsAsFactors = FALSE))
     }
     # (2b) Tier-B commit trailers and Tier-C author suffixes. These were written into
     #      the ruleset and never called from any scan, so every published detection was
@@ -499,10 +524,17 @@ run_deep <- function(io, out_dir, roster_path, i, N,
       if (isTRUE(hit$unavailable)) { unavailable <- unavailable + 1L; next }
       if (is.na(.nn(hit$date, NA_character_))) next
       v <- verify_search_hit(spec$rule, spec$tier, hit)
+      # The count is kept only when the hit verifies against the rule's real
+      # pattern. The query is deliberately fuzzy so the search will find the
+      # trailer at all, which means an unverified hit is evidence the search
+      # matched something we cannot vouch for, and its total_count would be
+      # counting that too. A floor we cannot defend is worse than no number.
+      n_assisted <- if (isTRUE(v$confirmed)) .nn(hit$total_count, NA_integer_) else NA_integer_
       commit_onsets <- rbind(commit_onsets, data.frame(tool = v$tool, tier = v$tier,
         first_seen_date = hit$date, confirmed = v$confirmed, stringsAsFactors = FALSE))
       extra_ev <- rbind(extra_ev, data.frame(tool = v$tool, tier = v$tier, marker = v$tier,
-        agnostic = 0L, authored = 0L, stringsAsFactors = FALSE))
+        agnostic = 0L, authored = 0L, authored_commits = NA_integer_,
+        assisted_commits = as.integer(n_assisted), stringsAsFactors = FALSE))
     }
 
     full_ev <- rbind(ev, extra_ev)

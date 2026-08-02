@@ -400,7 +400,9 @@ ensure_series_schema <- function(con) {
     repo_id TEXT NOT NULL, tool TEXT NOT NULL, first_seen_date TEXT,
     first_seen_censored INTEGER NOT NULL DEFAULT 0, evidence_tiers TEXT,
     markers TEXT,
-    authored INTEGER NOT NULL DEFAULT 0, last_confirmed_date TEXT,
+    authored INTEGER NOT NULL DEFAULT 0,
+    authored_commits INTEGER, assisted_commits INTEGER,
+    last_confirmed_date TEXT,
     PRIMARY KEY (repo_id, tool))")
   # A database written before markers existed keeps its rows; the column arrives empty
   # and fills on the next scan. Dropping and rebuilding would discard onset history.
@@ -408,6 +410,14 @@ ensure_series_schema <- function(con) {
                    error = function(e) character(0))
   if (length(have) && !("markers" %in% have)) {
     DBI::dbExecute(con, "ALTER TABLE vcs_ai_signals ADD COLUMN markers TEXT")
+  }
+  # Nullable on purpose and added the same way: NULL is "no search of that kind
+  # ran", which is a different state from a search that ran and matched nothing.
+  # A blended "AI commits" column would be wrong either way it rounded, so there
+  # are two and nothing sums them.
+  for (col in c("authored_commits", "assisted_commits")) {
+    if (length(have) && !(col %in% have))
+      DBI::dbExecute(con, sprintf("ALTER TABLE vcs_ai_signals ADD COLUMN %s INTEGER", col))
   }
   # Dev-tooling presence snapshot, one wide row per repo. WITHOUT ROWID is deliberate (see
   # dev_tooling_create_sql): a repo_id point lookup is a single covering seek. The DDL is

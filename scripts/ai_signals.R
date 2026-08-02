@@ -313,6 +313,15 @@ order_ai_tools <- function(ai_rows) {
 }
 
 #' Reduce one (repo_id, tool) group's rows to a single row by the onset rules.
+#' Max of a count column, keeping "not searched" apart from "searched, found 0".
+#' NULL or an absent column means the shard predates the counts.
+.ai_max_count <- function(x) {
+  if (is.null(x)) return(NA_integer_)
+  x <- suppressWarnings(as.integer(x))
+  if (!length(x) || all(is.na(x))) return(NA_integer_)
+  max(x, na.rm = TRUE)
+}
+
 .ai_reduce_group <- function(g) {
   dates <- g$first_seen_date; cens <- as.integer(g$first_seen_censored)
   ok <- !is.na(dates)
@@ -337,7 +346,20 @@ order_ai_tools <- function(ai_rows) {
              first_seen_censored = fc,
              evidence_tiers = if (length(tiers)) paste(tiers, collapse = ",") else NA_character_,
              markers = if (length(marks)) paste(marks, collapse = ",") else NA_character_,
-             authored = as.integer(any(as.integer(g$authored) == 1L, na.rm = TRUE)),
+             # Derived from the count where there is one, so the two cannot drift
+             # apart. Where there is none the stored flag stands: every row written
+             # before the counts existed has authored = 1 and no number, and
+             # deriving strictly would silently reset all of them to 0.
+             authored = {
+               n <- .ai_max_count(g$authored_commits)
+               if (!is.na(n)) as.integer(n > 0L)
+               else as.integer(any(as.integer(g$authored) == 1L, na.rm = TRUE))
+             },
+             # Max, not sum: two patterns for one tool can match the same commit,
+             # so summing double-counts it. Max is a floor and stays a floor.
+             # all-NA stays NA, because "nobody asked" is not "asked and got 0".
+             authored_commits = .ai_max_count(g$authored_commits),
+             assisted_commits = .ai_max_count(g$assisted_commits),
              last_confirmed_date = if (length(lc)) max(lc) else NA_character_,
              stringsAsFactors = FALSE)
 }
@@ -464,7 +486,9 @@ ai_silent_channel_table <- function(signals, known = AI_SILENT_CHANNELS_KNOWN) {
   data.frame(repo_id = character(), tool = character(), first_seen_date = character(),
              first_seen_censored = integer(), evidence_tiers = character(),
              markers = character(),
-             authored = integer(), last_confirmed_date = character(),
+             authored = integer(),
+             authored_commits = integer(), assisted_commits = integer(),
+             last_confirmed_date = character(),
              stringsAsFactors = FALSE)
 
 #' Merge prior + incoming vcs_ai_signals rows per (repo_id, tool) by the six
@@ -560,6 +584,10 @@ build_ai_detail <- function(repo_id, raw_evidence, onsets, last_confirmed) {
                          stringsAsFactors = FALSE)
   ev <- raw_evidence
   if (!"authored" %in% names(ev)) ev$authored <- 0L
+  # An evidence frame written before the counts existed carries neither column;
+  # NA is right for it, because no search of that kind ran.
+  if (!"authored_commits" %in% names(ev)) ev$authored_commits <- NA_integer_
+  if (!"assisted_commits" %in% names(ev)) ev$assisted_commits <- NA_integer_
   guard_c <- if ("first_seen_censored" %in% names(ev)) as.integer(ev$first_seen_censored)
              else rep(0L, nrow(ev))
   m <- match(paste(ev$tool, ev$marker, sep = "\r"),
@@ -572,6 +600,8 @@ build_ai_detail <- function(repo_id, raw_evidence, onsets, last_confirmed) {
     evidence_tiers = ev$tier,
     markers = ev$marker,
     authored = as.integer(ev$authored),
+    authored_commits = as.integer(ev$authored_commits),
+    assisted_commits = as.integer(ev$assisted_commits),
     last_confirmed_date = last_confirmed,
     stringsAsFactors = FALSE)
   ai_onset_reducer(.ai_empty_signals(), candidates)

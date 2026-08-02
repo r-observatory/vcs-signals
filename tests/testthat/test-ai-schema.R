@@ -4,7 +4,8 @@ test_that("ensure_series_schema creates vcs_ai_signals with the (repo_id, tool) 
   expect_true(DBI::dbExistsTable(con, "vcs_ai_signals"))
   cols <- DBI::dbGetQuery(con, "PRAGMA table_info(vcs_ai_signals)")
   expect_setequal(cols$name, c("repo_id","tool","first_seen_date","first_seen_censored",
-                               "evidence_tiers","markers","authored","last_confirmed_date"))
+                               "evidence_tiers","markers","authored",
+                               "authored_commits","assisted_commits","last_confirmed_date"))
   pk <- cols$name[cols$pk > 0][order(cols$pk[cols$pk > 0])]
   expect_equal(pk, c("repo_id","tool"))
 })
@@ -48,4 +49,24 @@ test_that("the reducer publishes every marker that fired, not just the winner", 
   expect_equal(nrow(out), 1L)
   expect_equal(out$markers, "CLAUDE.md,gitignore:.claude")
   expect_equal(out$first_seen_date, "2025-06-01", info = "the committed marker still wins the onset")
+})
+
+test_that("a database written before the counts existed gains them, keeping its rows", {
+  # Same reason markers arrived this way: the onset table is accumulated history,
+  # and rebuilding it to add a column would discard every date established so far.
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:"); on.exit(DBI::dbDisconnect(con))
+  DBI::dbExecute(con, "CREATE TABLE vcs_ai_signals (
+    repo_id TEXT NOT NULL, tool TEXT NOT NULL, first_seen_date TEXT,
+    first_seen_censored INTEGER NOT NULL DEFAULT 0, evidence_tiers TEXT,
+    markers TEXT, authored INTEGER NOT NULL DEFAULT 0, last_confirmed_date TEXT,
+    PRIMARY KEY (repo_id, tool))")
+  DBI::dbExecute(con, "INSERT INTO vcs_ai_signals
+    (repo_id, tool, first_seen_date, evidence_tiers) VALUES ('R1','claude','2024-01-01','D')")
+  ensure_series_schema(con)
+  cols <- DBI::dbGetQuery(con, "PRAGMA table_info(vcs_ai_signals)")$name
+  expect_true(all(c("authored_commits", "assisted_commits") %in% cols))
+  got <- DBI::dbGetQuery(con, "SELECT * FROM vcs_ai_signals")
+  expect_equal(nrow(got), 1L)
+  expect_equal(got$first_seen_date, "2024-01-01")   # history survived
+  expect_true(is.na(got$authored_commits))          # arrives as "nobody asked"
 })
