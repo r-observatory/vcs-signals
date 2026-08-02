@@ -395,6 +395,12 @@ AI_POINT_RESERVE <- 1500L
 # Below this many repos in the merged roster, a channel at zero is not evidence
 # of anything and the canary stands down. Production merges ~15,000; fixtures
 # merge a handful.
+# One page of commit-search results. The scan already issues this request and
+# already pays for it; asking for a page rather than a single hit turns the same
+# response into the repository's model history. Measured at 486ms for one item
+# and 508ms for twelve, against the same throttled budget.
+AI_SEARCH_PAGE <- 100L
+
 AI_CANARY_MIN_ROSTER <- 200L
 
 AI_SILENT_CHANNELS_KNOWN <- read.csv(text = trimws('

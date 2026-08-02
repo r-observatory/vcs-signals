@@ -482,6 +482,109 @@ ai_silent_channel_table <- function(signals, known = AI_SILENT_CHANNELS_KNOWN) {
   rows[live, , drop = FALSE]
 }
 
+# ---- model detail ----------------------------------------------------------
+#
+# The trailer already names the model and we read past it. Three tools state
+# one, in three genuinely different grammars, and the rest state nothing beyond
+# identity. A blank for those means their trailers carry no model, not that no
+# model was used.
+#
+# Parsed structurally, never against a list of known models: an enumerated list
+# silently drops the next model to ship. Fable was not on anyone's list until it
+# shipped, and an unrecognised family is stored verbatim for exactly that reason.
+
+.ai_no_model <- function()
+  list(provider = NA_character_, family = NA_character_,
+       version = NA_character_, context_window = NA_character_)
+
+#' The model a single commit message states, for the tool that wrote the trailer.
+#'
+#' Returns the four fields with NA where the trailer was silent. Absent family,
+#' version and context are three separate silences, none of them a value: a
+#' trailer saying only "Claude" is not Opus, not old, and not standard.
+extract_ai_model <- function(tool, message) {
+  out <- .ai_no_model()
+  if (is.null(message) || length(message) != 1 || is.na(message)) return(out)
+
+  if (identical(tool, "claude")) {
+    # Claude <family> <version> [(<ctx> context)] -- family is any capitalised
+    # word, so a family we have never seen still lands in the column.
+    m <- regmatches(message,
+      regexpr("Claude\\s+([A-Z][A-Za-z]*)\\s+([0-9]+(?:\\.[0-9]+)?)", message, perl = TRUE))
+    if (length(m) && nzchar(m)) {
+      g <- regmatches(m, regexec("Claude\\s+([A-Z][A-Za-z]*)\\s+([0-9]+(?:\\.[0-9]+)?)", m))[[1]]
+      out$family <- g[2]; out$version <- g[3]
+    }
+    ctx <- regmatches(message, regexec("\\(([0-9]+[KM])\\s+context\\)", message))[[1]]
+    if (length(ctx) == 2) out$context_window <- ctx[2]
+    return(out)
+  }
+
+  if (identical(tool, "aider")) {
+    # aider (<provider>/<model>) -- split on the FIRST slash only. The model id
+    # belongs to the provider and splitting it further would invent structure we
+    # do not control.
+    g <- regmatches(message, regexec("aider\\s*\\(([^)]+)\\)", message))[[1]]
+    if (length(g) == 2 && grepl("/", g[2], fixed = TRUE)) {
+      out$provider <- sub("/.*$", "", g[2])
+      out$family   <- sub("^[^/]*/", "", g[2])
+    }
+    return(out)
+  }
+
+  if (identical(tool, "gemini")) {
+    # Gemini <version> <variant>
+    g <- regmatches(message,
+      regexec("Gemini\\s+([0-9]+(?:\\.[0-9]+)?)\\s+([A-Za-z][A-Za-z0-9-]*)", message))[[1]]
+    if (length(g) == 3) { out$version <- g[2]; out$family <- g[3] }
+    return(out)
+  }
+
+  out
+}
+
+.ai_empty_models <- function()
+  data.frame(repo_id = character(), tool = character(), provider = character(),
+             family = character(), version = character(), context_window = character(),
+             commits = integer(), first_seen = character(), last_seen = character(),
+             window_complete = integer(), stringsAsFactors = FALSE)
+
+#' Tally the models a repository's trailers name, one row per distinct model.
+#'
+#' `commits` counts commits in the examined window, not in history, and
+#' `window_complete` is 0 when the search reported more hits than the page
+#' returned, so a reader can tell a full tally from the first hundred of many.
+build_ai_model_rows <- function(repo_id, tool, items, window_complete = TRUE) {
+  if (is.null(items) || nrow(items) == 0) return(.ai_empty_models())
+  parsed <- lapply(seq_len(nrow(items)), function(i) {
+    m <- extract_ai_model(tool, items$message[i])
+    # A trailer that states no model produces no row. A blank row would read as
+    # a model we could not identify, which is a different claim.
+    if (all(is.na(unlist(m)))) return(NULL)
+    data.frame(provider = m$provider, family = m$family, version = m$version,
+               context_window = m$context_window, date = items$date[i],
+               stringsAsFactors = FALSE)
+  })
+  parsed <- do.call(rbind, Filter(Negate(is.null), parsed))
+  if (is.null(parsed) || nrow(parsed) == 0) return(.ai_empty_models())
+  key <- paste(parsed$provider, parsed$family, parsed$version,
+               parsed$context_window, sep = "\r")
+  rows <- lapply(split(parsed, key), function(g) {
+    d <- g$date[!is.na(g$date)]
+    data.frame(repo_id = repo_id, tool = tool,
+               provider = g$provider[1], family = g$family[1],
+               version = g$version[1], context_window = g$context_window[1],
+               commits = nrow(g),
+               first_seen = if (length(d)) min(d) else NA_character_,
+               last_seen  = if (length(d)) max(d) else NA_character_,
+               window_complete = as.integer(isTRUE(window_complete)),
+               stringsAsFactors = FALSE)
+  })
+  out <- do.call(rbind, rows)
+  rownames(out) <- NULL
+  out
+}
+
 .ai_empty_signals <- function()
   data.frame(repo_id = character(), tool = character(), first_seen_date = character(),
              first_seen_censored = integer(), evidence_tiers = character(),

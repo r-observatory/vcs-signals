@@ -692,10 +692,12 @@ parse_search_commit_hit <- function(body_txt) {
   # many of its commits carry the signature". It was read twice below and thrown
   # away. NA where nothing was measured: a refusal must not record a zero, which
   # is the tier-B bug relocated to a new column.
+  empty_page <- data.frame(date = character(), message = character(),
+                           stringsAsFactors = FALSE)
   none <- list(date = NA_character_, message = NA_character_, author = NA_character_,
-               total_count = 0L, unavailable = FALSE)
+               total_count = 0L, items = empty_page, unavailable = FALSE)
   unavailable <- list(date = NA_character_, message = NA_character_, author = NA_character_,
-                      total_count = NA_integer_, unavailable = TRUE)
+                      total_count = NA_integer_, items = empty_page, unavailable = TRUE)
   body <- tryCatch(jsonlite::fromJSON(body_txt, simplifyVector = FALSE), error = function(e) NULL)
   if (is.null(body)) return(unavailable)   # unparseable is not an answer
 
@@ -709,10 +711,18 @@ parse_search_commit_hit <- function(body_txt) {
   items <- .nn(body$items, list())
   if (isTRUE(.nn(body$total_count, length(items)) == 0) || length(items) == 0) return(none)
   it <- items[[1]]
+  # Every message on the page, not only the first. The trailer names the model
+  # and we were reading past it; the page was already being fetched and paid
+  # for, so the detail costs nothing beyond parsing what came back.
+  page <- data.frame(
+    date    = vapply(items, function(x) .nn(x$commit$committer$date, NA_character_), character(1)),
+    message = vapply(items, function(x) .nn(x$commit$message, NA_character_), character(1)),
+    stringsAsFactors = FALSE)
   list(date        = .nn(it$commit$committer$date, NA_character_),
        message     = .nn(it$commit$message, NA_character_),
        author      = .nn(it$commit$author$name, NA_character_),
        total_count = as.integer(.nn(body$total_count, length(items))),
+       items       = page,
        unavailable = FALSE)
 }
 
@@ -790,7 +800,10 @@ search_earliest_commit_hit <- function(token, owner, name, query, delay = SEARCH
   # and a caller reading a missing field would get NULL rather than a number it
   # could tell apart from a real zero.
   none <- list(date = NA_character_, message = NA_character_, author = NA_character_,
-               total_count = NA_integer_, unavailable = TRUE)
+               total_count = NA_integer_,
+               items = data.frame(date = character(), message = character(),
+                                  stringsAsFactors = FALSE),
+               unavailable = TRUE)
   old <- Sys.getenv("GH_TOKEN", unset = NA)
   Sys.setenv(GH_TOKEN = token)
   on.exit({ if (is.na(old)) Sys.unsetenv("GH_TOKEN") else Sys.setenv(GH_TOKEN = old) }, add = TRUE)
@@ -802,7 +815,7 @@ search_earliest_commit_hit <- function(token, owner, name, query, delay = SEARCH
   q <- sprintf("repo:%s/%s %s", owner, name, query)
   out <- suppressWarnings(system2("gh", c("api", "-X", "GET", "search/commits",
     "-f", shQuote(paste0("q=", q)), "-f", "sort=committer-date", "-f", "order=asc",
-    "-f", "per_page=1"), stdout = TRUE))
+    "-f", sprintf("per_page=%d", AI_SEARCH_PAGE)), stdout = TRUE))
   if (delay > 0) Sys.sleep(delay)
   status <- attr(out, "status")
   if (!is.null(status) && !identical(as.integer(status), 0L)) return(none)

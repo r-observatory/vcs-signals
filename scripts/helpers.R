@@ -439,6 +439,19 @@ ensure_series_schema <- function(con) {
     tier TEXT NOT NULL, tool TEXT NOT NULL, status TEXT NOT NULL,
     reason TEXT, recorded_on TEXT,
     PRIMARY KEY (tier, tool)) WITHOUT ROWID")
+  # One row per repository per tool per model. A separate table because the grain
+  # differs from vcs_ai_signals, which is one row per repository per tool.
+  #
+  # family, version and context_window are three separate silences where the
+  # trailer did not state them. A NULL context does not mean the default window,
+  # it means the trailer said nothing, and most say nothing. provider is only
+  # ever filled by Aider, and NULL there means the tool does not state one.
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_ai_models (
+    repo_id TEXT NOT NULL, tool TEXT NOT NULL,
+    provider TEXT, family TEXT, version TEXT, context_window TEXT,
+    commits INTEGER, first_seen TEXT, last_seen TEXT,
+    window_complete INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (repo_id, tool, provider, family, version, context_window))")
   invisible(TRUE)
 }
 

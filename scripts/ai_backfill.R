@@ -333,13 +333,15 @@ run_gate_incremental <- function(io, out_dir, parts_dir) {
 }
 
 # ---- deep onset shard IO ----------------------------------------------------
-export_ai_shard <- function(path, rows) {
+export_ai_shard <- function(path, rows, model_rows = NULL) {
   if (file.exists(path)) unlink(path)
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   DBI::dbExecute(con, "PRAGMA journal_mode=DELETE")
   ensure_series_schema(con)                        # folds in the vcs_ai_signals CREATE
   if (nrow(rows) > 0) DBI::dbWriteTable(con, "vcs_ai_signals", rows, append = TRUE)
+  if (!is.null(model_rows) && nrow(model_rows) > 0)
+    DBI::dbWriteTable(con, "vcs_ai_models", model_rows, append = TRUE)
   DBI::dbExecute(con, "VACUUM")
   invisible(path)
 }
@@ -399,6 +401,7 @@ run_deep <- function(io, out_dir, roster_path, i, N,
 
   acc <- list()
   unavailable <- 0L   # searches the API refused, kept apart from searches that missed
+  model_rows <- list()   # one row per repo per tool per model named in a trailer
   for (r in seq_len(nrow(mine))) {
     rl <- graphql_rate_remaining(io)
     if (rl < AI_POINT_RESERVE) {
@@ -530,6 +533,14 @@ run_deep <- function(io, out_dir, roster_path, i, N,
       # matched something we cannot vouch for, and its total_count would be
       # counting that too. A floor we cannot defend is worse than no number.
       n_assisted <- if (isTRUE(v$confirmed)) .nn(hit$total_count, NA_integer_) else NA_integer_
+      # The page we already fetched names the model on three tools' trailers.
+      # Only read it off a verified hit, for the same reason the count is: an
+      # unverified hit matched something we cannot vouch for.
+      if (isTRUE(v$confirmed) && !is.null(hit$items) && nrow(hit$items) > 0) {
+        complete <- is.na(n_assisted) || n_assisted <= nrow(hit$items)
+        mr <- build_ai_model_rows(rid, v$tool, hit$items, window_complete = complete)
+        if (nrow(mr) > 0) model_rows[[length(model_rows) + 1L]] <- mr
+      }
       commit_onsets <- rbind(commit_onsets, data.frame(tool = v$tool, tier = v$tier,
         first_seen_date = hit$date, confirmed = v$confirmed, stringsAsFactors = FALSE))
       extra_ev <- rbind(extra_ev, data.frame(tool = v$tool, tier = v$tier, marker = v$tier,
@@ -547,7 +558,11 @@ run_deep <- function(io, out_dir, roster_path, i, N,
     if (nrow(detail) > 0) acc[[length(acc) + 1L]] <- detail
   }
   rows <- if (length(acc)) do.call(rbind, acc) else .ai_empty_signals()
-  export_ai_shard(file.path(out_dir, sprintf("vcs-ai-shard-%d.db", i)), rows)
+  models_df <- if (length(model_rows)) do.call(rbind, model_rows) else .ai_empty_models()
+  export_ai_shard(file.path(out_dir, sprintf("vcs-ai-shard-%d.db", i)), rows, models_df)
+  if (nrow(models_df) > 0)
+    message(sprintf("ai deep shard %d/%d: %d model row(s) across %d repo(s)",
+                    i, N, nrow(models_df), length(unique(models_df$repo_id))))
   message(sprintf("ai deep shard %d/%d: %d onset detail rows", i, N, nrow(rows)))
   # Said out loud, because a run that could not ask is not a run that found nothing,
   # and the difference is invisible in the published table.
@@ -620,6 +635,27 @@ run_merge <- function(io, out_dir, parts_dir) {
   DBI::dbExecute(con, "DELETE FROM vcs_ai_silent_channels")
   if (nrow(silent_tbl) > 0)
     DBI::dbWriteTable(con, "vcs_ai_silent_channels", silent_tbl, append = TRUE)
+
+  # Model rows, replaced wholesale from the shards that carry them. Not reduced
+  # like onsets: a model tally describes the window that was examined this run,
+  # and folding it into an older window would produce a count belonging to
+  # neither. A repo not covered this run keeps its previous rows.
+  model_parts <- lapply(parts, function(p) {
+    pcon <- DBI::dbConnect(RSQLite::SQLite(), p)
+    on.exit(DBI::dbDisconnect(pcon), add = TRUE)
+    if (!DBI::dbExistsTable(pcon, "vcs_ai_models")) return(.ai_empty_models())
+    DBI::dbReadTable(pcon, "vcs_ai_models")
+  })
+  models_in <- if (length(model_parts)) do.call(rbind, model_parts) else .ai_empty_models()
+  if (nrow(models_in) > 0) {
+    touched <- unique(models_in$repo_id)
+    ph <- paste(rep("?", length(touched)), collapse = ",")
+    DBI::dbExecute(con, sprintf("DELETE FROM vcs_ai_models WHERE repo_id IN (%s)", ph),
+                   params = as.list(touched))
+    DBI::dbWriteTable(con, "vcs_ai_models", models_in, append = TRUE)
+  }
+  message(sprintf("ai merge: %d model row(s) across %d repo(s)",
+                  nrow(models_in), length(unique(models_in$repo_id))))
 
   # Republish the rule inventory so a consumer can state each tier's breadth
   # from data rather than asserting it.
