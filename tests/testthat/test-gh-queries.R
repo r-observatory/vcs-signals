@@ -28,8 +28,11 @@ test_that("graphql_rate_remaining reads the remaining points, and defaults to In
   io_absent <- list(graphql = function(query) list(data = list(nodes = list())))
   expect_equal(graphql_rate_remaining(io_absent), Inf)
 
+  # A probe that errored used to read as Inf, i.e. as an unlimited budget, which
+  # is the opposite of what a failed probe tells you. It now reads as none, and
+  # the caller stops the shard rather than running on with no idea of the budget.
   io_err <- list(graphql = function(query) stop("network error"))
-  expect_equal(graphql_rate_remaining(io_err), Inf)
+  expect_equal(graphql_rate_remaining(io_err), 0L)
 })
 
 test_that("subtree entries arrive under their own prefix", {
@@ -138,4 +141,31 @@ test_that("subtree entries reach the classifier under their own prefix", {
   r <- classify_dev_tooling(got[[1]]$root_entries, got[[1]]$github_entries)
   expect_equal(r$vignette_quarto, 1L)
   expect_equal(r$has_litedown, 1L)
+})
+
+test_that("a refused rate-limit probe reads as no budget, not unlimited budget", {
+  # The guard exists to stop a pass when the token is spent, and it returned Inf
+  # on every failure shape: a caught transport error, and the 200-shaped
+  # {"data":null,"errors":[{"type":"RATE_LIMITED"}]} that GitHub sends when the
+  # budget is gone. Inf < AI_POINT_RESERVE is FALSE, so the pass continued
+  # precisely when it should have stopped, and wrote rows with no onset date at
+  # full speed because the failing fetch skips its own pacing sleep.
+  throws  <- list(graphql = function(q) stop("connection reset"))
+  limited <- list(graphql = function(q) list(data = NULL,
+                    errors = list(list(type = "RATE_LIMITED", message = "exhausted"))))
+  expect_equal(graphql_rate_remaining(throws), 0L)
+  expect_equal(graphql_rate_remaining(limited), 0L)
+  expect_true(graphql_rate_remaining(throws) < AI_POINT_RESERVE)
+})
+
+test_that("a real budget is reported as itself", {
+  io <- list(graphql = function(q) list(data = list(rateLimit = list(remaining = 4200))))
+  expect_equal(graphql_rate_remaining(io), 4200L)
+})
+
+test_that("a fake with no rateLimit field is not throttled", {
+  # Test doubles answer other queries and carry no rateLimit. Treating that as a
+  # spent budget would stop every fixture-driven scan.
+  io <- list(graphql = function(q) list(data = list(repository = list(x = 1))))
+  expect_true(is.infinite(graphql_rate_remaining(io)))
 })

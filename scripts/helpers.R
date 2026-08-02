@@ -1002,7 +1002,13 @@ protect_history_pull <- function(io, dir) {
     }
   }
   for (nm in c("vcs_signals_summary", "repos", "repo_packages",
-               "series_latest", "pipeline_state", "vcs_ai_signals", "vcs_dev_tooling")) copy_table(nm)
+               "series_latest", "pipeline_state", "vcs_ai_signals", "vcs_dev_tooling",
+               # The AI merge writes these weekly and every other publish reads
+               # the working DB seeded from this shard. Left out, they return
+               # empty on the next daily run, which the regression gate then
+               # correctly refuses to publish: the tables must make the round
+               # trip or the gate stops the pipeline every Monday.
+               SUMMARY_EXTRA_TABLES)) copy_table(nm)
   invisible(NULL)
 }
 

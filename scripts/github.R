@@ -498,7 +498,17 @@ resolve_node_ids <- function(io, repos_needing) {
 #' makes an unrelated test start skipping stages it didn't intend to skip).
 graphql_rate_remaining <- function(io) {
   res <- tryCatch(io$graphql("query { rateLimit { remaining resetAt } }"), error = function(e) NULL)
+  # A probe that was refused is not a budget that is unlimited. This returned
+  # Inf for both failure shapes, and Inf < AI_POINT_RESERVE is FALSE, so the
+  # guard waved the pass through exactly when the token was spent. The caller
+  # responds by stopping the shard and leaving the tail for the next dispatch,
+  # which is the right answer to "I could not find out".
+  if (is.null(res)) return(0L)
+  if (length(res$errors) > 0) return(0L)
+  if (is.null(res$data)) return(0L)
   rem <- res$data$rateLimit$remaining
+  # A clean response carrying no rateLimit field is a test double answering some
+  # other query. Those must not be throttled.
   if (is.null(rem)) return(Inf)
   as.integer(rem)
 }

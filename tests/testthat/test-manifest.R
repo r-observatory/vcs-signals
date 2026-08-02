@@ -236,3 +236,39 @@ test_that("ordinary churn is tolerated so the gate is not noise", {
   nxt  <- .mk_summary(tempfile(fileext = ".db"), 995L)   # five repos gone: fine
   expect_equal(summary_regressions(prev, nxt), character(0))
 })
+
+test_that("the extra tables survive a publish, a reseed, and a second publish", {
+  # They did not. The weekly AI merge published them populated, the recent shard
+  # did not carry them, the next daily run seeded from that shard and got empty
+  # tables, and the regression gate then refused every publish from that point
+  # on. The gate was right; the round trip was missing.
+  out <- tempfile("rt_"); dir.create(out)
+  uploaded <- character(0)
+  io <- list(release_exists = function() TRUE,
+             download = function(pattern, dir) {
+               src <- file.path(out, "vcs-signals-recent.db")
+               if (!file.exists(src)) return(FALSE)
+               file.copy(src, file.path(dir, "vcs-signals-recent.db"), overwrite = TRUE)
+             },
+             upload = function(path) { uploaded <<- c(uploaded, basename(path)); invisible(NULL) })
+
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+  ensure_repo_schema(con); ensure_series_schema(con)
+  DBI::dbExecute(con, "INSERT INTO signals_series VALUES ('R1','2026-07-06','stars',10)")
+  DBI::dbExecute(con, "INSERT INTO vcs_ai_rule_inventory (tier, tool, ruleset_version)
+    VALUES ('D','claude','v1'), ('B','codex','v1'), ('A','copilot','v1')")
+  DBI::dbExecute(con, "INSERT INTO vcs_ai_silent_channels (tier, tool, status, reason, recorded_on)
+    VALUES ('B','replit','open','only the author trailer remains','2026-08-01')")
+  publish(io, con, out, "v1", "live", force_full = TRUE)
+  DBI::dbDisconnect(con)
+
+  # Everything a later run has to work from is the recent shard.
+  recent <- file.path(out, "vcs-signals-recent.db")
+  expect_true(file.exists(recent))
+  rc <- DBI::dbConnect(RSQLite::SQLite(), recent)
+  on.exit(DBI::dbDisconnect(rc), add = TRUE)
+  for (nm in SUMMARY_EXTRA_TABLES) {
+    expect_true(DBI::dbExistsTable(rc, nm), info = paste(nm, "absent from the recent shard"))
+  }
+  expect_equal(DBI::dbGetQuery(rc, "SELECT COUNT(*) AS n FROM vcs_ai_rule_inventory")$n, 3L)
+})
