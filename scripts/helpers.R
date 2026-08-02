@@ -413,6 +413,15 @@ ensure_series_schema <- function(con) {
   # dev_tooling_create_sql): a repo_id point lookup is a single covering seek. The DDL is
   # config-derived so it cannot drift from classify_dev_tooling.
   DBI::dbExecute(con, dev_tooling_create_sql())
+  # The rule inventory, republished on every merge. A tier's breadth is a fact
+  # about the ruleset, and until now the viewer asserted it in prose: tier C
+  # scans one pattern for one tool while tier D scans 19, so presenting them
+  # side by side as comparable channels overstates C. Carrying the inventory as
+  # data lets a reader see the denominator instead of being told about it, and
+  # it moves with the ruleset rather than drifting from it.
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_ai_rule_inventory (
+    tier TEXT NOT NULL, tool TEXT NOT NULL, ruleset_version TEXT,
+    PRIMARY KEY (tier, tool)) WITHOUT ROWID")
   invisible(TRUE)
 }
 

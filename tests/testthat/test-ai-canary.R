@@ -71,3 +71,14 @@ test_that("the canary gates on the roster, never on the detection count", {
   expect_error(suppressMessages(ai_canary_check(.ai_empty_signals(), roster_n = 15000L)),
                "detected nothing on the whole roster")
 })
+
+test_that("the inventory states each tier's breadth, which the tiers do not share", {
+  inv <- ai_rule_inventory()
+  per_tier <- table(inv$tier)
+  # The asymmetry is the point: presenting C beside D as comparable channels
+  # overstates C, and this is the number that says so.
+  expect_equal(as.integer(per_tier[["C"]]), 1L)
+  expect_true(as.integer(per_tier[["D"]]) > 10L)
+  expect_true(all(c("A", "B", "C", "D") %in% names(per_tier)))
+  expect_equal(anyDuplicated(paste(inv$tier, inv$tool)), 0L)
+})

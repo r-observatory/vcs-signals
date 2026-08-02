@@ -571,6 +571,13 @@ run_merge <- function(io, out_dir, parts_dir) {
     DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM repos")$n[1], error = function(e) NA_integer_)
   ai_canary_check(reduced, roster_n = roster_n)
 
+  # Republish the rule inventory so a consumer can state each tier's breadth
+  # from data rather than asserting it.
+  inv <- ai_rule_inventory()
+  inv$ruleset_version <- AI_RULESET_VERSION
+  DBI::dbExecute(con, "DELETE FROM vcs_ai_rule_inventory")
+  DBI::dbWriteTable(con, "vcs_ai_rule_inventory", inv, append = TRUE)
+
   # Rebuild the summary so ai_* rollups reflect the merged onsets. Non-AI columns come
   # from the seeded series_latest; descriptive + release facts carry forward from the
   # prior summary (no fresh gauge collection this run, so compute_release_facts = FALSE).
