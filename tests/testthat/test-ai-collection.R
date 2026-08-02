@@ -58,11 +58,14 @@ test_that("parse_tree_markers output feeds classify_tree_markers", {
   expect_true(all(ev$tier == "D"))
 })
 
-test_that("build_pr_agent_query aliases each repo, oldest-first, author login + __typename", {
+test_that("build_pr_agent_query aliases each repo, newest-first, author login + __typename", {
   repos <- data.frame(owner = "o", name = "n", repo_id = "github.com/o/n", stringsAsFactors = FALSE)
   q <- build_pr_agent_query(repos)
   expect_match(q, 'r0: repository(owner: "o", name: "n")', fixed = TRUE)
-  expect_match(q, "pullRequests(first: 50, orderBy: {field: CREATED_AT, direction: ASC})", fixed = TRUE)
+  # Newest first. Oldest-first plus a 2023 cutoff made any repo with more than
+  # fifty lifetime PRs structurally unable to yield PR evidence.
+  expect_match(q, "pullRequests(first: 50, orderBy: {field: CREATED_AT, direction: DESC})", fixed = TRUE)
+  expect_false(grepl("CREATED_AT, direction: ASC", q, fixed = TRUE))
   expect_match(q, "pageInfo { endCursor hasNextPage }", fixed = TRUE)
   expect_match(q, "author { login __typename } createdAt", fixed = TRUE)
 })
@@ -75,8 +78,8 @@ test_that("parse_pr_agents surfaces login+typename, guards null author, never tr
       pageInfo = list(endCursor = "c1", hasNextPage = TRUE),
       nodes = list(
         list(author = list(login = "octocat", `__typename` = "User"), createdAt = "2021-01-01T00:00:00Z"),
-        list(author = list(login = "Copilot", `__typename` = "Bot"), createdAt = "2024-05-01T00:00:00Z"),
-        list(author = list(login = "dependabot[bot]", `__typename` = "Bot"), createdAt = "2024-06-01T00:00:00Z"),
+        list(author = list(login = "copilot-swe-agent", `__typename` = "Bot"), createdAt = "2024-05-01T00:00:00Z"),
+        list(author = list(login = "dependabot", `__typename` = "Bot"), createdAt = "2024-06-01T00:00:00Z"),
         list(author = NULL, createdAt = "2024-07-01T00:00:00Z")))),
     r1 = list(pullRequests = list(pageInfo = list(endCursor = NA, hasNextPage = FALSE), nodes = list())),
     r2 = NULL))
@@ -84,7 +87,7 @@ test_that("parse_pr_agents surfaces login+typename, guards null author, never tr
   a <- out[["github.com/a/a"]]
   expect_equal(nrow(a$prs), 4)
   expect_true(a$has_next)
-  expect_equal(a$prs$login, c("octocat", "Copilot", "dependabot[bot]", NA))   # null author -> NA
+  expect_equal(a$prs$login, c("octocat", "copilot-swe-agent", "dependabot", NA))   # null author -> NA
   expect_equal(a$prs$typename[2], "Bot")
   # detection uses the allowlist, so Dependabot (also __typename Bot) never flags
   expect_equal(detect_pr_agents(a$prs$login)$tool, "copilot")

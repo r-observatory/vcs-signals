@@ -83,14 +83,19 @@ test_that("a search query containing a space survives the shell", {
   # the remainder as stray positional arguments ("accepts 1 arg(s), received 2").
   # Every trailer phrase contains a space, so every tier-B and tier-C search ever
   # issued was malformed and came back empty. Tier A's author-email query has no
-  # space, which is why only these two tiers went silent.
+  # space, which is why only these two tiers went silent at the time; tier A now
+  # shares the same helper.
   #
   # Asserting on the shell form rather than on a live call, because the failure is
   # in how the argument is handed over, not in what the API does with it.
   src <- paste(readLines("../../scripts/github.R", warn = FALSE), collapse = "\n")
-  # Both search helpers build the same argument and both broke the same way.
-  expect_equal(length(gregexpr('shQuote(paste0("q=", q))', src, fixed = TRUE)[[1]]), 2L,
-               info = "both commit-search helpers quote the q argument")
+  # Counted against the call sites rather than a fixed number, so the guard holds
+  # as helpers are added or removed: every search/commits call must quote its q.
+  callsites <- length(gregexpr('"search/commits"', src, fixed = TRUE)[[1]])
+  quoted    <- length(gregexpr('shQuote(paste0("q=", q))', src, fixed = TRUE)[[1]])
+  expect_gt(callsites, 0L)
+  expect_equal(quoted, callsites,
+               info = "every commit-search helper quotes the q argument")
   expect_false(grepl('"-f", paste0("q=", q),', src, fixed = TRUE),
                info = "the unquoted form silently breaks every multi-word query")
 })
@@ -104,4 +109,33 @@ test_that("every trailer query the ruleset ships contains a space", {
   spaced <- vapply(AI_TRAILER_PATTERNS, function(r) grepl(" ", r$query, fixed = TRUE), logical(1))
   expect_true(any(spaced),
               info = "if this ever goes all-FALSE the quoting bug stops being detectable here")
+})
+
+test_that("the tree query fetches the subtrees the ruleset actually reads", {
+  # A rule naming vignettes/*.qmd or site/_litedown.yml can never fire if the
+  # query never asks for those trees, which is a rule that looks right in the
+  # config and reports zero forever.
+  q <- build_tree_query(data.frame(owner = "o", name = "n", stringsAsFactors = FALSE))
+  for (path in c("HEAD:", "HEAD:.github", "HEAD:inst", "HEAD:vignettes", "HEAD:site")) {
+    expect_true(grepl(sprintf('expression: "%s"', path), q, fixed = TRUE), info = path)
+  }
+})
+
+test_that("subtree entries reach the classifier under their own prefix", {
+  resp <- list(data = list(r0 = list(
+    isFork = FALSE, parent = NULL,
+    rootTree = list(entries = list(list(name = "DESCRIPTION", type = "blob"),
+                                   list(name = "vignettes", type = "tree"))),
+    githubTree = NULL, claudeTree = NULL, agentsTree = NULL, instTree = NULL,
+    vignettesTree = list(entries = list(list(name = "intro.qmd", type = "blob"))),
+    siteTree = list(entries = list(list(name = "_litedown.yml", type = "blob"))),
+    gitignore = NULL, rbuildignore = NULL)))
+  got <- parse_tree_markers(resp, data.frame(repo_id = "github.com/o/n", owner = "o",
+                                             name = "n", stringsAsFactors = FALSE))
+  expect_true("vignettes/intro.qmd" %in% got[[1]]$root_entries)
+  expect_true("site/_litedown.yml" %in% got[[1]]$root_entries)
+
+  r <- classify_dev_tooling(got[[1]]$root_entries, got[[1]]$github_entries)
+  expect_equal(r$vignette_quarto, 1L)
+  expect_equal(r$has_litedown, 1L)
 })

@@ -45,14 +45,24 @@ classify_tree_markers <- function(root_entries, github_entries) {
 dev_tooling_marker_cols <- function() vapply(DEV_TOOLING_MARKERS, function(m) m$col, character(1))
 
 #' The full classifier output column order: the flag cols plus the two computed columns.
-dev_tooling_columns <- function() c(dev_tooling_marker_cols(), "readme_source", "has_ci")
+dev_tooling_vignette_cols <- function()
+  c("vignette_rmarkdown", "vignette_quarto", "vignette_sweave",
+    "vignette_html", "vignette_markdown")
+
+dev_tooling_columns <- function()
+  c(dev_tooling_marker_cols(), "readme_source", "has_ci", dev_tooling_vignette_cols())
 
 #' Typed 0-row frame with the IDENTICAL column set/types classify_dev_tooling produces.
 .devtool_empty <- function() {
-  base <- setNames(replicate(length(dev_tooling_marker_cols()), integer(0), simplify = FALSE),
-                   dev_tooling_marker_cols())
-  do.call(data.frame, c(base, list(readme_source = character(0), has_ci = integer(0),
-                                    stringsAsFactors = FALSE)))
+  # Derived from dev_tooling_columns() rather than rebuilt from the marker list,
+  # so a computed column added there cannot leave this helper a column short.
+  # It already had: the vignette columns landed and this still returned the old
+  # shape, which the drift test caught.
+  int_cols <- setdiff(dev_tooling_columns(), "readme_source")
+  base <- setNames(replicate(length(int_cols), integer(0), simplify = FALSE), int_cols)
+  out <- do.call(data.frame, c(base, list(readme_source = character(0),
+                                          stringsAsFactors = FALSE)))
+  out[, dev_tooling_columns(), drop = FALSE]
 }
 
 #' One wide presence row from a repo's root and .github tree entry names. Each flag is 1 if ANY
@@ -82,6 +92,31 @@ classify_dev_tooling <- function(root_entries, github_entries) {
     else "none"
   ci_cols <- grep("^ci_", names(flags), value = TRUE)
   row$has_ci <- as.integer(any(flags[ci_cols] == 1L))
+
+  # Vignette source kinds, scoped to the vignettes subtree. Computed rather than
+  # expressed as markers because a bare ".Rmd" suffix would match README.Rmd,
+  # which nearly every package has and which is not a vignette.
+  #
+  # These name the SOURCE, not the output. .Rnw and .Rtex go through LaTeX and so
+  # are PDF by construction, and .Rhtml is HTML by construction, but an .Rmd or
+  # .qmd can render to either and the extension does not say which. Claiming an
+  # output format for those would be inventing a fact.
+  vign <- grep("^vignettes/", root_entries, value = TRUE)
+  # The directory is listed in the tree but its contents are fetched separately.
+  # Present-but-unfetched is unknown, not "no vignettes of any kind": saying none
+  # there would be a claim the scan cannot support.
+  unknown <- isTRUE(row$has_vignettes == 1L) && !length(vign)
+  kind <- function(exts) {
+    if (unknown) return(NA_integer_)
+    as.integer(any(vapply(exts, function(e)
+      any(endsWith(tolower(vign), tolower(e))), logical(1))))
+  }
+  row$vignette_rmarkdown <- kind(c(".rmd"))
+  row$vignette_quarto    <- kind(c(".qmd"))
+  row$vignette_sweave    <- kind(c(".rnw", ".rtex"))
+  row$vignette_html      <- kind(c(".rhtml", ".html"))
+  row$vignette_markdown  <- kind(c(".md"))
+
   row[, dev_tooling_columns(), drop = FALSE]
 }
 
@@ -99,7 +134,9 @@ dev_tooling_create_sql <- function() {
 %s,
     readme_source TEXT,
     has_ci INTEGER,
-    PRIMARY KEY (repo_id)) WITHOUT ROWID", marker_ddl)
+%s,
+    PRIMARY KEY (repo_id)) WITHOUT ROWID", marker_ddl,
+          paste(sprintf("    %s INTEGER", dev_tooling_vignette_cols()), collapse = ",\n"))
 }
 
 #' The real repository path for a Tier-D config marker's entry name. AI_MARKERS records the
@@ -313,6 +350,15 @@ order_ai_tools <- function(ai_rows) {
 }
 
 #' Reduce one (repo_id, tool) group's rows to a single row by the onset rules.
+#' Max of a count column, keeping "not searched" apart from "searched, found 0".
+#' NULL or an absent column means the shard predates the counts.
+.ai_max_count <- function(x) {
+  if (is.null(x)) return(NA_integer_)
+  x <- suppressWarnings(as.integer(x))
+  if (!length(x) || all(is.na(x))) return(NA_integer_)
+  max(x, na.rm = TRUE)
+}
+
 .ai_reduce_group <- function(g) {
   dates <- g$first_seen_date; cens <- as.integer(g$first_seen_censored)
   ok <- !is.na(dates)
@@ -337,16 +383,252 @@ order_ai_tools <- function(ai_rows) {
              first_seen_censored = fc,
              evidence_tiers = if (length(tiers)) paste(tiers, collapse = ",") else NA_character_,
              markers = if (length(marks)) paste(marks, collapse = ",") else NA_character_,
-             authored = as.integer(any(as.integer(g$authored) == 1L, na.rm = TRUE)),
+             # Derived from the count where there is one, so the two cannot drift
+             # apart. Where there is none the stored flag stands: every row written
+             # before the counts existed has authored = 1 and no number, and
+             # deriving strictly would silently reset all of them to 0.
+             authored = {
+               n <- .ai_max_count(g$authored_commits)
+               if (!is.na(n)) as.integer(n > 0L)
+               else as.integer(any(as.integer(g$authored) == 1L, na.rm = TRUE))
+             },
+             # Max, not sum: two patterns for one tool can match the same commit,
+             # so summing double-counts it. Max is a floor and stays a floor.
+             # all-NA stays NA, because "nobody asked" is not "asked and got 0".
+             authored_commits = .ai_max_count(g$authored_commits),
+             assisted_commits = .ai_max_count(g$assisted_commits),
              last_confirmed_date = if (length(lc)) max(lc) else NA_character_,
              stringsAsFactors = FALSE)
+}
+
+#' Every (tier, tool) that has a detection rule, and could therefore detect.
+#'
+#' The four tiers keep their rules in four differently shaped tables, so this is
+#' the one place that states the inventory as a flat set of channels.
+ai_rule_inventory <- function() {
+  tool_of <- function(xs) vapply(xs, function(x) x$tool, character(1))
+  inv <- rbind(
+    data.frame(tier = "A", tool = unname(AI_BOT_ALLOWLIST), stringsAsFactors = FALSE),
+    data.frame(tier = "B", tool = unname(tool_of(AI_TRAILER_PATTERNS)), stringsAsFactors = FALSE),
+    data.frame(tier = "C", tool = unname(tool_of(AI_AUTHOR_SUFFIXES)), stringsAsFactors = FALSE),
+    data.frame(tier = "D", tool = unname(tool_of(AI_MARKERS)), stringsAsFactors = FALSE))
+  inv <- unique(inv)
+  inv[order(inv$tier, inv$tool), , drop = FALSE]
+}
+
+#' Channels that detected nothing across the entire roster.
+#'
+#' Five detection bugs shipped a confident zero and survived a green suite,
+#' because a zero from a broken query is indistinguishable from a zero from an
+#' unused tool. Nothing looked at the published counts.
+#'
+#' The granularity is the whole point and it is measured: tier A totals 103
+#' detections, so a tier-level check sees a healthy channel, while per tool it
+#' reads claude 50, copilot 53, and cursor/devin/jules/openhands 0. Four of six
+#' identities have never produced a detection. So this is per (tier, tool),
+#' never per tier.
+#'
+#' A genuine zero is possible. It goes in AI_SILENT_CHANNELS_KNOWN with a reason
+#' and a date, which is a claim someone made and can be re-examined, rather than
+#' a blank that reads as absence.
+ai_silent_channels <- function(signals, known = AI_SILENT_CHANNELS_KNOWN) {
+  inv <- ai_rule_inventory()
+  seen <- character(0)
+  if (!is.null(signals) && nrow(signals) > 0) {
+    seen <- unique(unlist(lapply(seq_len(nrow(signals)), function(i) {
+      tiers <- .ai_split_tiers(signals$evidence_tiers[i])
+      if (!length(tiers)) return(character(0))
+      paste(tiers, signals$tool[i], sep = "\t")
+    }), use.names = FALSE))
+  }
+  silent <- inv[!(paste(inv$tier, inv$tool, sep = "\t") %in% seen), , drop = FALSE]
+  if (!is.null(known) && nrow(known) > 0) {
+    silent <- silent[!(paste(silent$tier, silent$tool, sep = "\t") %in%
+                       paste(known$tier, known$tool, sep = "\t")), , drop = FALSE]
+  }
+  rownames(silent) <- NULL
+  silent
+}
+
+#' Report the canary at merge time, and stop when a channel is silent with
+#' nothing said about it.
+#'
+#' Silence that someone has examined is recorded in AI_SILENT_CHANNELS_KNOWN and
+#' printed every run: an "open" entry is a question with a date on it, and
+#' printing it is what keeps it from rotting into an assumed absence. Silence
+#' nobody has examined stops the merge, because a zero published as fact is the
+#' failure this exists to prevent.
+ai_canary_check <- function(signals, known = AI_SILENT_CHANNELS_KNOWN,
+                            roster_n = NA_integer_,
+                            min_roster = AI_CANARY_MIN_ROSTER) {
+  # "Nothing anywhere on the roster" is only evidence when there is a roster. On
+  # a handful of repos a zero means nothing, so the check would be noise. The
+  # gate reads the roster, never the detection count: a scan that collapsed to
+  # zero detections must still be caught, and gating on detections would make
+  # the worst case the one that skips silently.
+  if (!is.na(roster_n) && roster_n < min_roster) {
+    message(sprintf("AI detection canary: skipped, roster of %d is below %d",
+                    roster_n, min_roster))
+    return(invisible(ai_silent_channels(signals, known)[0, , drop = FALSE]))
+  }
+  unexplained <- ai_silent_channels(signals, known)
+  inv <- ai_rule_inventory()
+  message(sprintf("AI detection canary: %d channels with a rule, %d silent (%d recorded, %d unexplained)",
+                  nrow(inv), nrow(known) + nrow(unexplained), nrow(known), nrow(unexplained)))
+  open <- known[known$status == "open", , drop = FALSE]
+  if (nrow(open) > 0) {
+    message("  open questions, re-reported so they stay visible:")
+    for (i in seq_len(nrow(open)))
+      message(sprintf("    %s/%-9s %s (since %s)", open$tier[i], open$tool[i],
+                      open$reason[i], open$recorded_on[i]))
+  }
+  if (nrow(unexplained) > 0) {
+    message(sprintf("  UNEXPLAINED, and the run will fail once the data is out: %s",
+                    paste(unexplained$tier, unexplained$tool, sep = "/", collapse = ", ")))
+  }
+  invisible(unexplained)
+}
+
+#' The canary's finding, shaped for publication.
+#'
+#' Every silent channel, whether recorded or not, so a consumer can say which
+#' zeros were measured and which were never asked. A page that shows "0 repos"
+#' beside a channel nobody could reach is asserting something we do not know.
+ai_silent_channel_table <- function(signals, known = AI_SILENT_CHANNELS_KNOWN) {
+  unexplained <- ai_silent_channels(signals, known)
+  rows <- NULL
+  if (nrow(known) > 0) {
+    rows <- rbind(rows, data.frame(tier = known$tier, tool = known$tool,
+      status = known$status, reason = known$reason,
+      recorded_on = known$recorded_on, stringsAsFactors = FALSE))
+  }
+  if (nrow(unexplained) > 0) {
+    rows <- rbind(rows, data.frame(tier = unexplained$tier, tool = unexplained$tool,
+      status = "unexplained", reason = NA_character_,
+      recorded_on = NA_character_, stringsAsFactors = FALSE))
+  }
+  if (is.null(rows)) rows <- data.frame(tier = character(), tool = character(),
+    status = character(), reason = character(), recorded_on = character(),
+    stringsAsFactors = FALSE)
+  # A recorded channel that started detecting is no longer silent, so it is not
+  # in the published table at all: the allowlist is a claim about a zero, and
+  # the zero is gone.
+  live <- paste(rows$tier, rows$tool, sep = "\t") %in%
+          paste(ai_silent_channels(signals, NULL)$tier,
+                ai_silent_channels(signals, NULL)$tool, sep = "\t")
+  rows[live, , drop = FALSE]
+}
+
+# ---- model detail ----------------------------------------------------------
+#
+# The trailer already names the model and we read past it. Three tools state
+# one, in three genuinely different grammars, and the rest state nothing beyond
+# identity. A blank for those means their trailers carry no model, not that no
+# model was used.
+#
+# Parsed structurally, never against a list of known models: an enumerated list
+# silently drops the next model to ship. Fable was not on anyone's list until it
+# shipped, and an unrecognised family is stored verbatim for exactly that reason.
+
+.ai_no_model <- function()
+  list(provider = NA_character_, family = NA_character_,
+       version = NA_character_, context_window = NA_character_)
+
+#' The model a single commit message states, for the tool that wrote the trailer.
+#'
+#' Returns the four fields with NA where the trailer was silent. Absent family,
+#' version and context are three separate silences, none of them a value: a
+#' trailer saying only "Claude" is not Opus, not old, and not standard.
+extract_ai_model <- function(tool, message) {
+  out <- .ai_no_model()
+  if (is.null(message) || length(message) != 1 || is.na(message)) return(out)
+
+  if (identical(tool, "claude")) {
+    # Claude <family> <version> [(<ctx> context)] -- family is any capitalised
+    # word, so a family we have never seen still lands in the column.
+    m <- regmatches(message,
+      regexpr("Claude\\s+([A-Z][A-Za-z]*)\\s+([0-9]+(?:\\.[0-9]+)?)", message, perl = TRUE))
+    if (length(m) && nzchar(m)) {
+      g <- regmatches(m, regexec("Claude\\s+([A-Z][A-Za-z]*)\\s+([0-9]+(?:\\.[0-9]+)?)", m))[[1]]
+      out$family <- g[2]; out$version <- g[3]
+    }
+    ctx <- regmatches(message, regexec("\\(([0-9]+[KM])\\s+context\\)", message))[[1]]
+    if (length(ctx) == 2) out$context_window <- ctx[2]
+    return(out)
+  }
+
+  if (identical(tool, "aider")) {
+    # aider (<provider>/<model>) -- split on the FIRST slash only. The model id
+    # belongs to the provider and splitting it further would invent structure we
+    # do not control.
+    g <- regmatches(message, regexec("aider\\s*\\(([^)]+)\\)", message))[[1]]
+    if (length(g) == 2 && grepl("/", g[2], fixed = TRUE)) {
+      out$provider <- sub("/.*$", "", g[2])
+      out$family   <- sub("^[^/]*/", "", g[2])
+    }
+    return(out)
+  }
+
+  if (identical(tool, "gemini")) {
+    # Gemini <version> <variant>
+    g <- regmatches(message,
+      regexec("Gemini\\s+([0-9]+(?:\\.[0-9]+)?)\\s+([A-Za-z][A-Za-z0-9-]*)", message))[[1]]
+    if (length(g) == 3) { out$version <- g[2]; out$family <- g[3] }
+    return(out)
+  }
+
+  out
+}
+
+.ai_empty_models <- function()
+  data.frame(repo_id = character(), tool = character(), provider = character(),
+             family = character(), version = character(), context_window = character(),
+             commits = integer(), first_seen = character(), last_seen = character(),
+             window_complete = integer(), stringsAsFactors = FALSE)
+
+#' Tally the models a repository's trailers name, one row per distinct model.
+#'
+#' `commits` counts commits in the examined window, not in history, and
+#' `window_complete` is 0 when the search reported more hits than the page
+#' returned, so a reader can tell a full tally from the first hundred of many.
+build_ai_model_rows <- function(repo_id, tool, items, window_complete = TRUE) {
+  if (is.null(items) || nrow(items) == 0) return(.ai_empty_models())
+  parsed <- lapply(seq_len(nrow(items)), function(i) {
+    m <- extract_ai_model(tool, items$message[i])
+    # A trailer that states no model produces no row. A blank row would read as
+    # a model we could not identify, which is a different claim.
+    if (all(is.na(unlist(m)))) return(NULL)
+    data.frame(provider = m$provider, family = m$family, version = m$version,
+               context_window = m$context_window, date = items$date[i],
+               stringsAsFactors = FALSE)
+  })
+  parsed <- do.call(rbind, Filter(Negate(is.null), parsed))
+  if (is.null(parsed) || nrow(parsed) == 0) return(.ai_empty_models())
+  key <- paste(parsed$provider, parsed$family, parsed$version,
+               parsed$context_window, sep = "\r")
+  rows <- lapply(split(parsed, key), function(g) {
+    d <- g$date[!is.na(g$date)]
+    data.frame(repo_id = repo_id, tool = tool,
+               provider = g$provider[1], family = g$family[1],
+               version = g$version[1], context_window = g$context_window[1],
+               commits = nrow(g),
+               first_seen = if (length(d)) min(d) else NA_character_,
+               last_seen  = if (length(d)) max(d) else NA_character_,
+               window_complete = as.integer(isTRUE(window_complete)),
+               stringsAsFactors = FALSE)
+  })
+  out <- do.call(rbind, rows)
+  rownames(out) <- NULL
+  out
 }
 
 .ai_empty_signals <- function()
   data.frame(repo_id = character(), tool = character(), first_seen_date = character(),
              first_seen_censored = integer(), evidence_tiers = character(),
              markers = character(),
-             authored = integer(), last_confirmed_date = character(),
+             authored = integer(),
+             authored_commits = integer(), assisted_commits = integer(),
+             last_confirmed_date = character(),
              stringsAsFactors = FALSE)
 
 #' Merge prior + incoming vcs_ai_signals rows per (repo_id, tool) by the six
@@ -442,6 +724,10 @@ build_ai_detail <- function(repo_id, raw_evidence, onsets, last_confirmed) {
                          stringsAsFactors = FALSE)
   ev <- raw_evidence
   if (!"authored" %in% names(ev)) ev$authored <- 0L
+  # An evidence frame written before the counts existed carries neither column;
+  # NA is right for it, because no search of that kind ran.
+  if (!"authored_commits" %in% names(ev)) ev$authored_commits <- NA_integer_
+  if (!"assisted_commits" %in% names(ev)) ev$assisted_commits <- NA_integer_
   guard_c <- if ("first_seen_censored" %in% names(ev)) as.integer(ev$first_seen_censored)
              else rep(0L, nrow(ev))
   m <- match(paste(ev$tool, ev$marker, sep = "\r"),
@@ -454,6 +740,8 @@ build_ai_detail <- function(repo_id, raw_evidence, onsets, last_confirmed) {
     evidence_tiers = ev$tier,
     markers = ev$marker,
     authored = as.integer(ev$authored),
+    authored_commits = as.integer(ev$authored_commits),
+    assisted_commits = as.integer(ev$assisted_commits),
     last_confirmed_date = last_confirmed,
     stringsAsFactors = FALSE)
   ai_onset_reducer(.ai_empty_signals(), candidates)

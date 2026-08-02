@@ -567,6 +567,8 @@ build_tree_query <- function(repos) {
       claudeTree: object(expression: "HEAD:.claude") { ... on Tree { entries { name type } } }
       agentsTree: object(expression: "HEAD:.agents") { ... on Tree { entries { name type } } }
       instTree: object(expression: "HEAD:inst") { ... on Tree { entries { name type } } }
+      vignettesTree: object(expression: "HEAD:vignettes") { ... on Tree { entries { name type } } }
+      siteTree: object(expression: "HEAD:site") { ... on Tree { entries { name type } } }
       gitignore: object(expression: "HEAD:.gitignore") { ... on Blob { text } }
       rbuildignore: object(expression: "HEAD:.Rbuildignore") { ... on Blob { text } }
     }', j - 1L, repos$owner[j], repos$name[j])
@@ -612,7 +614,12 @@ parse_tree_markers <- function(resp, repos) {
       root_entries = c(entry_names(r$rootTree),
                        prefixed(r$claudeTree, ".claude"),
                        prefixed(r$agentsTree, ".agents"),
-                       prefixed(r$instTree, "inst")),
+                       prefixed(r$instTree, "inst"),
+                       # vignettes/ carries the source kind, which the extension
+                       # names and the root listing cannot. site/ is where every
+                       # observed _litedown.yml actually lives.
+                       prefixed(r$vignettesTree, "vignettes"),
+                       prefixed(r$siteTree, "site")),
       github_entries = entry_names(r$githubTree),
       is_fork = isTRUE(r$isFork),
       parent = .nn(r$parent$nameWithOwner, NA_character_),
@@ -622,15 +629,23 @@ parse_tree_markers <- function(resp, repos) {
   out
 }
 
-#' One aliased multi-repo query for the oldest 50 PRs per repo (CREATED_AT ASC),
+#' One aliased multi-repo query for the newest 50 PRs per repo (CREATED_AT DESC),
 #' each with author { login __typename } and createdAt, plus pageInfo so the
 #' orchestrator can decide which repos need further paging toward the agent era.
 #' Always page 1: a single shared `after` cursor across aliases is meaningless,
 #' so per-repo follow-up paging is the orchestrator's job (Plan B2).
+#'
+#' NEWEST first. It used to ask for the fifty OLDEST while AI_PR_CUTOFF discards
+#' everything before 2023, so any repository with more than fifty lifetime pull
+#' requests was structurally unable to produce PR evidence: its whole page
+#' predated the agent era. cynkra/dm has 1,819 PRs, and page one under ASC spans
+#' July to October 2019. The same request under DESC spans 2026. Ordering costs
+#' nothing either way, and hasNextPage below now says when even fifty was not
+#' enough rather than leaving a truncated window looking like a complete one.
 build_pr_agent_query <- function(repos) {
   parts <- vapply(seq_len(nrow(repos)), function(j) {
     sprintf('r%d: repository(owner: "%s", name: "%s") {
-      pullRequests(first: 50, orderBy: {field: CREATED_AT, direction: ASC}) {
+      pullRequests(first: 50, orderBy: {field: CREATED_AT, direction: DESC}) {
         pageInfo { endCursor hasNextPage }
         nodes { author { login __typename } createdAt }
       }
@@ -679,10 +694,17 @@ parse_search_commit <- function(body_txt) parse_search_commit_hit(body_txt)$date
 #'
 #' Returns list(date, message, author) with NA fields when there is no hit.
 parse_search_commit_hit <- function(body_txt) {
+  # total_count is the number of commits in this repository matching the query,
+  # which is the difference between "this tool has touched this repo" and "this
+  # many of its commits carry the signature". It was read twice below and thrown
+  # away. NA where nothing was measured: a refusal must not record a zero, which
+  # is the tier-B bug relocated to a new column.
+  empty_page <- data.frame(date = character(), message = character(),
+                           stringsAsFactors = FALSE)
   none <- list(date = NA_character_, message = NA_character_, author = NA_character_,
-               unavailable = FALSE)
+               total_count = 0L, items = empty_page, unavailable = FALSE)
   unavailable <- list(date = NA_character_, message = NA_character_, author = NA_character_,
-                      unavailable = TRUE)
+                      total_count = NA_integer_, items = empty_page, unavailable = TRUE)
   body <- tryCatch(jsonlite::fromJSON(body_txt, simplifyVector = FALSE), error = function(e) NULL)
   if (is.null(body)) return(unavailable)   # unparseable is not an answer
 
@@ -696,9 +718,18 @@ parse_search_commit_hit <- function(body_txt) {
   items <- .nn(body$items, list())
   if (isTRUE(.nn(body$total_count, length(items)) == 0) || length(items) == 0) return(none)
   it <- items[[1]]
-  list(date    = .nn(it$commit$committer$date, NA_character_),
-       message = .nn(it$commit$message, NA_character_),
-       author  = .nn(it$commit$author$name, NA_character_),
+  # Every message on the page, not only the first. The trailer names the model
+  # and we were reading past it; the page was already being fetched and paid
+  # for, so the detail costs nothing beyond parsing what came back.
+  page <- data.frame(
+    date    = vapply(items, function(x) .nn(x$commit$committer$date, NA_character_), character(1)),
+    message = vapply(items, function(x) .nn(x$commit$message, NA_character_), character(1)),
+    stringsAsFactors = FALSE)
+  list(date        = .nn(it$commit$committer$date, NA_character_),
+       message     = .nn(it$commit$message, NA_character_),
+       author      = .nn(it$commit$author$name, NA_character_),
+       total_count = as.integer(.nn(body$total_count, length(items))),
+       items       = page,
        unavailable = FALSE)
 }
 
@@ -766,35 +797,19 @@ fetch_marker_onset <- function(io, owner, name, path, delay = BACKFILL_DELAY_S) 
 
 # --- transport (not unit-tested) ---
 
-#' Earliest commit in owner/name whose message matches `query`, via the REST
-#' commit-search API. One request returns the server-side earliest match. `sort` and
-#' `order` MUST be paired or GitHub silently returns best-match desc. Same transport
-#' style as fetch_contributor_count: routed through gh, GH_TOKEN set/restored, NA on
-#' any transport error or non-2xx so one bad repo never aborts a scan. Sleeps `delay`
-#' after the request because the search budget (~30/min) is separate from and tighter
-#' than GraphQL, so pacing at the transport keeps the caller's loop simple. FUZZY: the
-#' returned date is a CANDIDATE the caller verifies (scan_trailers) or records as a
-#' censored floor.
-search_earliest_commit <- function(token, owner, name, query, delay = SEARCH_DELAY_S) {
-  old <- Sys.getenv("GH_TOKEN", unset = NA)
-  Sys.setenv(GH_TOKEN = token)
-  on.exit({ if (is.na(old)) Sys.unsetenv("GH_TOKEN") else Sys.setenv(GH_TOKEN = old) }, add = TRUE)
-  q <- sprintf("repo:%s/%s %s", owner, name, query)
-  out <- suppressWarnings(system2("gh", c("api", "-X", "GET", "search/commits",
-    "-f", shQuote(paste0("q=", q)), "-f", "sort=committer-date", "-f", "order=asc",
-    "-f", "per_page=1"), stdout = TRUE))
-  if (delay > 0) Sys.sleep(delay)
-  status <- attr(out, "status")
-  if (!is.null(status) && !identical(as.integer(status), 0L)) return(NA_character_)
-  parse_search_commit(paste(out, collapse = "\n"))
-}
 
 #' As search_earliest_commit, but returning the whole hit so the caller can verify it.
 #' Same transport, same pacing, same fail-soft: an error is a hit with NA fields, never
 #' an exception that would abort a shard.
 search_earliest_commit_hit <- function(token, owner, name, query, delay = SEARCH_DELAY_S) {
   # A transport failure is also a refused question, not an absence of trailers.
+  # total_count is NA for the same reason the parser's is: nothing was measured,
+  # and a caller reading a missing field would get NULL rather than a number it
+  # could tell apart from a real zero.
   none <- list(date = NA_character_, message = NA_character_, author = NA_character_,
+               total_count = NA_integer_,
+               items = data.frame(date = character(), message = character(),
+                                  stringsAsFactors = FALSE),
                unavailable = TRUE)
   old <- Sys.getenv("GH_TOKEN", unset = NA)
   Sys.setenv(GH_TOKEN = token)
@@ -807,7 +822,7 @@ search_earliest_commit_hit <- function(token, owner, name, query, delay = SEARCH
   q <- sprintf("repo:%s/%s %s", owner, name, query)
   out <- suppressWarnings(system2("gh", c("api", "-X", "GET", "search/commits",
     "-f", shQuote(paste0("q=", q)), "-f", "sort=committer-date", "-f", "order=asc",
-    "-f", "per_page=1"), stdout = TRUE))
+    "-f", sprintf("per_page=%d", AI_SEARCH_PAGE)), stdout = TRUE))
   if (delay > 0) Sys.sleep(delay)
   status <- attr(out, "status")
   if (!is.null(status) && !identical(as.integer(status), 0L)) return(none)
@@ -845,7 +860,7 @@ fetch_tree_markers <- function(io, repos, batch_size = TIER_D_BATCH) {
 
 #' Cheap PR-agent pass over a chunk of repos, batched TIER_D_BATCH at a time. Same
 #' halve-and-retry contract as fetch_tree_markers, over build_pr_agent_query /
-#' parse_pr_agents. Page 1 only (oldest 50 PRs, CREATED_AT ASC): a young repo's earliest
+#' parse_pr_agents. Page 1 only (newest 50 PRs, CREATED_AT DESC): a young repo's whole
 #' agent PR is on page 1 and is the exact onset; per-repo follow-up paging toward the
 #' agent era for large old repos is deferred (Plan C). Returns a named list keyed by
 #' repo_id, each value list(prs, has_next); a deferred repo is absent.

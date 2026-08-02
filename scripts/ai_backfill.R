@@ -333,13 +333,15 @@ run_gate_incremental <- function(io, out_dir, parts_dir) {
 }
 
 # ---- deep onset shard IO ----------------------------------------------------
-export_ai_shard <- function(path, rows) {
+export_ai_shard <- function(path, rows, model_rows = NULL) {
   if (file.exists(path)) unlink(path)
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   DBI::dbExecute(con, "PRAGMA journal_mode=DELETE")
   ensure_series_schema(con)                        # folds in the vcs_ai_signals CREATE
   if (nrow(rows) > 0) DBI::dbWriteTable(con, "vcs_ai_signals", rows, append = TRUE)
+  if (!is.null(model_rows) && nrow(model_rows) > 0)
+    DBI::dbWriteTable(con, "vcs_ai_models", model_rows, append = TRUE)
   DBI::dbExecute(con, "VACUUM")
   invisible(path)
 }
@@ -379,7 +381,7 @@ export_ai_shard <- function(path, rows) {
 #'       it). An IGNORE-TOKEN marker names a .gitignore/.Rbuildignore entry, not a committed
 #'       path, so it is NOT queried; it takes an honest censored floor of today via
 #'       build_onset_map;
-#'   (2) for each flagged bot-identity tool, one author-email commit search (io$search,
+#'   (2) for each flagged bot-identity tool, one author-email commit search (io$search_hit,
 #'       REST-search budget) - a hit is an EXACT Tier-A onset and adds a Tier-A evidence
 #'       row (authored = 1, since an author-email match means the bot itself authored the
 #'       commit) so a marker + a bot commit corroborate to two tiers;
@@ -399,6 +401,7 @@ run_deep <- function(io, out_dir, roster_path, i, N,
 
   acc <- list()
   unavailable <- 0L   # searches the API refused, kept apart from searches that missed
+  model_rows <- list()   # one row per repo per tool per model named in a trailer
   for (r in seq_len(nrow(mine))) {
     rl <- graphql_rate_remaining(io)
     if (rl < AI_POINT_RESERVE) {
@@ -411,6 +414,11 @@ run_deep <- function(io, out_dir, roster_path, i, N,
     ev <- evidence[evidence$repo_id == rid, c("tool", "tier", "marker", "agnostic"), drop = FALSE]
     if (nrow(ev) == 0) next
     ev$authored <- 0L   # only a Tier-A author-email hit below sets authored = 1
+    # Cheap-pass evidence is markers and PRs: no commit search ran for it, so both
+    # counts are "nobody asked" rather than zero. The tier-A and tier-B blocks
+    # below append rows that carry real numbers.
+    ev$authored_commits <- NA_integer_
+    ev$assisted_commits <- NA_integer_
 
     # (1) Tier-D onsets, keyed by the FULL evidence marker string. A COMMITTED marker (its
     #     marker is the tree entry name) is dated exactly by paging its REAL repo path's
@@ -458,18 +466,47 @@ run_deep <- function(io, out_dir, roster_path, i, N,
     commit_onsets <- NULL; extra_ev <- NULL
     for (tool in unique(ev$tool[!as.logical(ev$agnostic)])) {
       # Every allowlisted identity for the tool, not just an email-shaped one.
+      #
+      # Routed through search_hit, which reports a refusal as a refusal. The old
+      # transport collapsed both outcomes onto NA, so a throttled tier-A search
+      # published as "this bot has never committed here" with exactly the
+      # confidence of a measured absence. Tiers B and C already keep them apart;
+      # tier A is the one that was still guessing, and it is the tier whose
+      # zeros the canary reports.
       hits <- character(0)
+      # The author qualifier is an exact match, so its total_count is the number
+      # of commits this identity authored here. A refused search contributes
+      # nothing, leaving the count NA rather than 0.
+      n_authored <- NA_integer_
+      asked <- FALSE
       for (term in .ai_author_queries(tool)) {
-        d <- tryCatch(io$search(owner, name, term, search_delay),
-                      error = function(e) NA_character_)
+        hit <- tryCatch(io$search_hit(owner, name, term, search_delay),
+                        error = function(e) list(date = NA_character_, unavailable = TRUE))
+        if (isTRUE(hit$unavailable)) { unavailable <- unavailable + 1L; next }
+        asked <- TRUE
+        n_authored <- .ai_max_count(c(n_authored, .nn(hit$total_count, NA_integer_)))
+        d <- .nn(hit$date, NA_character_)
         if (!is.na(d)) hits <- c(hits, d)
       }
-      if (!length(hits)) next
+      # A search that ran and matched nothing is a measured zero, and writing NA
+      # there would claim nobody looked. A hit whose count did not come back is
+      # not zero either: we are holding the commit that proves at least one.
+      if (asked && is.na(n_authored)) n_authored <- if (length(hits)) 1L else 0L
+      if (!length(hits)) {
+        # Asked, and the answer was none. That is a measured zero and it belongs
+        # on the tool's existing evidence rather than being dropped with the
+        # onset: writing NA here would claim nobody looked, which is the
+        # honest-NA rule broken in the direction people forget. No tier-A row is
+        # added, because nothing was detected.
+        if (asked) ev$authored_commits[ev$tool == tool] <- n_authored
+        next
+      }
       # The earliest across identities: a bot that changed login keeps its onset.
       commit_onsets <- rbind(commit_onsets, data.frame(tool = tool, tier = "A",
         first_seen_date = min(hits), confirmed = TRUE, stringsAsFactors = FALSE))
       extra_ev <- rbind(extra_ev, data.frame(tool = tool, tier = "A", marker = "A",
-        agnostic = 0L, authored = 1L, stringsAsFactors = FALSE))
+        agnostic = 0L, authored = 1L, authored_commits = n_authored,
+        assisted_commits = NA_integer_, stringsAsFactors = FALSE))
     }
     # (2b) Tier-B commit trailers and Tier-C author suffixes. These were written into
     #      the ruleset and never called from any scan, so every published detection was
@@ -490,10 +527,25 @@ run_deep <- function(io, out_dir, roster_path, i, N,
       if (isTRUE(hit$unavailable)) { unavailable <- unavailable + 1L; next }
       if (is.na(.nn(hit$date, NA_character_))) next
       v <- verify_search_hit(spec$rule, spec$tier, hit)
+      # The count is kept only when the hit verifies against the rule's real
+      # pattern. The query is deliberately fuzzy so the search will find the
+      # trailer at all, which means an unverified hit is evidence the search
+      # matched something we cannot vouch for, and its total_count would be
+      # counting that too. A floor we cannot defend is worse than no number.
+      n_assisted <- if (isTRUE(v$confirmed)) .nn(hit$total_count, NA_integer_) else NA_integer_
+      # The page we already fetched names the model on three tools' trailers.
+      # Only read it off a verified hit, for the same reason the count is: an
+      # unverified hit matched something we cannot vouch for.
+      if (isTRUE(v$confirmed) && !is.null(hit$items) && nrow(hit$items) > 0) {
+        complete <- is.na(n_assisted) || n_assisted <= nrow(hit$items)
+        mr <- build_ai_model_rows(rid, v$tool, hit$items, window_complete = complete)
+        if (nrow(mr) > 0) model_rows[[length(model_rows) + 1L]] <- mr
+      }
       commit_onsets <- rbind(commit_onsets, data.frame(tool = v$tool, tier = v$tier,
         first_seen_date = hit$date, confirmed = v$confirmed, stringsAsFactors = FALSE))
       extra_ev <- rbind(extra_ev, data.frame(tool = v$tool, tier = v$tier, marker = v$tier,
-        agnostic = 0L, authored = 0L, stringsAsFactors = FALSE))
+        agnostic = 0L, authored = 0L, authored_commits = NA_integer_,
+        assisted_commits = as.integer(n_assisted), stringsAsFactors = FALSE))
     }
 
     full_ev <- rbind(ev, extra_ev)
@@ -506,7 +558,11 @@ run_deep <- function(io, out_dir, roster_path, i, N,
     if (nrow(detail) > 0) acc[[length(acc) + 1L]] <- detail
   }
   rows <- if (length(acc)) do.call(rbind, acc) else .ai_empty_signals()
-  export_ai_shard(file.path(out_dir, sprintf("vcs-ai-shard-%d.db", i)), rows)
+  models_df <- if (length(model_rows)) do.call(rbind, model_rows) else .ai_empty_models()
+  export_ai_shard(file.path(out_dir, sprintf("vcs-ai-shard-%d.db", i)), rows, models_df)
+  if (nrow(models_df) > 0)
+    message(sprintf("ai deep shard %d/%d: %d model row(s) across %d repo(s)",
+                    i, N, nrow(models_df), length(unique(models_df$repo_id))))
   message(sprintf("ai deep shard %d/%d: %d onset detail rows", i, N, nrow(rows)))
   # Said out loud, because a run that could not ask is not a run that found nothing,
   # and the difference is invisible in the published table.
@@ -514,7 +570,7 @@ run_deep <- function(io, out_dir, roster_path, i, N,
     message(sprintf(
       "ai deep shard %d/%d: WARNING %d commit search(es) were refused (rate limit or error); ",
       i, N, unavailable),
-      "tier B and C are UNDER-COUNTED for this shard, not absent")
+      "tiers A, B and C are UNDER-COUNTED for this shard, not absent")
   }
 }
 
@@ -563,6 +619,51 @@ run_merge <- function(io, out_dir, parts_dir) {
   DBI::dbExecute(con, "DELETE FROM vcs_ai_signals")
   if (nrow(reduced) > 0) DBI::dbWriteTable(con, "vcs_ai_signals", reduced, append = TRUE)
 
+  # Every one of the detection bugs was visible here as a channel at exactly zero
+  # across the roster, and nothing looked. This looks, per (tier, tool): a
+  # tier-level check would have seen tier A's 103 detections and called it healthy
+  # while four of its six identities had never produced one.
+  roster_n <- tryCatch(
+    DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM repos")$n[1], error = function(e) NA_integer_)
+  canary_unexplained <- ai_canary_check(reduced, roster_n = roster_n)
+
+  # The finding is published, not withheld. Failing before publish would hold
+  # back the dev-tooling and summary data too, none of which is implicated by a
+  # tool channel going quiet; a week of collateral staleness is a worse outcome
+  # than a red build beside fresh data. The run still fails, at the end.
+  silent_tbl <- ai_silent_channel_table(reduced)
+  DBI::dbExecute(con, "DELETE FROM vcs_ai_silent_channels")
+  if (nrow(silent_tbl) > 0)
+    DBI::dbWriteTable(con, "vcs_ai_silent_channels", silent_tbl, append = TRUE)
+
+  # Model rows, replaced wholesale from the shards that carry them. Not reduced
+  # like onsets: a model tally describes the window that was examined this run,
+  # and folding it into an older window would produce a count belonging to
+  # neither. A repo not covered this run keeps its previous rows.
+  model_parts <- lapply(parts, function(p) {
+    pcon <- DBI::dbConnect(RSQLite::SQLite(), p)
+    on.exit(DBI::dbDisconnect(pcon), add = TRUE)
+    if (!DBI::dbExistsTable(pcon, "vcs_ai_models")) return(.ai_empty_models())
+    DBI::dbReadTable(pcon, "vcs_ai_models")
+  })
+  models_in <- if (length(model_parts)) do.call(rbind, model_parts) else .ai_empty_models()
+  if (nrow(models_in) > 0) {
+    touched <- unique(models_in$repo_id)
+    ph <- paste(rep("?", length(touched)), collapse = ",")
+    DBI::dbExecute(con, sprintf("DELETE FROM vcs_ai_models WHERE repo_id IN (%s)", ph),
+                   params = as.list(touched))
+    DBI::dbWriteTable(con, "vcs_ai_models", models_in, append = TRUE)
+  }
+  message(sprintf("ai merge: %d model row(s) across %d repo(s)",
+                  nrow(models_in), length(unique(models_in$repo_id))))
+
+  # Republish the rule inventory so a consumer can state each tier's breadth
+  # from data rather than asserting it.
+  inv <- ai_rule_inventory()
+  inv$ruleset_version <- AI_RULESET_VERSION
+  DBI::dbExecute(con, "DELETE FROM vcs_ai_rule_inventory")
+  DBI::dbWriteTable(con, "vcs_ai_rule_inventory", inv, append = TRUE)
+
   # Rebuild the summary so ai_* rollups reflect the merged onsets. Non-AI columns come
   # from the seeded series_latest; descriptive + release facts carry forward from the
   # prior summary (no fresh gauge collection this run, so compute_release_facts = FALSE).
@@ -610,8 +711,21 @@ run_merge <- function(io, out_dir, parts_dir) {
 
   message(sprintf("ai merge: %d prior, %d incoming, %d reduced onset rows",
                   nrow(prior), nrow(incoming), nrow(reduced)))
-  invisible(publish(io, con, out_dir, tag = "current", source_kind = "live",
-                    touched_years = character(0)))
+  out <- publish(io, con, out_dir, tag = "current", source_kind = "live",
+                 touched_years = character(0))
+
+  # Raised after the data is out, so the alarm costs a red build and not a
+  # week of stale dev-tooling rows.
+  if (nrow(canary_unexplained) > 0) {
+    stop(sprintf(paste0("AI detection canary: %d channel(s) detected nothing on the whole roster ",
+                        "and are not recorded in AI_SILENT_CHANNELS_KNOWN: %s. ",
+                        "Either the rule is broken or the zero is real; record which, with a date."),
+                 nrow(canary_unexplained),
+                 paste(canary_unexplained$tier, canary_unexplained$tool,
+                       sep = "/", collapse = ", ")),
+         call. = FALSE)
+  }
+  invisible(out)
 }
 
 # ---- CLI dispatch -----------------------------------------------------------
@@ -619,8 +733,6 @@ main <- function(mode, out_dir) {
   token <- Sys.getenv("VCS_SIGNALS_TOKEN")
   io <- list(
     graphql        = default_io(token)$graphql,
-    search         = function(owner, name, query, delay = SEARCH_DELAY_S)
-                       search_earliest_commit(token, owner, name, query, delay),
     search_hit     = function(owner, name, query, delay = SEARCH_DELAY_S)
                        search_earliest_commit_hit(token, owner, name, query, delay),
     release_exists = function() gh_release_exists(RELEASE_REPO),

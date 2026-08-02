@@ -194,7 +194,18 @@ test_that("run_deep assembles marker + confirmed commit + PR onsets into a detai
     graphql = function(query) list(data = list(repository = list(defaultBranchRef = list(
       target = list(history = list(pageInfo = list(endCursor = "", hasNextPage = FALSE),
         nodes = list(list(committedDate = "2024-03-01T00:00:00Z")))))))),
-    search = function(owner, name, query, delay = 0) "2023-11-01T00:00:00Z")
+    search_hit = function(owner, name, query, delay = 0) {
+      # Answer ONLY the tier-A author query, in either qualifier shape:
+      # claude searches author-email:, the bot logins search author:.
+      # Tier A and tier B share this
+      # transport, so a stub that answers everything hands the test ten
+      # trailer detections it never intended.
+      if (!grepl("^author(-email)?:", query))
+        return(list(date = NA_character_, message = NA_character_,
+                    author = NA_character_, unavailable = FALSE))
+      list(date = "2023-11-01T00:00:00Z", message = NA_character_, author = NA_character_,
+           unavailable = FALSE)
+    })
   run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
            marker_delay = 0, search_delay = 0)
   scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db"))
@@ -219,7 +230,7 @@ test_that("run_deep censors every Tier-D marker on a fork", {
     graphql = function(query) list(data = list(repository = list(defaultBranchRef = list(
       target = list(history = list(pageInfo = list(endCursor = "", hasNextPage = FALSE),
         nodes = list(list(committedDate = "2022-01-01T00:00:00Z")))))))),
-    search = function(owner, name, query, delay = 0) NA_character_)   # no bot identity for cursor markers
+    search_hit = function(owner, name, query, delay = 0) list(date = NA_character_, message = NA_character_, author = NA_character_, unavailable = FALSE))   # searched, no cursor[bot] commits
   run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
            marker_delay = 0, search_delay = 0)
   scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db"))
@@ -237,10 +248,10 @@ test_that("run_deep pauses before a repo when rate remaining is below AI_POINT_R
     data.frame(repo_id = "github.com/o/late", tool = "claude", tier = "D", marker = "CLAUDE.md",
                agnostic = 0L, stringsAsFactors = FALSE))
   # Rate remaining is already below AI_POINT_RESERVE, so the preflight must pause before
-  # the first repo: fetch_marker_onset's graphql call and io$search are never issued.
+  # the first repo: fetch_marker_onset's graphql call and io$search_hit are never issued.
   io <- list(
     graphql = function(query) list(data = list(rateLimit = list(remaining = 200, resetAt = "2026-07-16T00:00:00Z"))),
-    search = function(owner, name, query, delay = 0) stop("search issued despite the rate pause"))
+    search_hit = function(owner, name, query, delay = 0) stop("search issued despite the rate pause"))
   run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
            marker_delay = 0, search_delay = 0)
   scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db"))
@@ -495,7 +506,7 @@ test_that("run_deep dates a github-located marker via its .github/ real path", {
       list(data = list(repository = list(defaultBranchRef = list(target = list(
         history = list(pageInfo = list(endCursor = "", hasNextPage = FALSE), nodes = list()))))))
     },
-    search = function(owner, name, query, delay = 0) NA_character_)   # copilot has no author-email
+    search_hit = function(owner, name, query, delay = 0) list(date = NA_character_, message = NA_character_, author = NA_character_, unavailable = FALSE))   # searched, no copilot commits
   run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
            marker_delay = 0, search_delay = 0)
   scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db"))
@@ -522,7 +533,7 @@ test_that("run_deep gives an ignore-token detection a censored today floor and s
         stop("marker history queried for an ignore-token detection")
       list(data = list())   # rateLimit query -> remaining NULL -> Inf, so the preflight passes
     },
-    search = function(owner, name, query, delay = 0) NA_character_)   # isolate the floor
+    search_hit = function(owner, name, query, delay = 0) list(date = NA_character_, message = NA_character_, author = NA_character_, unavailable = FALSE))   # searched, nothing found: isolate the floor
   run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
            marker_delay = 0, search_delay = 0)
   scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db"))
@@ -775,9 +786,12 @@ test_that("run_deep records a verified commit trailer as tier B with an exact on
     graphql = function(query) list(data = list(repository = list(defaultBranchRef = list(
       target = list(history = list(pageInfo = list(endCursor = "", hasNextPage = FALSE),
         nodes = list(list(committedDate = "2026-03-01T00:00:00Z")))))))),
-    search = function(owner, name, query, delay = 0) NA_character_,
     search_hit = function(owner, name, query, delay = 0) {
-      if (!grepl("Co-Authored-By", query, fixed = TRUE))
+      # Answer only the Claude trailer query. Matching on "Co-Authored-By"
+      # alone made the stub answer every trailer query in the ruleset with a
+      # Claude message, so adding a pattern for another tool handed this test a
+      # hit it never intended and turned a verified onset into a floor.
+      if (!grepl("Co-Authored-By: Claude", query, fixed = TRUE))
         return(list(date = NA_character_, message = NA_character_, author = NA_character_))
       list(date = "2025-09-15T00:00:00Z",
            message = "feat: x\n\nCo-authored-by: Claude <noreply@anthropic.com>",
@@ -808,10 +822,13 @@ test_that("an unverified trailer hit dates a floor, never an exact onset", {
     graphql = function(query) list(data = list(repository = list(defaultBranchRef = list(
       target = list(history = list(pageInfo = list(endCursor = "", hasNextPage = FALSE),
         nodes = list(list(committedDate = "2026-03-01T00:00:00Z")))))))),
-    search = function(owner, name, query, delay = 0) NA_character_,
     # A hit on a human named Claude: the search matched, the pattern will not.
     search_hit = function(owner, name, query, delay = 0) {
-      if (!grepl("Co-Authored-By", query, fixed = TRUE))
+      # Answer only the Claude trailer query. Matching on "Co-Authored-By"
+      # alone made the stub answer every trailer query in the ruleset with a
+      # Claude message, so adding a pattern for another tool handed this test a
+      # hit it never intended and turned a verified onset into a floor.
+      if (!grepl("Co-Authored-By: Claude", query, fixed = TRUE))
         return(list(date = NA_character_, message = NA_character_, author = NA_character_))
       list(date = "2025-09-15T00:00:00Z",
            message = "fix\n\nCo-authored-by: Claude Dupont <claude@univ.fr>", author = "Jean")
@@ -844,7 +861,9 @@ test_that("a scan whose io has no trailer channel still runs", {
     graphql = function(query) list(data = list(repository = list(defaultBranchRef = list(
       target = list(history = list(pageInfo = list(endCursor = "", hasNextPage = FALSE),
         nodes = list(list(committedDate = "2026-03-01T00:00:00Z")))))))),
-    search = function(owner, name, query, delay = 0) NA_character_)
+    search_hit = function(owner, name, query, delay = 0)
+      list(date = NA_character_, message = NA_character_,
+           author = NA_character_, unavailable = FALSE))
   expect_no_error(run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
                            marker_delay = 0, search_delay = 0))
 })
@@ -893,10 +912,18 @@ test_that("Tier A takes the earliest across a tool's identities", {
     graphql = function(query) list(data = list(repository = list(defaultBranchRef = list(
       target = list(history = list(pageInfo = list(endCursor = "", hasNextPage = FALSE),
         nodes = list(list(committedDate = "2026-06-01T00:00:00Z")))))))),
-    search = function(owner, name, query, delay = 0) "2025-02-02T00:00:00Z",
-    search_hit = function(owner, name, query, delay = 0)
-      list(date = NA_character_, message = NA_character_, author = NA_character_,
-           unavailable = FALSE))
+    search_hit = function(owner, name, query, delay = 0) {
+      # Answer ONLY the tier-A author query, in either qualifier shape:
+      # claude searches author-email:, the bot logins search author:.
+      # Tier A and tier B share this
+      # transport, so a stub that answers everything hands the test ten
+      # trailer detections it never intended.
+      if (!grepl("^author(-email)?:", query))
+        return(list(date = NA_character_, message = NA_character_,
+                    author = NA_character_, unavailable = FALSE))
+      list(date = "2025-02-02T00:00:00Z", message = NA_character_, author = NA_character_,
+           unavailable = FALSE)
+    })
   run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
            marker_delay = 0, search_delay = 0)
   scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db"))
@@ -931,7 +958,7 @@ test_that("run_deep dates an ignore entry from the commit that added it", {
 
   oids  <- c("c3", "c2", "c1")                                  # newest first, as GraphQL returns
   dates <- c("2026-05-01", "2026-03-01", "2026-01-01")
-  io <- list(search = function(...) NA_character_,
+  io <- list(search_hit = function(...) list(date = NA_character_, unavailable = FALSE),
              search_hit = function(...) list(date = NA_character_, unavailable = FALSE),
              graphql = function(q) {
                if (grepl("history", q, fixed = TRUE)) return(ab_history_resp(oids, dates))
@@ -962,7 +989,7 @@ test_that("an ignore entry present at the oldest revision stays a floor", {
                stringsAsFactors = FALSE),
     data.frame(repo_id = "github.com/o/r", tool = "claude", tier = "D",
                marker = "gitignore:.claude", agnostic = 0L, stringsAsFactors = FALSE))
-  io <- list(search = function(...) NA_character_,
+  io <- list(search_hit = function(...) list(date = NA_character_, unavailable = FALSE),
              search_hit = function(...) list(date = NA_character_, unavailable = FALSE),
              graphql = function(q) {
                if (grepl("history", q, fixed = TRUE)) {
@@ -987,7 +1014,7 @@ test_that("an unreadable ignore history falls back to the scan date, not to sile
                stringsAsFactors = FALSE),
     data.frame(repo_id = "github.com/o/r", tool = "claude", tier = "D",
                marker = "gitignore:.claude", agnostic = 0L, stringsAsFactors = FALSE))
-  io <- list(search = function(...) NA_character_,
+  io <- list(search_hit = function(...) list(date = NA_character_, unavailable = FALSE),
              search_hit = function(...) list(date = NA_character_, unavailable = FALSE),
              graphql = function(q) list(errors = list(list(message = "nope"))))
   run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
@@ -997,4 +1024,52 @@ test_that("an unreadable ignore history falls back to the scan date, not to sile
   got <- DBI::dbReadTable(scon, "vcs_ai_signals")
   expect_equal(got$first_seen_censored, 1L,
                label = "a detection we could not date is still a detection")
+})
+
+test_that("run_deep counts a refused Tier-A search instead of reading it as an absence", {
+  # The sixth instance of the shape this ruleset keeps getting bitten by: tier A
+  # asked, the API refused, and the refusal arrived as a bare NA that is the same
+  # value a search returns when it genuinely found nothing. Tiers B and C already
+  # keep the two apart and tally the refusals; tier A did not, so a throttled run
+  # published "claude has never committed here" with the same confidence as a
+  # measured absence.
+  out <- tempfile("out_"); dir.create(out)
+  write_flagged_partial(file.path(out, "vcs-ai-flagged-roster.db"),
+    data.frame(repo_id = "github.com/o/r", owner = "o", name = "r", node_id = "R_1",
+               is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_,
+               stringsAsFactors = FALSE),
+    data.frame(repo_id = "github.com/o/r", tool = "claude", tier = "D", marker = "CLAUDE.md",
+               agnostic = 0L, stringsAsFactors = FALSE))
+  refused <- 0L
+  io <- list(
+    graphql = function(query) list(data = list(repository = list(defaultBranchRef = list(
+      target = list(history = list(pageInfo = list(endCursor = "", hasNextPage = FALSE),
+        nodes = list(list(committedDate = "2024-03-01T00:00:00Z")))))))),
+    search_hit = function(owner, name, query, delay = 0) {
+      # ONLY the tier-A query is refused. Tiers B and C answer cleanly with "found
+      # nothing", so the refusal warning can only come from tier A. A stub that
+      # refused everything let tier B raise the warning and the test passed with
+      # tier A's counting removed.
+      if (!grepl("^author(-email)?:", query))
+        return(list(date = NA_character_, message = NA_character_,
+                    author = NA_character_, total_count = 0L, unavailable = FALSE))
+      refused <<- refused + 1L
+      list(date = NA_character_, message = NA_character_, author = NA_character_,
+           total_count = NA_integer_, unavailable = TRUE)
+    })
+  msgs <- testthat::capture_messages(
+    run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
+             marker_delay = 0, search_delay = 0))
+
+  expect_true(refused > 0L)                       # tier A did ask
+  # The run must say out loud that it could not ask, and name tier A among the
+  # under-counted tiers rather than only B and C.
+  expect_match(paste(msgs, collapse = "\n"), "refused")
+  expect_match(paste(msgs, collapse = "\n"), "tiers A, B and C are UNDER-COUNTED")
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db"))
+  on.exit(DBI::dbDisconnect(scon))
+  got <- DBI::dbReadTable(scon, "vcs_ai_signals")
+  # The marker still stands on its own, but nothing may claim a tier-A finding.
+  expect_false(any(grepl("A", strsplit(got$evidence_tiers, ",")[[1]], fixed = TRUE)))
+  expect_equal(got$authored, 0L)
 })

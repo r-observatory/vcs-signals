@@ -204,6 +204,26 @@ DEV_TOOLING_MARKERS <- list(
   list(col = "has_cran_submission", paths = c("CRAN-SUBMISSION"),location = "root"),
   # Docs source (repo-only). readme_source is computed; has_quarto is a flag.
   list(col = "has_quarto",        paths = c("_quarto.yml"),      location = "root"),
+  # pkgdown is the most common documentation site in the ecosystem and was the
+  # conspicuous absence here: _quarto.yml was detectable and this was not. Three
+  # shapes, because maintainers use all three: the config at the root under
+  # either extension, and a pkgdown/ directory holding templates or extra pages.
+  list(col = "has_pkgdown",       paths = c("_pkgdown.yml", "_pkgdown.yaml", "pkgdown"),
+                                                                 location = "root"),
+  # altdoc keeps its config in altdoc/ at the root, whatever backend it drives
+  # (altdoc/mkdocs.yml, altdoc/quarto_website.yml, altdoc/docsify.html). Note
+  # altdoc/pkgdown.yml exists too: that is altdoc driving pkgdown, and counting
+  # it as a pkgdown site would overstate pkgdown, so the two stay separate.
+  list(col = "has_altdoc",        paths = c("altdoc"),           location = "root"),
+  # litedown's config is NOT a root file. Every observed instance sits under
+  # site/ or docs/, so a root-only rule would report litedown as unused
+  # everywhere. The site subtree is fetched for exactly this.
+  list(col = "has_litedown",      paths = c("_litedown.yml", "site/_litedown.yml",
+                                            "docs/_litedown.yml"), location = "root"),
+  # Vignettes were counted by nothing at all: not this scan, and not the code
+  # metrics, which carry no documentation columns. Presence only, because the
+  # repository tree says a vignettes/ directory exists and not how much is in it.
+  list(col = "has_vignettes",     paths = c("vignettes"),        location = "root"),
   # Documentation written for language models to read. This is the package describing
   # itself TO a model, not evidence a model worked on it, so it is a practice and never
   # an AI-tooling marker.
@@ -247,12 +267,30 @@ AI_BOT_DENYLIST <- c(
   "codecov[bot]", "allcontributors[bot]", "web-flow", "lintr-bot", "styler-bot"
 )
 # PR-authorship channel: agent logins that open PRs (exact, lowercase).
+# PR channel (GraphQL). Spelled WITHOUT the "[bot]" suffix, because
+# author { login } returns a bot's login stripped. Four of the six entries here
+# used to carry the suffix, so they matched nothing and the channel published a
+# confident zero across the whole roster while copilot-swe-agent was opening
+# pull requests in the roster's busiest repositories.
+#
+# These are NOT the same strings as AI_BOT_ALLOWLIST above, and the difference
+# is not an oversight. The two lists feed different APIs, which want opposite
+# shapes. Measured against dotnet/runtime:
+#
+#   REST  search/commits  author:copilot-swe-agent[bot]  -> 982 hits
+#   REST  search/commits  author:copilot-swe-agent       ->   0 hits
+#   GraphQL author { login }                             -> "copilot-swe-agent"
+#
+# So AI_BOT_ALLOWLIST keeps its suffixes and this list drops them. Making them
+# agree would break whichever one is changed.
+#
+# Bare "copilot" is deliberately absent: it is a person's account, not the
+# agent, and including it would trade a false zero for a false positive.
 AI_PR_AGENT_LOGINS <- c(
-  "copilot"                    = "copilot",
-  "copilot-swe-agent[bot]"     = "copilot",
-  "devin-ai-integration[bot]"  = "devin",
-  "google-labs-jules[bot]"     = "jules",
-  "cursor[bot]"                = "cursor",
+  "copilot-swe-agent"          = "copilot",
+  "devin-ai-integration"       = "devin",
+  "google-labs-jules"          = "jules",
+  "cursor"                     = "cursor",
   "openhands-agent"            = "openhands"
 )
 # Tier B commit-message trailers. Anchored to the canonical bot identity so a
@@ -262,16 +300,70 @@ AI_PR_AGENT_LOGINS <- c(
 # fails the pattern is a fuzzy candidate and is recorded as a censored floor, never as an
 # exact onset, so a person named Claude cannot mint an immutable date.
 AI_TRAILER_PATTERNS <- list(
-  list(pattern = "co-authored-by:\\s*claude\\s*<noreply@anthropic\\.com>", tool = "claude",
+  # The name carries a model between "Claude" and the address in practice:
+  # sampling four roster repositories returned 79 trailers, of which 79 were
+  # "Claude Sonnet 4.5", "Claude Opus 4.8 (1M context)" and the like, and none
+  # were the bare form this pattern used to demand. Every tier-B hit was failing
+  # verification and taking a floor date instead of an exact one. [^<\n] keeps
+  # the match on one line and still requires the name to begin with Claude, so
+  # "Claudia" at the same address does not qualify.
+  list(pattern = "co-authored-by:\\s*claude\\b[^<\\n]*<noreply@anthropic\\.com>", tool = "claude",
        query = "\"Co-Authored-By: Claude\""),
   list(pattern = "generated with \\[?claude code",                          tool = "claude",
        query = "\"Generated with Claude Code\""),
-  list(pattern = "generated by replit",                                     tool = "replit",
-       query = "\"Generated by Replit\""),
+  # There is deliberately no "generated by Replit" rule. Every one of the six
+  # occurrences found in real commits is a maintainer describing Replit, not
+  # Replit signing: "Removed extra directories generated by Replit", "Ignore
+  # Replit config files (auto-generated by Replit environment)". The phrase is a
+  # pure false-positive generator, and anchoring it to a line start only hid
+  # that. Replit-Commit-Author below is the actual signature.
   list(pattern = "replit-commit-author:",                                   tool = "replit",
        query = "\"Replit-Commit-Author:\""),
+  # Codex signs with a plain name and an OpenAI address; the name alone is far
+  # too common to key on. Sampling 100 real commits carrying a Codex trailer
+  # returned 1,134 trailer lines across eight shapes, of which only 23 said
+  # "codex-cli" and the rest were the name plus an address this rule never saw.
+  # The address is the anchor, as it is for Claude. codex@agent appears too and
+  # is kept separate rather than widened into "any address", which would match a
+  # person who happens to be called Codex.
+  list(pattern = "co-authored-by:\\s*codex[^<\\n]*<[^>\\n]*@(openai\\.com|agent)>", tool = "codex",
+       query = "\"Co-Authored-By: Codex\""),
   list(pattern = "codex-cli",                                               tool = "codex",
-       query = "\"codex-cli\"")
+       query = "\"codex-cli\""),
+
+  # Every rule below keys on the agent's ADDRESS, never on its name. Devin's own
+  # search returns Devin Logan and devin.logan alongside the agent, and Jules is
+  # a person's name too; a name match would flag them. Each shape here was
+  # counted in real commit messages, not inferred from documentation.
+  #
+  # Devin and OpenHands leave no config marker anywhere in AI_MARKERS, so until
+  # these rules the only way either could be seen was a pull request it happened
+  # to open. These give both a channel that works on commits.
+  list(pattern = "co-authored-by:[^<\\n]*<cursoragent@cursor\\.com>",           tool = "cursor",
+       query = "\"cursoragent@cursor.com\""),
+  list(pattern = "co-authored-by:\\s*cursor[^<\\n]*<cursor@agent>",              tool = "cursor",
+       query = "\"Co-Authored-By: Cursor\""),
+  list(pattern = "co-authored-by:[^<\\n]*<[^>\\n]*devin-ai-integration\\[bot\\]@",  tool = "devin",
+       query = "\"devin-ai-integration\""),
+  list(pattern = "co-authored-by:[^<\\n]*<[^>\\n]*@all-hands\\.dev>",           tool = "openhands",
+       query = "\"all-hands.dev\""),
+  list(pattern = "co-authored-by:[^<\\n]*<[^>\\n]*google-labs-jules\\[bot\\]@",     tool = "jules",
+       query = "\"google-labs-jules\""),
+  list(pattern = "co-authored-by:[^<\\n]*<[^>\\n]*@windsurf\\.(ai|com)>",       tool = "windsurf",
+       query = "\"Co-Authored-By: Windsurf\""),
+  list(pattern = "co-authored-by:[^<\\n]*<[^>\\n]*windsurf-bot\\[bot\\]@",          tool = "windsurf",
+       query = "\"windsurf-bot\""),
+  # Gemini signs four ways. noreply@google.com is generic, so that rule also
+  # requires the name to start with Gemini; the bot addresses are distinctive
+  # enough on their own.
+  list(pattern = "co-authored-by:\\s*gemini[^<\\n]*<[^>\\n]*@google\\.com>",  tool = "gemini",
+       query = "\"Co-Authored-By: Gemini\""),
+  list(pattern = "co-authored-by:[^<\\n]*<[^>\\n]*gemini-(code-assist|cli)\\[?[^>\\n]*@", tool = "gemini",
+       query = "\"gemini-code-assist\""),
+  # Aider names the provider and model in the parentheses. The address is the
+  # anchor; the parenthetical is what Addendum 2 of the design would read.
+  list(pattern = "co-authored-by:[^<\\n]*<aider@aider\\.chat>",                 tool = "aider",
+       query = "\"aider@aider.chat\"")
 )
 # Tier C author-name suffixes. `query` searches the author field rather than the message.
 AI_AUTHOR_SUFFIXES <- list(
@@ -309,3 +401,46 @@ AI_PR_CUTOFF <- "2023-01-01"
 # run_cheap and run_deep both check graphql_rate_remaining(io) against this reserve
 # before spending down the shared token, pausing rather than faulting when it is low.
 AI_POINT_RESERVE <- 1500L
+
+# Channels known to be silent, each with the evidence someone gathered and the
+# date they gathered it. The canary reports every (tier, tool) that has a rule
+# and no detection anywhere on the roster; an entry here is a dated claim about
+# one of those zeros, not a way to make the report quiet.
+#
+# status = "genuine": we looked and the zero is real.
+# status = "open":    we looked, the zero is not yet explained, and the reason
+#                     says what would settle it. These are re-reported every run
+#                     so they cannot rot into silence, which is the whole thing
+#                     this table exists to prevent.
+# Below this many repos in the merged roster, a channel at zero is not evidence
+# of anything and the canary stands down. Production merges ~15,000; fixtures
+# merge a handful.
+# One page of commit-search results. The scan already issues this request and
+# already pays for it; asking for a page rather than a single hit turns the same
+# response into the repository's model history. Measured at 486ms for one item
+# and 508ms for twelve, against the same throttled budget.
+AI_SEARCH_PAGE <- 100L
+
+AI_CANARY_MIN_ROSTER <- 200L
+
+AI_SILENT_CHANNELS_KNOWN <- read.csv(text = trimws('
+tier,tool,status,reason,recorded_on
+D,amazonq,genuine,".amazonq is scanned on every shard and no roster repo has it",2026-08-01
+D,grok,genuine,"GROK.md/.grok/.xai scanned on every shard, absent from the roster",2026-08-01
+D,idx,genuine,".idx is scanned on every shard and no roster repo has it",2026-08-01
+D,junie,genuine,".junie is scanned on every shard and no roster repo has it",2026-08-01
+D,positron,genuine,".positai is scanned on every shard and no roster repo has it",2026-08-01
+D,roo,genuine,".roo/.roomodes scanned on every shard, absent from the roster",2026-08-01
+B,devin,open,"rule added 2026-08-01, unscanned; and it can only fire on a repo some OTHER tool already flagged",2026-08-01
+B,jules,open,"rule added 2026-08-01, unscanned; and it can only fire on a repo some OTHER tool already flagged",2026-08-01
+B,openhands,open,"rule added 2026-08-01, unscanned; and it can only fire on a repo some OTHER tool already flagged",2026-08-01
+B,aider,open,"rule on main since 2026-07-15 but every trailer search was malformed until 2026-07-30; needs one clean scan",2026-08-01
+B,cursor,open,"rule on main since 2026-07-15 but every trailer search was malformed until 2026-07-30; needs one clean scan",2026-08-01
+B,gemini,open,"rule on main since 2026-07-15 but every trailer search was malformed until 2026-07-30; needs one clean scan",2026-08-01
+B,replit,open,"only Replit-Commit-Author remains after the prose rule was deleted; unseen in any sampled commit",2026-08-01
+B,windsurf,open,"rule on main since 2026-07-15 but every trailer search was malformed until 2026-07-30; needs one clean scan",2026-08-01
+A,cursor,open,"not the gate: 52 marker repos issued author:cursor[bot] and got nothing. Likely the wrong identity, since the coding agent commits as cursoragent@cursor.com (a tier-B rule); settle with a probe",2026-08-01
+A,devin,open,"tier A iterates cheap-pass evidence, which devin can only enter via the PR channel; that channel matched nothing until the login-shape fix, still unscanned",2026-08-01
+A,jules,open,"tier A iterates cheap-pass evidence, which jules can only enter via the PR channel; that channel matched nothing until the login-shape fix, still unscanned",2026-08-01
+A,openhands,open,"tier A iterates cheap-pass evidence, which openhands can only enter via the PR channel; that channel matched nothing until the login-shape fix, still unscanned",2026-08-01
+'), stringsAsFactors = FALSE)

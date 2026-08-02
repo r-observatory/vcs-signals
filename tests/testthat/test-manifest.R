@@ -47,7 +47,10 @@ test_that("summary_integrity_core reports filename, bytes, sha256, tables, compl
     repos               = 3L,
     series_latest       = 0L,
     signals_series      = 0L,
+    vcs_ai_models       = 0L,
+    vcs_ai_rule_inventory = 0L,
     vcs_ai_signals      = 0L,
+    vcs_ai_silent_channels = 0L,
     vcs_dev_tooling     = 0L,
     vcs_signals_summary = 3L))
   expect_true(core$complete)

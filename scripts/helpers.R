@@ -400,7 +400,9 @@ ensure_series_schema <- function(con) {
     repo_id TEXT NOT NULL, tool TEXT NOT NULL, first_seen_date TEXT,
     first_seen_censored INTEGER NOT NULL DEFAULT 0, evidence_tiers TEXT,
     markers TEXT,
-    authored INTEGER NOT NULL DEFAULT 0, last_confirmed_date TEXT,
+    authored INTEGER NOT NULL DEFAULT 0,
+    authored_commits INTEGER, assisted_commits INTEGER,
+    last_confirmed_date TEXT,
     PRIMARY KEY (repo_id, tool))")
   # A database written before markers existed keeps its rows; the column arrives empty
   # and fills on the next scan. Dropping and rebuilding would discard onset history.
@@ -409,10 +411,60 @@ ensure_series_schema <- function(con) {
   if (length(have) && !("markers" %in% have)) {
     DBI::dbExecute(con, "ALTER TABLE vcs_ai_signals ADD COLUMN markers TEXT")
   }
+  # Nullable on purpose and added the same way: NULL is "no search of that kind
+  # ran", which is a different state from a search that ran and matched nothing.
+  # A blended "AI commits" column would be wrong either way it rounded, so there
+  # are two and nothing sums them.
+  for (col in c("authored_commits", "assisted_commits")) {
+    if (length(have) && !(col %in% have))
+      DBI::dbExecute(con, sprintf("ALTER TABLE vcs_ai_signals ADD COLUMN %s INTEGER", col))
+  }
   # Dev-tooling presence snapshot, one wide row per repo. WITHOUT ROWID is deliberate (see
   # dev_tooling_create_sql): a repo_id point lookup is a single covering seek. The DDL is
   # config-derived so it cannot drift from classify_dev_tooling.
   DBI::dbExecute(con, dev_tooling_create_sql())
+  # CREATE TABLE IF NOT EXISTS is a no-op against a table that already exists, so
+  # a marker added to the ruleset never reached a published database: the next
+  # merge would then write rows carrying a column the table has no room for.
+  # Reconciled generically rather than one ALTER per marker, so the next marker
+  # added does not have to remember to come back here.
+  dt_have <- tryCatch(DBI::dbGetQuery(con, "PRAGMA table_info(vcs_dev_tooling)")$name,
+                      error = function(e) character(0))
+  if (length(dt_have)) {
+    for (col in setdiff(dev_tooling_columns(), dt_have)) {
+      DBI::dbExecute(con, sprintf("ALTER TABLE vcs_dev_tooling ADD COLUMN %s %s",
+                                  col, if (identical(col, "readme_source")) "TEXT" else "INTEGER"))
+    }
+  }
+  # The rule inventory, republished on every merge. A tier's breadth is a fact
+  # about the ruleset, and until now the viewer asserted it in prose: tier C
+  # scans one pattern for one tool while tier D scans 19, so presenting them
+  # side by side as comparable channels overstates C. Carrying the inventory as
+  # data lets a reader see the denominator instead of being told about it, and
+  # it moves with the ruleset rather than drifting from it.
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_ai_rule_inventory (
+    tier TEXT NOT NULL, tool TEXT NOT NULL, ruleset_version TEXT,
+    PRIMARY KEY (tier, tool)) WITHOUT ROWID")
+  # Which channels found nothing anywhere, and whether anyone has explained it.
+  # Published so a consumer can tell a measured zero from a question nobody has
+  # answered, instead of rendering both as "0 repos".
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_ai_silent_channels (
+    tier TEXT NOT NULL, tool TEXT NOT NULL, status TEXT NOT NULL,
+    reason TEXT, recorded_on TEXT,
+    PRIMARY KEY (tier, tool)) WITHOUT ROWID")
+  # One row per repository per tool per model. A separate table because the grain
+  # differs from vcs_ai_signals, which is one row per repository per tool.
+  #
+  # family, version and context_window are three separate silences where the
+  # trailer did not state them. A NULL context does not mean the default window,
+  # it means the trailer said nothing, and most say nothing. provider is only
+  # ever filled by Aider, and NULL there means the tool does not state one.
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_ai_models (
+    repo_id TEXT NOT NULL, tool TEXT NOT NULL,
+    provider TEXT, family TEXT, version TEXT, context_window TEXT,
+    commits INTEGER, first_seen TEXT, last_seen TEXT,
+    window_complete INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (repo_id, tool, provider, family, version, context_window))")
   invisible(TRUE)
 }
 
