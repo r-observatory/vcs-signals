@@ -777,7 +777,11 @@ test_that("run_deep records a verified commit trailer as tier B with an exact on
         nodes = list(list(committedDate = "2026-03-01T00:00:00Z")))))))),
     search = function(owner, name, query, delay = 0) NA_character_,
     search_hit = function(owner, name, query, delay = 0) {
-      if (!grepl("Co-Authored-By", query, fixed = TRUE))
+      # Answer only the Claude trailer query. Matching on "Co-Authored-By"
+      # alone made the stub answer every trailer query in the ruleset with a
+      # Claude message, so adding a pattern for another tool handed this test a
+      # hit it never intended and turned a verified onset into a floor.
+      if (!grepl("Co-Authored-By: Claude", query, fixed = TRUE))
         return(list(date = NA_character_, message = NA_character_, author = NA_character_))
       list(date = "2025-09-15T00:00:00Z",
            message = "feat: x\n\nCo-authored-by: Claude <noreply@anthropic.com>",
@@ -811,7 +815,11 @@ test_that("an unverified trailer hit dates a floor, never an exact onset", {
     search = function(owner, name, query, delay = 0) NA_character_,
     # A hit on a human named Claude: the search matched, the pattern will not.
     search_hit = function(owner, name, query, delay = 0) {
-      if (!grepl("Co-Authored-By", query, fixed = TRUE))
+      # Answer only the Claude trailer query. Matching on "Co-Authored-By"
+      # alone made the stub answer every trailer query in the ruleset with a
+      # Claude message, so adding a pattern for another tool handed this test a
+      # hit it never intended and turned a verified onset into a floor.
+      if (!grepl("Co-Authored-By: Claude", query, fixed = TRUE))
         return(list(date = NA_character_, message = NA_character_, author = NA_character_))
       list(date = "2025-09-15T00:00:00Z",
            message = "fix\n\nCo-authored-by: Claude Dupont <claude@univ.fr>", author = "Jean")

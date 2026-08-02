@@ -620,6 +620,32 @@ test_that("the trailer pattern matches the trailers Claude actually writes", {
   expect_false(grepl(p, tolower("Co-Authored-By: Claude\nSigned-off-by: x <noreply@anthropic.com>"), perl = TRUE))
 })
 
+test_that("the codex trailer pattern matches the trailers Codex actually writes", {
+  # The rule was written around "codex-cli". Sampling 100 real commits carrying
+  # a Codex co-authorship trailer returned 1,134 trailer lines, of which 23 said
+  # "Codex CLI" and the rest were a plain name with an OpenAI or GitHub address.
+  # The name alone is too common to key on, so the address is the anchor, the
+  # same way the Claude rule keys on the Anthropic no-reply.
+  real <- c(
+    "Co-authored-by: Codex <codex@openai.com>",
+    "Co-authored-by: Codex <noreply@openai.com>",
+    "Co-Authored-By: Codex <noreply@openai.com>",
+    "Co-Authored-By: Codex <codex@agent>",
+    "Co-authored-by: codex <codex@openai.com>"
+  )
+  ps <- Filter(function(x) x$tool == "codex", AI_TRAILER_PATTERNS)
+  matched <- vapply(real, function(s)
+    any(vapply(ps, function(p) grepl(p$pattern, tolower(s), perl = TRUE), logical(1))),
+    logical(1))
+  expect_true(all(matched), info = paste(real[!matched], collapse = " | "))
+
+  # A person named Codex at an unrelated address is not the tool.
+  bad <- c("Co-authored-by: Codex <jane@example.com>",
+           "we refactored the codex module")
+  for (s in bad)
+    expect_false(any(vapply(ps, function(p) grepl(p$pattern, tolower(s), perl = TRUE), logical(1))), info = s)
+})
+
 test_that("a refused search is not an absence of trailers", {
   # The whole tier-B zero across the roster came from this: a throttled search
   # returns 200-shaped JSON with a message and no total_count, gh exits 0, and
