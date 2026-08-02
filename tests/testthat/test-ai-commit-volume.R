@@ -160,3 +160,36 @@ test_that("a refused count is not stored as zero", {
   expect_true(is.na(got$authored_commits))
   expect_true(is.na(got$assisted_commits))
 })
+
+test_that("folding two repos onto one identity keeps every column it did not read", {
+  # reconcile_ai_identity named seven of the table's ten columns, deleted the
+  # rows, and wrote the seven back. Markers and both commit counts went with
+  # them, and select_incremental_repos never revisits a published repo, so the
+  # loss was permanent and accumulated on every merge.
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+  on.exit(DBI::dbDisconnect(con))
+  ensure_repo_schema(con); ensure_series_schema(con)
+
+  # Two repo_ids sharing one immutable node_id: a rename, which is exactly what
+  # this function exists to fold together.
+  DBI::dbExecute(con, "INSERT INTO repos (repo_id, node_id, host, host_domain, owner, name,
+      name_with_owner, supported, n_packages, first_seen, last_seen, status)
+    VALUES ('github.com/o/old','R_1','github','github.com','o','old','o/old',1,1,
+            '2026-01-01','2026-06-01','renamed'),
+           ('github.com/o/new','R_1','github','github.com','o','new','o/new',1,1,
+            '2026-02-01','2026-07-01','active')")
+  DBI::dbExecute(con, "INSERT INTO vcs_ai_signals
+      (repo_id, tool, first_seen_date, first_seen_censored, evidence_tiers, markers,
+       authored, authored_commits, assisted_commits, last_confirmed_date)
+    VALUES ('github.com/o/old','claude','2025-01-01',0,'A,D','CLAUDE.md',1,53,12,'2026-06-01')")
+
+  reconcile_ai_identity(con)
+  got <- DBI::dbGetQuery(con, "SELECT * FROM vcs_ai_signals")
+
+  expect_equal(nrow(got), 1L)
+  expect_equal(got$repo_id, "github.com/o/new")     # folded onto the canonical id
+  expect_equal(got$authored_commits, 53L)           # and the measurement survived
+  expect_equal(got$assisted_commits, 12L)
+  expect_equal(got$markers, "CLAUDE.md")
+  expect_equal(got$first_seen_date, "2025-01-01")
+})

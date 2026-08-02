@@ -202,3 +202,44 @@ test_that("livelink's real tree yields quarto vignettes and a pkgdown site", {
   expect_equal(r$vignette_quarto, 1L)
   expect_equal(r$vignette_rmarkdown, 0L)
 })
+
+test_that("a vignettes directory whose sources sit one level down reads as unknown", {
+  # The pkgdown convention: vignettes/articles/intro.Rmd. The tree scan is one
+  # level deep, so the only entry under the prefix is a subdirectory. Reporting
+  # "no Quarto vignettes" there is a claim about files nobody has seen.
+  r <- classify_dev_tooling(c("DESCRIPTION", "vignettes", "vignettes/articles"), character(0))
+  expect_equal(r$has_vignettes, 1L)
+  expect_true(is.na(r$vignette_rmarkdown))
+  expect_true(is.na(r$vignette_quarto))
+})
+
+test_that("a vignettes directory holding only usethis scaffolding reads as unknown", {
+  r <- classify_dev_tooling(c("vignettes", "vignettes/.gitignore"), character(0))
+  expect_true(is.na(r$vignette_rmarkdown))
+})
+
+test_that("once one source is visible the other kinds are measured, not unknown", {
+  # Seeing intro.Rmd means the directory was fetched and read, so "no Quarto
+  # vignettes here" is now a real answer rather than an absence of looking.
+  r <- classify_dev_tooling(c("vignettes", "vignettes/intro.Rmd"), character(0))
+  expect_equal(r$vignette_rmarkdown, 1L)
+  expect_equal(r$vignette_quarto, 0L)
+})
+
+test_that("the inventory lists only channels the classifier can actually reach", {
+  # Ambient markers are excluded from classification on purpose: .positai is
+  # written by Positron whether or not AI was used. Listing them as tier-D rules
+  # made the canary report them silent, and they were then recorded as measured
+  # zeros carrying a reason that was false.
+  inv <- ai_rule_inventory()
+  reachable <- unique(vapply(ai_deliberate_markers(), function(m) m$tool, character(1)))
+  expect_equal(setdiff(inv$tool[inv$tier == "D"], reachable), character(0))
+  expect_false(any(inv$tier == "D" & inv$tool %in% c("positron", "idx")))
+})
+
+test_that("no allowlist entry explains a channel that has no rule", {
+  # Covered by the integrity test above, but stated on its own because the two
+  # false entries were written by hand and read as authoritative.
+  kn <- AI_SILENT_CHANNELS_KNOWN
+  expect_false(any(kn$tier == "D" & kn$tool %in% c("positron", "idx")))
+})

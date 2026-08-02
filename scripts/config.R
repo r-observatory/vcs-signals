@@ -427,9 +427,7 @@ AI_SILENT_CHANNELS_KNOWN <- read.csv(text = trimws('
 tier,tool,status,reason,recorded_on
 D,amazonq,genuine,".amazonq is scanned on every shard and no roster repo has it",2026-08-01
 D,grok,genuine,"GROK.md/.grok/.xai scanned on every shard, absent from the roster",2026-08-01
-D,idx,genuine,".idx is scanned on every shard and no roster repo has it",2026-08-01
 D,junie,genuine,".junie is scanned on every shard and no roster repo has it",2026-08-01
-D,positron,genuine,".positai is scanned on every shard and no roster repo has it",2026-08-01
 D,roo,genuine,".roo/.roomodes scanned on every shard, absent from the roster",2026-08-01
 B,devin,open,"rule added 2026-08-01, unscanned; and it can only fire on a repo some OTHER tool already flagged",2026-08-01
 B,jules,open,"rule added 2026-08-01, unscanned; and it can only fire on a repo some OTHER tool already flagged",2026-08-01

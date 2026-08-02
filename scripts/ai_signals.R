@@ -102,10 +102,15 @@ classify_dev_tooling <- function(root_entries, github_entries) {
   # .qmd can render to either and the extension does not say which. Claiming an
   # output format for those would be inventing a fact.
   vign <- grep("^vignettes/", root_entries, value = TRUE)
-  # The directory is listed in the tree but its contents are fetched separately.
-  # Present-but-unfetched is unknown, not "no vignettes of any kind": saying none
-  # there would be a claim the scan cannot support.
-  unknown <- isTRUE(row$has_vignettes == 1L) && !length(vign)
+  known <- grepl("\\.(rmd|qmd|rnw|rtex|rhtml|html|md)$", tolower(vign))
+  # Unknown covers two cases, and the second was reported as five confident
+  # zeros. The first is a vignettes/ directory whose contents were never
+  # fetched. The second is a directory whose entries carry no extension any of
+  # these patterns claims: the pkgdown convention puts sources one level down in
+  # vignettes/articles/, and the tree scan is one level deep, so the entries are
+  # subdirectories. Saying "no Quarto vignettes" there is a claim about files
+  # nobody has seen.
+  unknown <- isTRUE(row$has_vignettes == 1L) && !any(known)
   kind <- function(exts) {
     if (unknown) return(NA_integer_)
     as.integer(any(vapply(exts, function(e)
@@ -411,7 +416,14 @@ ai_rule_inventory <- function() {
     data.frame(tier = "A", tool = unname(AI_BOT_ALLOWLIST), stringsAsFactors = FALSE),
     data.frame(tier = "B", tool = unname(tool_of(AI_TRAILER_PATTERNS)), stringsAsFactors = FALSE),
     data.frame(tier = "C", tool = unname(tool_of(AI_AUTHOR_SUFFIXES)), stringsAsFactors = FALSE),
-    data.frame(tier = "D", tool = unname(tool_of(AI_MARKERS)), stringsAsFactors = FALSE))
+    # ai_deliberate_markers(), not AI_MARKERS: the classifier drops ambient
+    # markers, so .positai and .idx can never produce a tier-D detection. Listing
+    # them as rules made the canary report two channels as silent, and they were
+    # then recorded as measured zeros with a reason that was not true. The one
+    # table built to tell a measured zero from an unasked question must not
+    # invent channels nobody scans.
+    data.frame(tier = "D", tool = unname(tool_of(ai_deliberate_markers())),
+               stringsAsFactors = FALSE))
   inv <- unique(inv)
   inv[order(inv$tier, inv$tool), , drop = FALSE]
 }

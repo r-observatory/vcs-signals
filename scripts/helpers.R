@@ -299,9 +299,15 @@ reconcile_ai_identity <- function(con) {
     canonical <- grp$repo_id[o[1]]
     ids <- grp$repo_id
     ph <- paste(rep("?", length(ids)), collapse = ",")
+    # Every column, derived from the table's own shape. This named seven of ten
+    # and then deleted the rows and wrote the seven back, so markers and both
+    # commit counts were destroyed on every merge that folded a renamed repo.
+    # The loss was permanent: select_incremental_repos never revisits a repo
+    # that is already published, so nothing would have measured them again.
+    cols <- paste(sprintf('"%s"', names(.ai_empty_signals())), collapse = ", ")
     involved <- DBI::dbGetQuery(con, sprintf(
-      "SELECT repo_id, tool, first_seen_date, first_seen_censored, evidence_tiers, authored, last_confirmed_date
-         FROM vcs_ai_signals WHERE repo_id IN (%s)", ph), params = as.list(ids))
+      "SELECT %s FROM vcs_ai_signals WHERE repo_id IN (%s)", cols, ph),
+      params = as.list(ids))
     if (nrow(involved) == 0) next
     involved$repo_id <- canonical
     reduced <- ai_onset_reducer(.ai_empty_signals(), involved)
