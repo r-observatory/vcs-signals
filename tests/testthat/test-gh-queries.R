@@ -110,3 +110,32 @@ test_that("every trailer query the ruleset ships contains a space", {
   expect_true(any(spaced),
               info = "if this ever goes all-FALSE the quoting bug stops being detectable here")
 })
+
+test_that("the tree query fetches the subtrees the ruleset actually reads", {
+  # A rule naming vignettes/*.qmd or site/_litedown.yml can never fire if the
+  # query never asks for those trees, which is a rule that looks right in the
+  # config and reports zero forever.
+  q <- build_tree_query(data.frame(owner = "o", name = "n", stringsAsFactors = FALSE))
+  for (path in c("HEAD:", "HEAD:.github", "HEAD:inst", "HEAD:vignettes", "HEAD:site")) {
+    expect_true(grepl(sprintf('expression: "%s"', path), q, fixed = TRUE), info = path)
+  }
+})
+
+test_that("subtree entries reach the classifier under their own prefix", {
+  resp <- list(data = list(r0 = list(
+    isFork = FALSE, parent = NULL,
+    rootTree = list(entries = list(list(name = "DESCRIPTION", type = "blob"),
+                                   list(name = "vignettes", type = "tree"))),
+    githubTree = NULL, claudeTree = NULL, agentsTree = NULL, instTree = NULL,
+    vignettesTree = list(entries = list(list(name = "intro.qmd", type = "blob"))),
+    siteTree = list(entries = list(list(name = "_litedown.yml", type = "blob"))),
+    gitignore = NULL, rbuildignore = NULL)))
+  got <- parse_tree_markers(resp, data.frame(repo_id = "github.com/o/n", owner = "o",
+                                             name = "n", stringsAsFactors = FALSE))
+  expect_true("vignettes/intro.qmd" %in% got[[1]]$root_entries)
+  expect_true("site/_litedown.yml" %in% got[[1]]$root_entries)
+
+  r <- classify_dev_tooling(got[[1]]$root_entries, got[[1]]$github_entries)
+  expect_equal(r$vignette_quarto, 1L)
+  expect_equal(r$has_litedown, 1L)
+})

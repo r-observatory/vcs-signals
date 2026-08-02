@@ -127,3 +127,78 @@ test_that("a vignettes directory is recognised", {
   expect_equal(classify_dev_tooling(c("vignettes"), character(0))$has_vignettes, 1L)
   expect_equal(classify_dev_tooling(c("R", "man"), character(0))$has_vignettes, 0L)
 })
+
+test_that("altdoc is recognised from its config directory", {
+  # Verified by code search: altdoc keeps its config in altdoc/ at the root,
+  # as altdoc/mkdocs.yml, altdoc/pkgdown.yml, altdoc/quarto_website.yml.
+  expect_equal(classify_dev_tooling(c("altdoc", "DESCRIPTION"), character(0))$has_altdoc, 1L)
+  expect_equal(classify_dev_tooling(c("DESCRIPTION"), character(0))$has_altdoc, 0L)
+})
+
+test_that("altdoc wrapping pkgdown is not counted as a pkgdown site", {
+  # altdoc/pkgdown.yml is altdoc driving pkgdown as a backend. The repository is
+  # not running pkgdown itself, and conflating them would overstate pkgdown.
+  r <- classify_dev_tooling(c("altdoc"), character(0))
+  expect_equal(r$has_altdoc, 1L)
+  expect_equal(r$has_pkgdown, 0L)
+})
+
+test_that("litedown is found where its config actually lives, not only at the root", {
+  # _litedown.yml is not a root file. Every observed instance sits under site/ or
+  # docs/ (Rdatatable/data.table uses site/_litedown.yml), so a root-only rule
+  # would report litedown as unused everywhere.
+  expect_equal(classify_dev_tooling(c("site/_litedown.yml"), character(0))$has_litedown, 1L)
+  expect_equal(classify_dev_tooling(c("_litedown.yml"), character(0))$has_litedown, 1L)
+  expect_equal(classify_dev_tooling(c("site"), character(0))$has_litedown, 0L)
+})
+
+test_that("vignette source kinds are read from the vignettes directory", {
+  r <- classify_dev_tooling(
+    c("vignettes", "vignettes/intro.Rmd", "vignettes/deep.qmd",
+      "vignettes/old.Rnw", "vignettes/page.Rhtml", "vignettes/notes.md"),
+    character(0))
+  expect_equal(r$vignette_rmarkdown, 1L)
+  expect_equal(r$vignette_quarto, 1L)
+  expect_equal(r$vignette_sweave, 1L)
+  expect_equal(r$vignette_html, 1L)
+  expect_equal(r$vignette_markdown, 1L)
+})
+
+test_that("a README at the root is not mistaken for a vignette", {
+  # The trap in matching a bare .Rmd suffix: nearly every package has README.Rmd
+  # and it is not a vignette. The match is scoped to the vignettes directory.
+  r <- classify_dev_tooling(c("README.Rmd", "index.qmd", "paper.Rnw"), character(0))
+  expect_equal(r$vignette_rmarkdown, 0L)
+  expect_equal(r$vignette_quarto, 0L)
+  expect_equal(r$vignette_sweave, 0L)
+  expect_equal(r$has_vignettes, 0L)
+})
+
+test_that("a vignettes directory whose contents were not fetched reads as unknown, not none", {
+  # The directory is in the tree but its entries are not. Saying "no rmarkdown
+  # vignettes" there would be a claim we cannot support.
+  r <- classify_dev_tooling(c("vignettes"), character(0))
+  expect_equal(r$has_vignettes, 1L)
+  expect_true(is.na(r$vignette_rmarkdown))
+  expect_true(is.na(r$vignette_quarto))
+})
+
+test_that("a package with no vignettes directory has no vignette kinds either", {
+  r <- classify_dev_tooling(c("R", "man", "DESCRIPTION"), character(0))
+  expect_equal(r$has_vignettes, 0L)
+  expect_equal(r$vignette_rmarkdown, 0L)   # measured: there are none
+})
+
+test_that("livelink's real tree yields quarto vignettes and a pkgdown site", {
+  root <- c(".aspell", ".github", "R", "_pkgdown.yml", "data-raw", "inst", "man",
+            "pkgdown", "tests", "vignettes", "DESCRIPTION", "NAMESPACE",
+            "cran-comments.md", "livelink.Rproj",
+            "vignettes/decoding-links.qmd", "vignettes/getting-started.qmd",
+            "vignettes/links-in-documents.qmd", "vignettes/teaching.qmd",
+            "vignettes/webr-and-shinylive.qmd")
+  r <- classify_dev_tooling(root, c("workflows"))
+  expect_equal(r$has_pkgdown, 1L)
+  expect_equal(r$has_vignettes, 1L)
+  expect_equal(r$vignette_quarto, 1L)
+  expect_equal(r$vignette_rmarkdown, 0L)
+})

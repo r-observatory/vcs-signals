@@ -210,6 +210,16 @@ DEV_TOOLING_MARKERS <- list(
   # either extension, and a pkgdown/ directory holding templates or extra pages.
   list(col = "has_pkgdown",       paths = c("_pkgdown.yml", "_pkgdown.yaml", "pkgdown"),
                                                                  location = "root"),
+  # altdoc keeps its config in altdoc/ at the root, whatever backend it drives
+  # (altdoc/mkdocs.yml, altdoc/quarto_website.yml, altdoc/docsify.html). Note
+  # altdoc/pkgdown.yml exists too: that is altdoc driving pkgdown, and counting
+  # it as a pkgdown site would overstate pkgdown, so the two stay separate.
+  list(col = "has_altdoc",        paths = c("altdoc"),           location = "root"),
+  # litedown's config is NOT a root file. Every observed instance sits under
+  # site/ or docs/, so a root-only rule would report litedown as unused
+  # everywhere. The site subtree is fetched for exactly this.
+  list(col = "has_litedown",      paths = c("_litedown.yml", "site/_litedown.yml",
+                                            "docs/_litedown.yml"), location = "root"),
   # Vignettes were counted by nothing at all: not this scan, and not the code
   # metrics, which carry no documentation columns. Presence only, because the
   # repository tree says a vignettes/ directory exists and not how much is in it.

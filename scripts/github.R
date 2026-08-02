@@ -567,6 +567,8 @@ build_tree_query <- function(repos) {
       claudeTree: object(expression: "HEAD:.claude") { ... on Tree { entries { name type } } }
       agentsTree: object(expression: "HEAD:.agents") { ... on Tree { entries { name type } } }
       instTree: object(expression: "HEAD:inst") { ... on Tree { entries { name type } } }
+      vignettesTree: object(expression: "HEAD:vignettes") { ... on Tree { entries { name type } } }
+      siteTree: object(expression: "HEAD:site") { ... on Tree { entries { name type } } }
       gitignore: object(expression: "HEAD:.gitignore") { ... on Blob { text } }
       rbuildignore: object(expression: "HEAD:.Rbuildignore") { ... on Blob { text } }
     }', j - 1L, repos$owner[j], repos$name[j])
@@ -612,7 +614,12 @@ parse_tree_markers <- function(resp, repos) {
       root_entries = c(entry_names(r$rootTree),
                        prefixed(r$claudeTree, ".claude"),
                        prefixed(r$agentsTree, ".agents"),
-                       prefixed(r$instTree, "inst")),
+                       prefixed(r$instTree, "inst"),
+                       # vignettes/ carries the source kind, which the extension
+                       # names and the root listing cannot. site/ is where every
+                       # observed _litedown.yml actually lives.
+                       prefixed(r$vignettesTree, "vignettes"),
+                       prefixed(r$siteTree, "site")),
       github_entries = entry_names(r$githubTree),
       is_fork = isTRUE(r$isFork),
       parent = .nn(r$parent$nameWithOwner, NA_character_),
