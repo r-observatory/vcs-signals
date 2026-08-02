@@ -83,14 +83,19 @@ test_that("a search query containing a space survives the shell", {
   # the remainder as stray positional arguments ("accepts 1 arg(s), received 2").
   # Every trailer phrase contains a space, so every tier-B and tier-C search ever
   # issued was malformed and came back empty. Tier A's author-email query has no
-  # space, which is why only these two tiers went silent.
+  # space, which is why only these two tiers went silent at the time; tier A now
+  # shares the same helper.
   #
   # Asserting on the shell form rather than on a live call, because the failure is
   # in how the argument is handed over, not in what the API does with it.
   src <- paste(readLines("../../scripts/github.R", warn = FALSE), collapse = "\n")
-  # Both search helpers build the same argument and both broke the same way.
-  expect_equal(length(gregexpr('shQuote(paste0("q=", q))', src, fixed = TRUE)[[1]]), 2L,
-               info = "both commit-search helpers quote the q argument")
+  # Counted against the call sites rather than a fixed number, so the guard holds
+  # as helpers are added or removed: every search/commits call must quote its q.
+  callsites <- length(gregexpr('"search/commits"', src, fixed = TRUE)[[1]])
+  quoted    <- length(gregexpr('shQuote(paste0("q=", q))', src, fixed = TRUE)[[1]])
+  expect_gt(callsites, 0L)
+  expect_equal(quoted, callsites,
+               info = "every commit-search helper quotes the q argument")
   expect_false(grepl('"-f", paste0("q=", q),', src, fixed = TRUE),
                info = "the unquoted form silently breaks every multi-word query")
 })

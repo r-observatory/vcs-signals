@@ -780,28 +780,6 @@ fetch_marker_onset <- function(io, owner, name, path, delay = BACKFILL_DELAY_S) 
 
 # --- transport (not unit-tested) ---
 
-#' Earliest commit in owner/name whose message matches `query`, via the REST
-#' commit-search API. One request returns the server-side earliest match. `sort` and
-#' `order` MUST be paired or GitHub silently returns best-match desc. Same transport
-#' style as fetch_contributor_count: routed through gh, GH_TOKEN set/restored, NA on
-#' any transport error or non-2xx so one bad repo never aborts a scan. Sleeps `delay`
-#' after the request because the search budget (~30/min) is separate from and tighter
-#' than GraphQL, so pacing at the transport keeps the caller's loop simple. FUZZY: the
-#' returned date is a CANDIDATE the caller verifies (scan_trailers) or records as a
-#' censored floor.
-search_earliest_commit <- function(token, owner, name, query, delay = SEARCH_DELAY_S) {
-  old <- Sys.getenv("GH_TOKEN", unset = NA)
-  Sys.setenv(GH_TOKEN = token)
-  on.exit({ if (is.na(old)) Sys.unsetenv("GH_TOKEN") else Sys.setenv(GH_TOKEN = old) }, add = TRUE)
-  q <- sprintf("repo:%s/%s %s", owner, name, query)
-  out <- suppressWarnings(system2("gh", c("api", "-X", "GET", "search/commits",
-    "-f", shQuote(paste0("q=", q)), "-f", "sort=committer-date", "-f", "order=asc",
-    "-f", "per_page=1"), stdout = TRUE))
-  if (delay > 0) Sys.sleep(delay)
-  status <- attr(out, "status")
-  if (!is.null(status) && !identical(as.integer(status), 0L)) return(NA_character_)
-  parse_search_commit(paste(out, collapse = "\n"))
-}
 
 #' As search_earliest_commit, but returning the whole hit so the caller can verify it.
 #' Same transport, same pacing, same fail-soft: an error is a hit with NA fields, never

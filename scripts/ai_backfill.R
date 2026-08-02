@@ -379,7 +379,7 @@ export_ai_shard <- function(path, rows) {
 #'       it). An IGNORE-TOKEN marker names a .gitignore/.Rbuildignore entry, not a committed
 #'       path, so it is NOT queried; it takes an honest censored floor of today via
 #'       build_onset_map;
-#'   (2) for each flagged bot-identity tool, one author-email commit search (io$search,
+#'   (2) for each flagged bot-identity tool, one author-email commit search (io$search_hit,
 #'       REST-search budget) - a hit is an EXACT Tier-A onset and adds a Tier-A evidence
 #'       row (authored = 1, since an author-email match means the bot itself authored the
 #'       commit) so a marker + a bot commit corroborate to two tiers;
@@ -458,10 +458,19 @@ run_deep <- function(io, out_dir, roster_path, i, N,
     commit_onsets <- NULL; extra_ev <- NULL
     for (tool in unique(ev$tool[!as.logical(ev$agnostic)])) {
       # Every allowlisted identity for the tool, not just an email-shaped one.
+      #
+      # Routed through search_hit, which reports a refusal as a refusal. The old
+      # transport collapsed both outcomes onto NA, so a throttled tier-A search
+      # published as "this bot has never committed here" with exactly the
+      # confidence of a measured absence. Tiers B and C already keep them apart;
+      # tier A is the one that was still guessing, and it is the tier whose
+      # zeros the canary reports.
       hits <- character(0)
       for (term in .ai_author_queries(tool)) {
-        d <- tryCatch(io$search(owner, name, term, search_delay),
-                      error = function(e) NA_character_)
+        hit <- tryCatch(io$search_hit(owner, name, term, search_delay),
+                        error = function(e) list(date = NA_character_, unavailable = TRUE))
+        if (isTRUE(hit$unavailable)) { unavailable <- unavailable + 1L; next }
+        d <- .nn(hit$date, NA_character_)
         if (!is.na(d)) hits <- c(hits, d)
       }
       if (!length(hits)) next
@@ -514,7 +523,7 @@ run_deep <- function(io, out_dir, roster_path, i, N,
     message(sprintf(
       "ai deep shard %d/%d: WARNING %d commit search(es) were refused (rate limit or error); ",
       i, N, unavailable),
-      "tier B and C are UNDER-COUNTED for this shard, not absent")
+      "tiers A, B and C are UNDER-COUNTED for this shard, not absent")
   }
 }
 
@@ -634,8 +643,6 @@ main <- function(mode, out_dir) {
   token <- Sys.getenv("VCS_SIGNALS_TOKEN")
   io <- list(
     graphql        = default_io(token)$graphql,
-    search         = function(owner, name, query, delay = SEARCH_DELAY_S)
-                       search_earliest_commit(token, owner, name, query, delay),
     search_hit     = function(owner, name, query, delay = SEARCH_DELAY_S)
                        search_earliest_commit_hit(token, owner, name, query, delay),
     release_exists = function() gh_release_exists(RELEASE_REPO),

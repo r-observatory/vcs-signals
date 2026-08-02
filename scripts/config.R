@@ -413,7 +413,7 @@ B,cursor,open,"rule on main since 2026-07-15 but every trailer search was malfor
 B,gemini,open,"rule on main since 2026-07-15 but every trailer search was malformed until 2026-07-30; needs one clean scan",2026-08-01
 B,replit,open,"only Replit-Commit-Author remains after the prose rule was deleted; unseen in any sampled commit",2026-08-01
 B,windsurf,open,"rule on main since 2026-07-15 but every trailer search was malformed until 2026-07-30; needs one clean scan",2026-08-01
-A,cursor,open,"reachable, not gated: 52 repos carry a tier-D cursor marker so the cursor[bot] search was issued and found nothing; cause still unsettled",2026-08-01
+A,cursor,open,"not the gate: 52 marker repos issued author:cursor[bot] and got nothing. Likely the wrong identity, since the coding agent commits as cursoragent@cursor.com (a tier-B rule); settle with a probe",2026-08-01
 A,devin,open,"tier A iterates cheap-pass evidence, which devin can only enter via the PR channel; that channel matched nothing until the login-shape fix, still unscanned",2026-08-01
 A,jules,open,"tier A iterates cheap-pass evidence, which jules can only enter via the PR channel; that channel matched nothing until the login-shape fix, still unscanned",2026-08-01
 A,openhands,open,"tier A iterates cheap-pass evidence, which openhands can only enter via the PR channel; that channel matched nothing until the login-shape fix, still unscanned",2026-08-01
