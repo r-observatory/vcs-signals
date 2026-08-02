@@ -646,6 +646,38 @@ test_that("the codex trailer pattern matches the trailers Codex actually writes"
     expect_false(any(vapply(ps, function(p) grepl(p$pattern, tolower(s), perl = TRUE), logical(1))), info = s)
 })
 
+test_that("every tool that signs commits has a trailer rule keyed on its address", {
+  # Shapes below were counted in real commit messages returned by the search,
+  # not inferred. Devin and OpenHands leave no config marker at all, so before
+  # these rules the only way to see them was a pull request they happened to
+  # open. The address is the anchor throughout: Devin's own search returns
+  # humans called Devin Logan, and a name match would have flagged them.
+  real <- list(
+    cursor    = "Co-authored-by: Cursor <cursoragent@cursor.com>",
+    cursor2   = "Co-Authored-By: Cursor <cursor@agent>",
+    devin     = "Co-Authored-By: Devin AI <123+devin-ai-integration[bot]@users.noreply.github.com>",
+    openhands = "Co-authored-by: openhands <openhands@all-hands.dev>",
+    openhands2= "Co-authored-by: OpenHands Bot <contact@all-hands.dev>",
+    jules     = "Co-authored-by: google-labs-jules[bot] <1+google-labs-jules[bot]@users.noreply.github.com>",
+    windsurf  = "Co-authored-by: Windsurf Cascade <cascade@windsurf.ai>",
+    gemini    = "Co-Authored-By: Gemini 2.5 Flash <noreply@google.com>",
+    gemini2   = "Co-authored-by: gemini-code-assist[bot] <1+gemini-code-assist[bot]@users.noreply.github.com>",
+    aider     = "Co-authored-by: aider (openai/DeepSeek-R1) <aider@aider.chat>"
+  )
+  for (nm in names(real)) {
+    hit <- scan_trailers(real[[nm]])
+    expect_true(nrow(hit) > 0, info = paste(nm, real[[nm]]))
+  }
+
+  # Humans who share a name with an agent must not be flagged. These appeared in
+  # the same searches as the agents above.
+  humans <- c("Co-authored-by: Devin Logan <devinannlogan@gmail.com>",
+              "Co-authored-by: devin.logan <devin.logan@postman.com>",
+              "Co-authored-by: Jules Verne <jules@example.org>",
+              "we rewrote the cursor handling in the parser")
+  for (h in humans) expect_equal(nrow(scan_trailers(h)), 0L, info = h)
+})
+
 test_that("a refused search is not an absence of trailers", {
   # The whole tier-B zero across the roster came from this: a throttled search
   # returns 200-shaped JSON with a message and no total_count, gh exits 0, and

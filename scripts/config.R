@@ -305,7 +305,41 @@ AI_TRAILER_PATTERNS <- list(
   list(pattern = "co-authored-by:\\s*codex[^<\\n]*<[^>\\n]*@(openai\\.com|agent)>", tool = "codex",
        query = "\"Co-Authored-By: Codex\""),
   list(pattern = "codex-cli",                                               tool = "codex",
-       query = "\"codex-cli\"")
+       query = "\"codex-cli\""),
+
+  # Every rule below keys on the agent's ADDRESS, never on its name. Devin's own
+  # search returns Devin Logan and devin.logan alongside the agent, and Jules is
+  # a person's name too; a name match would flag them. Each shape here was
+  # counted in real commit messages, not inferred from documentation.
+  #
+  # Devin and OpenHands leave no config marker anywhere in AI_MARKERS, so until
+  # these rules the only way either could be seen was a pull request it happened
+  # to open. These give both a channel that works on commits.
+  list(pattern = "co-authored-by:[^<\\n]*<cursoragent@cursor\\.com>",           tool = "cursor",
+       query = "\"cursoragent@cursor.com\""),
+  list(pattern = "co-authored-by:\\s*cursor[^<\\n]*<cursor@agent>",              tool = "cursor",
+       query = "\"Co-Authored-By: Cursor\""),
+  list(pattern = "co-authored-by:[^<\\n]*<[^>\\n]*devin-ai-integration\\[bot\\]@",  tool = "devin",
+       query = "\"devin-ai-integration\""),
+  list(pattern = "co-authored-by:[^<\\n]*<[^>\\n]*@all-hands\\.dev>",           tool = "openhands",
+       query = "\"all-hands.dev\""),
+  list(pattern = "co-authored-by:[^<\\n]*<[^>\\n]*google-labs-jules\\[bot\\]@",     tool = "jules",
+       query = "\"google-labs-jules\""),
+  list(pattern = "co-authored-by:[^<\\n]*<[^>\\n]*@windsurf\\.(ai|com)>",       tool = "windsurf",
+       query = "\"Co-Authored-By: Windsurf\""),
+  list(pattern = "co-authored-by:[^<\\n]*<[^>\\n]*windsurf-bot\\[bot\\]@",          tool = "windsurf",
+       query = "\"windsurf-bot\""),
+  # Gemini signs four ways. noreply@google.com is generic, so that rule also
+  # requires the name to start with Gemini; the bot addresses are distinctive
+  # enough on their own.
+  list(pattern = "co-authored-by:\\s*gemini[^<\\n]*<[^>\\n]*@google\\.com>",  tool = "gemini",
+       query = "\"Co-Authored-By: Gemini\""),
+  list(pattern = "co-authored-by:[^<\\n]*<[^>\\n]*gemini-(code-assist|cli)\\[?[^>\\n]*@", tool = "gemini",
+       query = "\"gemini-code-assist\""),
+  # Aider names the provider and model in the parentheses. The address is the
+  # anchor; the parenthetical is what Addendum 2 of the design would read.
+  list(pattern = "co-authored-by:[^<\\n]*<aider@aider\\.chat>",                 tool = "aider",
+       query = "\"aider@aider.chat\"")
 )
 # Tier C author-name suffixes. `query` searches the author field rather than the message.
 AI_AUTHOR_SUFFIXES <- list(
