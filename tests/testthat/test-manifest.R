@@ -138,3 +138,101 @@ test_that("publish attaches the integrity core to the uploaded manifest", {
   # The db_sha256 in the manifest matches the on-disk bytes that were uploaded.
   expect_equal(manifest$db_sha256, file_sha256(file.path(out, "vcs-signals-summary.db")))
 })
+
+test_that("every table the pipeline writes reaches the published summary with its rows", {
+  # Three tables shipped as empty tables in the published database: created by
+  # the schema step, never filled by the export step, because the export named
+  # one argument per table and nobody added theirs. A consumer reading an empty
+  # table cannot tell that from a table nothing has written to yet, so it looked
+  # exactly like a feature that had not run.
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  ensure_repo_schema(con); ensure_series_schema(con)
+
+  DBI::dbExecute(con, "INSERT INTO vcs_ai_models
+    (repo_id, tool, provider, family, version, context_window, commits,
+     first_seen, last_seen, window_complete)
+    VALUES ('R1','claude',NULL,'Opus','4.8','1M',12,'2025-01-01','2025-06-01',1)")
+  DBI::dbExecute(con, "INSERT INTO vcs_ai_rule_inventory (tier, tool, ruleset_version)
+    VALUES ('D','claude','v1')")
+  DBI::dbExecute(con, "INSERT INTO vcs_ai_silent_channels (tier, tool, status, reason, recorded_on)
+    VALUES ('B','replit','open','only the commit-author trailer remains','2026-08-01')")
+
+  out <- tempfile("pub_"); dir.create(out)
+  io <- list(release_exists = function() FALSE,
+             download = function(pattern, dir) FALSE,
+             upload = function(path) invisible(NULL))
+  publish(io, con, out, "v1", "live", force_full = TRUE)
+
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-signals-summary.db"))
+  on.exit(DBI::dbDisconnect(scon), add = TRUE)
+  for (nm in SUMMARY_EXTRA_TABLES) {
+    n <- DBI::dbGetQuery(scon, sprintf('SELECT COUNT(*) AS n FROM "%s"', nm))$n
+    expect_true(n > 0, info = paste(nm, "shipped empty"))
+  }
+  expect_equal(DBI::dbGetQuery(scon, "SELECT family FROM vcs_ai_models")$family, "Opus")
+})
+
+test_that("the declared list matches the tables the schema creates", {
+  # The list and the schema are two places that can disagree. A name here with
+  # no table would be read as NULL and silently skipped.
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+  on.exit(DBI::dbDisconnect(con))
+  ensure_repo_schema(con); ensure_series_schema(con)
+  present <- DBI::dbGetQuery(con,
+    "SELECT name FROM sqlite_master WHERE type='table'")$name
+  expect_equal(setdiff(SUMMARY_EXTRA_TABLES, present), character(0))
+})
+
+# ---------------------------------------------------------------------------
+# The published summary is one asset, clobbered. Losing ground must be refused.
+# ---------------------------------------------------------------------------
+
+.mk_summary <- function(path, n_rows, markers = "CLAUDE.md", counts = 5L) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con))
+  ensure_repo_schema(con); ensure_series_schema(con)
+  if (n_rows > 0) {
+    df <- data.frame(
+      repo_id = sprintf("github.com/o/r%d", seq_len(n_rows)), tool = "claude",
+      first_seen_date = "2025-01-01", first_seen_censored = 0L, evidence_tiers = "D",
+      markers = markers, authored = 0L,
+      authored_commits = counts, assisted_commits = counts,
+      last_confirmed_date = "2026-01-01", stringsAsFactors = FALSE)
+    DBI::dbWriteTable(con, "vcs_ai_signals", df, append = TRUE)
+  }
+  path
+}
+
+test_that("a build that lost rows is refused rather than clobbering the only copy", {
+  prev <- .mk_summary(tempfile(fileext = ".db"), 100L)
+  nxt  <- .mk_summary(tempfile(fileext = ".db"), 50L)
+  r <- summary_regressions(prev, nxt)
+  expect_true(length(r) > 0)
+  expect_match(paste(r, collapse = " "), "vcs_ai_signals: 50 rows, was 100")
+})
+
+test_that("a build that kept every row but emptied a column is refused too", {
+  # The shape that actually happened. A read-modify-write over a subset of
+  # columns leaves the row count untouched and nulls the rest, so a row-count
+  # check on its own would have watched it happen and said nothing.
+  prev <- .mk_summary(tempfile(fileext = ".db"), 100L)
+  nxt  <- .mk_summary(tempfile(fileext = ".db"), 100L, markers = NA, counts = NA)
+  r <- summary_regressions(prev, nxt)
+  expect_true(any(grepl("markers", r)))
+  expect_true(any(grepl("authored_commits", r)))
+})
+
+test_that("growth publishes, and so does a first build with nothing to compare", {
+  prev <- .mk_summary(tempfile(fileext = ".db"), 100L)
+  nxt  <- .mk_summary(tempfile(fileext = ".db"), 140L)
+  expect_equal(summary_regressions(prev, nxt), character(0))
+  expect_equal(summary_regressions(NULL, nxt), character(0))
+  expect_equal(summary_regressions(tempfile(fileext = ".db"), nxt), character(0))
+})
+
+test_that("ordinary churn is tolerated so the gate is not noise", {
+  prev <- .mk_summary(tempfile(fileext = ".db"), 1000L)
+  nxt  <- .mk_summary(tempfile(fileext = ".db"), 995L)   # five repos gone: fine
+  expect_equal(summary_regressions(prev, nxt), character(0))
+})
