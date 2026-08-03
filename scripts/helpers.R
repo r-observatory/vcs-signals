@@ -1247,6 +1247,29 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
 
   changed <- if (isTRUE(force_full)) shard_names else changed_shards(prev_hashes, curr_hashes)
 
+  # One generation of rollback for the summary, kept before the live asset is
+  # clobbered. The regression gate above stops a build that visibly lost ground;
+  # this is for the one that gets past it, because gh release upload --clobber
+  # leaves no other copy of the accumulated onset history.
+  #
+  # Deliberately one generation, not a rotation: the pipeline publishes daily, so
+  # this covers "the last publish broke it", which is the case someone actually
+  # notices. A bad build that survives unnoticed for several days will have
+  # overwritten this too, and a rotation would only move that boundary rather
+  # than remove it. The manifest records which build this is a copy of so a
+  # reader can tell what they would be rolling back to.
+  prev_asset <- NULL
+  if (!is.null(prev_summary_path) && file.exists(prev_summary_path) &&
+      "vcs-signals-summary.db" %in% changed) {
+    prev_asset <- file.path(out_dir, "vcs-signals-summary-prev.db")
+    if (file.copy(prev_summary_path, prev_asset, overwrite = TRUE)) {
+      io$upload(prev_asset)
+    } else {
+      prev_asset <- NULL
+      warning("could not stage the previous summary; publishing without a rollback copy")
+    }
+  }
+
   for (nm in changed) io$upload(file.path(out_dir, nm))
 
   # I6: the manifest's years list is a UNION of the prior manifest's years
@@ -1273,6 +1296,14 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
     packages     = nrow(summary_df),
     repos        = nrow(repos_df))
 
+  # What the rollback copy actually is, so a reader can tell whether it predates
+  # the damage they are recovering from. Absent when no copy was kept.
+  if (!is.null(prev_asset) && file.exists(prev_asset)) {
+    summary_block$previous_summary <- list(
+      asset  = "vcs-signals-summary-prev.db",
+      sha256 = file_sha256(prev_asset),
+      bytes  = file.size(prev_asset))
+  }
   write_manifest(manifest_path, changed, tag, summary_block, core = summary_core)
   io$upload(manifest_path)
 
