@@ -220,10 +220,7 @@ DEV_TOOLING_MARKERS <- list(
   # everywhere. The site subtree is fetched for exactly this.
   list(col = "has_litedown",      paths = c("_litedown.yml", "site/_litedown.yml",
                                             "docs/_litedown.yml"), location = "root"),
-  # Vignettes were counted by nothing at all: not this scan, and not the code
-  # metrics, which carry no documentation columns. Presence only, because the
-  # repository tree says a vignettes/ directory exists and not how much is in it.
-  list(col = "has_vignettes",     paths = c("vignettes"),        location = "root"),
+
   # Documentation written for language models to read. This is the package describing
   # itself TO a model, not evidence a model worked on it, so it is a practice and never
   # an AI-tooling marker.
