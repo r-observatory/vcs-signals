@@ -394,7 +394,16 @@ order_ai_tools <- function(ai_rows) {
              # deriving strictly would silently reset all of them to 0.
              authored = {
                n <- .ai_max_count(g$authored_commits)
-               if (!is.na(n)) as.integer(n > 0L)
+               if (!is.na(n) && n > 0L) 1L
+               # Tier A IS the authorship channel: it is recorded when an author
+               # search matched this identity in this repository. Evidence tiers
+               # are a union that never expires, so a later search returning zero
+               # does not retract it, and letting the zero win published rows
+               # reading "A,D" with authored = 0, which contradict themselves.
+               else if ("A" %in% tiers) 1L
+               else if (!is.na(n)) 0L
+               # No count anywhere: the stored flag stands, because every row
+               # written before the counts existed carries it and nothing else.
                else as.integer(any(as.integer(g$authored) == 1L, na.rm = TRUE))
              },
              # Max, not sum: two patterns for one tool can match the same commit,

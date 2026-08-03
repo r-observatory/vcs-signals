@@ -203,7 +203,9 @@ test_that("order_ai_tools does not crash on an unknown evidence_tiers code and s
 })
 
 test_that("reducer: authored is 0L (never NA) when one input row has authored = NA and none is 1", {
-  o <- ai_onset_reducer(row("claude", "2024-01-01", 0L, "A", NA_integer_, "2024-01-01"),
+  # Tiers D and B, not A: tier A is the authorship channel and sets the flag on
+  # its own, which would mask the NA handling this test is about.
+  o <- ai_onset_reducer(row("claude", "2024-01-01", 0L, "D", NA_integer_, "2024-01-01"),
                         row("claude", "2024-02-01", 0L, "B", 0L, "2024-02-01"))
   expect_identical(o$authored, 0L)
   expect_false(is.na(o$authored))
