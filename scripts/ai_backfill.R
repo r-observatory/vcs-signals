@@ -390,6 +390,29 @@ export_ai_shard <- function(path, rows, model_rows = NULL) {
 #' + build_ai_detail collapse each tool through ai_onset_reducer, taking the tighter onset.
 #' Writes the 7-col vcs_ai_signals partial. Template-seed (first-commit) detection is left
 #' to first_commit_touches = character(0) here; only the fork guard fires in B2.
+#' Repos whose published onset row was already confirmed today.
+#'
+#' A full gate hands every shard the entire flagged roster, so a second dispatch
+#' would otherwise spend its whole budget redoing what the first one finished and
+#' never reach the tail. This reads the roster's own confirmation dates, which
+#' the pipeline already maintains, rather than inventing a campaign marker.
+#'
+#' Returns NULL when there is nothing to read, which the caller treats as "skip
+#' nothing" rather than as "everything is done".
+load_confirmed_today <- function(roster_path, today = format(Sys.Date())) {
+  db <- file.path(dirname(roster_path), "vcs-signals-summary.db")
+  if (!file.exists(db)) return(NULL)
+  con <- tryCatch(DBI::dbConnect(RSQLite::SQLite(), db), error = function(e) NULL)
+  if (is.null(con)) return(NULL)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  if (!DBI::dbExistsTable(con, "vcs_ai_signals")) return(NULL)
+  tryCatch(
+    DBI::dbGetQuery(con,
+      "SELECT DISTINCT repo_id FROM vcs_ai_signals WHERE last_confirmed_date = ?",
+      params = list(today))$repo_id,
+    error = function(e) NULL)
+}
+
 run_deep <- function(io, out_dir, roster_path, i, N,
                      marker_delay = BACKFILL_DELAY_S, search_delay = SEARCH_DELAY_S) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
@@ -402,7 +425,29 @@ run_deep <- function(io, out_dir, roster_path, i, N,
   acc <- list()
   unavailable <- 0L   # searches the API refused, kept apart from searches that missed
   model_rows <- list()   # one row per repo per tool per model named in a trailer
+
+  # A shard that runs past the job's timeout is cancelled, and a cancelled job
+  # skips its upload step, so every repo it scanned is discarded. The first full
+  # re-scan lost all twelve shards that way: 181 repos at eleven searches and six
+  # seconds a search is 3.3 hours before overhead, against a 240 minute cap.
+  #
+  # Stopping short of the cap turns that into a partial shard that is uploaded
+  # and folded, which is the same bargain run_cheap already takes when the point
+  # budget runs low. The tail is picked up by the next dispatch.
+  deadline <- Sys.time() + AI_DEEP_BUDGET_S
+  stopped_early <- FALSE
+  skipped <- 0L
+  # Repos whose published row was already confirmed today, i.e. by an earlier
+  # dispatch of this same campaign.
+  done_today <- tryCatch(load_confirmed_today(roster_path), error = function(e) NULL)
   for (r in seq_len(nrow(mine))) {
+    if (Sys.time() >= deadline) {
+      stopped_early <- TRUE
+      message(sprintf(
+        "ai deep shard %d/%d: stopping at %d of %d repos, %.0f min budget reached; the rest ride the next dispatch",
+        i, N, r - 1L, nrow(mine), AI_DEEP_BUDGET_S / 60))
+      break
+    }
     rl <- graphql_rate_remaining(io)
     if (rl < AI_POINT_RESERVE) {
       message(sprintf(
@@ -411,6 +456,13 @@ run_deep <- function(io, out_dir, roster_path, i, N,
       break
     }
     rid <- mine$repo_id[r]; owner <- mine$owner[r]; name <- mine$name[r]
+    # Already scanned in this campaign. A full gate hands every shard the whole
+    # roster, so without this a second dispatch would spend its budget redoing
+    # the repos the first one finished and never reach the tail. Keyed on the
+    # published confirmation date rather than a campaign marker, because that is
+    # a fact the pipeline already records.
+    if (!is.null(done_today) && rid %in% done_today) { skipped <- skipped + 1L; next }
+
     ev <- evidence[evidence$repo_id == rid, c("tool", "tier", "marker", "agnostic"), drop = FALSE]
     if (nrow(ev) == 0) next
     ev$authored <- 0L   # only a Tier-A author-email hit below sets authored = 1
@@ -560,6 +612,11 @@ run_deep <- function(io, out_dir, roster_path, i, N,
   rows <- if (length(acc)) do.call(rbind, acc) else .ai_empty_signals()
   models_df <- if (length(model_rows)) do.call(rbind, model_rows) else .ai_empty_models()
   export_ai_shard(file.path(out_dir, sprintf("vcs-ai-shard-%d.db", i)), rows, models_df)
+  if (skipped > 0L)
+    message(sprintf("ai deep shard %d/%d: skipped %d repo(s) already confirmed today",
+                    i, N, skipped))
+  if (stopped_early)
+    message(sprintf("ai deep shard %d/%d: PARTIAL, dispatch again to continue", i, N))
   if (nrow(models_df) > 0)
     message(sprintf("ai deep shard %d/%d: %d model row(s) across %d repo(s)",
                     i, N, nrow(models_df), length(unique(models_df$repo_id))))
