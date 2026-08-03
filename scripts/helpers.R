@@ -1117,13 +1117,22 @@ summary_regressions <- function(prev_path, next_path, tol = 0.02) {
   out
 }
 
-publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touched_years = NULL) {
+publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touched_years = NULL,
+                    purged_metrics = character(0)) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
   # A full rebuild re-exports and re-uploads every shard, so there is no prior
   # state to protect; skip the pull (which would abort on a freshly-created,
   # asset-less release).
-  pulled <- if (isTRUE(force_full)) character(0) else protect_history_pull(io, out_dir)
+  # Pulled on every path, including force_full. The old exemption assumed a full
+  # rebuild had nothing to protect, which is true of a fresh release and false of
+  # the one case that actually sets it: update.yml exposes FORCE_FULL_REBUILD
+  # against the live release, where the working database holds only the
+  # RECENT_WINDOW tail. Exporting every year from that tail rewrote each year
+  # shard with a fragment of itself and uploaded it with --clobber, and the
+  # per-year archive tags were mirrored from the same run, so no copy survived.
+  # protect_history_pull already tolerates an asset-less release.
+  pulled <- tryCatch(protect_history_pull(io, out_dir), error = function(e) character(0))
   prev_names <- setdiff(pulled, "manifest.json")
   prev_hashes <- stats::setNames(
     vapply(prev_names, function(nm) shard_hash(file.path(out_dir, nm)), character(1)),
@@ -1139,6 +1148,34 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
     file.copy(pulled_summary, prev_summary_path, overwrite = TRUE)
   }
 
+  all_years <- DBI::dbGetQuery(con, "SELECT DISTINCT substr(date, 1, 4) AS yr FROM signals_series WHERE date IS NOT NULL ORDER BY yr")$yr
+  years <- as.integer(if (isTRUE(force_full) || is.null(touched_years)) all_years else touched_years)
+
+  # Fold what is already published back into the working database before any
+  # year is re-exported. backfill.R has done this for its own path since the
+  # truncation was first understood; doing it here means no caller can skip it.
+  # INSERT OR IGNORE dedupes on the (repo_id, date, metric) primary key, so the
+  # recent-window overlap costs nothing and the working rows win.
+  for (ys in list.files(out_dir, pattern = "^vcs-signals-[0-9]{4}\\.db$", full.names = TRUE)) {
+    ycon <- tryCatch(DBI::dbConnect(RSQLite::SQLite(), ys), error = function(e) NULL)
+    if (is.null(ycon)) next
+    yrows <- tryCatch(
+      if (DBI::dbExistsTable(ycon, "signals_series")) DBI::dbReadTable(ycon, "signals_series") else NULL,
+      error = function(e) NULL)
+    DBI::dbDisconnect(ycon)
+    # A metric the caller deliberately purged must not be resurrected by the
+    # fold. Retiring a mis-named metric is the one case where the published
+    # history is meant to lose rows, and it is the caller who knows that.
+    if (!is.null(yrows) && nrow(yrows) > 0 && length(purged_metrics) > 0)
+      yrows <- yrows[!(yrows$metric %in% purged_metrics), , drop = FALSE]
+    if (!is.null(yrows) && nrow(yrows) > 0)
+      DBI::dbExecute(con,
+        "INSERT OR IGNORE INTO signals_series (repo_id, date, metric, value) VALUES (?,?,?,?)",
+        params = list(yrows$repo_id, yrows$date, yrows$metric, yrows$value))
+  }
+
+  # Recomputed after the fold: a year that exists only in the published history
+  # must be re-exported complete rather than dropped.
   all_years <- DBI::dbGetQuery(con, "SELECT DISTINCT substr(date, 1, 4) AS yr FROM signals_series WHERE date IS NOT NULL ORDER BY yr")$yr
   years <- as.integer(if (isTRUE(force_full) || is.null(touched_years)) all_years else touched_years)
 

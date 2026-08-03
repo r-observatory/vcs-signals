@@ -272,3 +272,76 @@ test_that("the extra tables survive a publish, a reseed, and a second publish", 
   }
   expect_equal(DBI::dbGetQuery(rc, "SELECT COUNT(*) AS n FROM vcs_ai_rule_inventory")$n, 3L)
 })
+
+test_that("a full rebuild from the recent window does not truncate published years", {
+  # update.yml exposes FORCE_FULL_REBUILD against the live release. The working
+  # database at that point holds only the RECENT_WINDOW tail, and every year was
+  # re-exported from it and uploaded with --clobber, so a complete 2024 shard
+  # was replaced by whatever fragment of 2024 fell inside the window. The
+  # per-year archive tags are mirrored from the same run, so nothing survived.
+  #
+  # The published shard lives in a separate directory and reaches out_dir only
+  # through io$download. A version of this test that pre-placed it in out_dir
+  # passed with the pull removed, because the fold found the file either way.
+  remote <- tempfile("remote_"); dir.create(remote)
+  out    <- tempfile("ff_");     dir.create(out)
+
+  pc <- DBI::dbConnect(RSQLite::SQLite(), file.path(remote, "vcs-signals-2024.db"))
+  ensure_series_schema(pc)
+  DBI::dbWriteTable(pc, "signals_series", data.frame(
+    repo_id = "R1", date = sprintf("2024-%02d-01", 1:12), metric = "stars",
+    value = 1:12, stringsAsFactors = FALSE), append = TRUE)
+  DBI::dbDisconnect(pc)
+
+  rc <- DBI::dbConnect(RSQLite::SQLite(), file.path(remote, "vcs-signals-recent.db"))
+  ensure_series_schema(rc); DBI::dbDisconnect(rc)
+  writeLines('{"summary":{"years":[2024]}}', file.path(remote, "manifest.json"))
+
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  ensure_repo_schema(con); ensure_series_schema(con)
+  DBI::dbExecute(con, "INSERT INTO signals_series VALUES ('R1','2024-12-01','stars',12)")
+
+  io <- list(
+    release_exists = function() TRUE,
+    download = function(pattern, dir) {
+      src <- file.path(remote, pattern)
+      if (!file.exists(src)) return(FALSE)
+      file.copy(src, file.path(dir, basename(pattern)), overwrite = TRUE)
+    },
+    upload = function(path) invisible(NULL))
+  publish(io, con, out, "current", "live", force_full = TRUE)
+
+  yc <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-signals-2024.db"))
+  on.exit(DBI::dbDisconnect(yc), add = TRUE)
+  expect_equal(DBI::dbGetQuery(yc, "SELECT COUNT(*) AS n FROM signals_series")$n, 12L)
+})
+
+test_that("a deliberately purged metric is not resurrected by the fold", {
+  # Retiring a mis-named metric is the one case where the published history is
+  # meant to lose rows, and only the caller knows that.
+  out <- tempfile("pg_"); dir.create(out)
+  published <- file.path(out, "vcs-signals-2024.db")
+  pc <- DBI::dbConnect(RSQLite::SQLite(), published)
+  ensure_series_schema(pc)
+  DBI::dbWriteTable(pc, "signals_series", data.frame(
+    repo_id = "R1", date = "2024-05-01", metric = c("stars", "typo_metric"),
+    value = c(5L, 9L), stringsAsFactors = FALSE), append = TRUE)
+  DBI::dbDisconnect(pc)
+
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  ensure_repo_schema(con); ensure_series_schema(con)
+  DBI::dbExecute(con, "INSERT INTO signals_series VALUES ('R1','2024-05-01','stars',5)")
+
+  io <- list(release_exists = function() TRUE,
+             download = function(pattern, dir) TRUE,
+             upload = function(path) invisible(NULL))
+  publish(io, con, out, "current", "live", force_full = TRUE,
+          purged_metrics = "typo_metric")
+
+  yc <- DBI::dbConnect(RSQLite::SQLite(), published)
+  on.exit(DBI::dbDisconnect(yc), add = TRUE)
+  got <- DBI::dbGetQuery(yc, "SELECT DISTINCT metric FROM signals_series")$metric
+  expect_equal(got, "stars")
+})
