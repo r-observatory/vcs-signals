@@ -408,3 +408,51 @@ test_that("a first publish keeps no rollback copy and claims none", {
   m <- jsonlite::fromJSON(file.path(out, "manifest.json"))
   expect_null(m$summary$previous_summary)
 })
+
+test_that("a column the published build never had is not read as a loss", {
+  # This blocked the daily pipeline. SQLite resolves a double-quoted name that
+  # is not a column as a STRING LITERAL rather than raising, so
+  #   WHERE "authored_commits" IS NOT NULL
+  # became 'authored_commits' IS NOT NULL, true for every row. Against a
+  # published database written before the column existed that read as all 2,429
+  # rows carrying a value, and the gate refused a publish over a loss that had
+  # not happened. The tryCatch around the query was waiting for an error SQLite
+  # does not raise.
+  prev <- tempfile(fileext = ".db")
+  pc <- DBI::dbConnect(RSQLite::SQLite(), prev)
+  DBI::dbExecute(pc, "CREATE TABLE vcs_ai_signals (
+    repo_id TEXT, tool TEXT, first_seen_date TEXT, evidence_tiers TEXT)")
+  for (i in 1:100) {
+    DBI::dbExecute(pc, sprintf(
+      "INSERT INTO vcs_ai_signals VALUES ('r%d','claude','2025-01-01','D')", i))
+  }
+  DBI::dbDisconnect(pc)
+
+  # The outgoing build has the columns, all NULL, because no scan has filled
+  # them yet. That is the honest state of a freshly added column.
+  nxt <- .mk_summary(tempfile(fileext = ".db"), 100L, markers = NA, counts = NA)
+
+  expect_equal(summary_regressions(prev, nxt), character(0))
+})
+
+test_that("the old query really did count every row, so the guard is load-bearing", {
+  # Pinning the SQLite behaviour itself: if a future version starts raising,
+  # this test says so rather than the guard silently becoming redundant.
+  p <- tempfile(fileext = ".db")
+  con <- DBI::dbConnect(RSQLite::SQLite(), p)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  DBI::dbExecute(con, "CREATE TABLE t (a TEXT)")
+  DBI::dbExecute(con, "INSERT INTO t VALUES ('x'), ('y')")
+  quoted <- DBI::dbGetQuery(con, 'SELECT COUNT(*) AS n FROM t WHERE "nope" IS NOT NULL')$n
+  expect_equal(quoted, 2L)   # the string literal, not an error
+  expect_error(DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM t WHERE [nope] IS NOT NULL"))
+})
+
+test_that("a real loss in a column both builds have is still refused", {
+  # The gate must still do its job, or the fix would have removed it.
+  prev <- .mk_summary(tempfile(fileext = ".db"), 100L)
+  nxt  <- .mk_summary(tempfile(fileext = ".db"), 100L, markers = NA, counts = NA)
+  r <- summary_regressions(prev, nxt)
+  expect_true(any(grepl("authored_commits", r)))
+  expect_true(any(grepl("markers", r)))
+})

@@ -1107,8 +1107,23 @@ summary_regressions <- function(prev_path, next_path, tol = 0.02) {
   # Columns a partial read-modify-write has destroyed before. A row count can
   # hold steady while every value in a column is quietly replaced by NULL, which
   # is exactly what happened, so the count alone would not have caught it.
+  #
+  # The column has to exist on BOTH sides before the counts mean anything.
+  # SQLite resolves a double-quoted name that is not a column as a STRING
+  # LITERAL rather than raising, so WHERE "authored_commits" IS NOT NULL is
+  # 'authored_commits' IS NOT NULL, which is true for every row. Against a
+  # published database written before the column existed, that read as every
+  # row carrying a value, and the gate refused a publish over a loss that had
+  # not happened. A column present on one side only is a schema difference, and
+  # a schema difference is not a regression.
+  has_col <- function(con, col) {
+    nms <- tryCatch(DBI::dbGetQuery(con, "PRAGMA table_info(vcs_ai_signals)")$name,
+                    error = function(e) character(0))
+    col %in% nms
+  }
   for (col in c("markers", "authored_commits", "assisted_commits")) {
-    q <- sprintf('SELECT COUNT(*) AS n FROM vcs_ai_signals WHERE "%s" IS NOT NULL', col)
+    if (!has_col(pc, col) || !has_col(nc, col)) next
+    q <- sprintf('SELECT COUNT(*) AS n FROM vcs_ai_signals WHERE [%s] IS NOT NULL', col)
     a <- count(pc, q); b <- count(nc, q)
     if (is.na(a) || is.na(b) || a == 0) next
     if (b < a * (1 - tol))
