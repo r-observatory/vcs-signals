@@ -272,3 +272,66 @@ test_that("the extra tables survive a publish, a reseed, and a second publish", 
   }
   expect_equal(DBI::dbGetQuery(rc, "SELECT COUNT(*) AS n FROM vcs_ai_rule_inventory")$n, 3L)
 })
+
+test_that("the build being replaced is kept as one generation of rollback", {
+  # The summary is uploaded with --clobber, so a bad build overwrites the only
+  # copy of the accumulated onset history. The regression gate stops a build
+  # that visibly lost ground; this is for the one that gets past it.
+  remote <- tempfile("rem_"); dir.create(remote)
+  out    <- tempfile("ret_"); dir.create(out)
+  uploaded <- character(0)
+
+  pc <- DBI::dbConnect(RSQLite::SQLite(), file.path(remote, "vcs-signals-summary.db"))
+  ensure_repo_schema(pc); ensure_series_schema(pc)
+  DBI::dbExecute(pc, "INSERT INTO vcs_ai_signals
+    (repo_id, tool, first_seen_date, evidence_tiers, markers, authored_commits)
+    VALUES ('R1','claude','2024-01-01','A,D','CLAUDE.md',53)")
+  DBI::dbDisconnect(pc)
+  rc <- DBI::dbConnect(RSQLite::SQLite(), file.path(remote, "vcs-signals-recent.db"))
+  ensure_series_schema(rc); DBI::dbDisconnect(rc)
+  writeLines('{"summary":{"years":[]}}', file.path(remote, "manifest.json"))
+
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  ensure_repo_schema(con); ensure_series_schema(con)
+  DBI::dbExecute(con, "INSERT INTO vcs_ai_signals
+    (repo_id, tool, first_seen_date, evidence_tiers, markers, authored_commits)
+    VALUES ('R1','claude','2024-01-01','A,D','CLAUDE.md',53),
+           ('R2','codex','2025-01-01','B','B',4)")
+
+  io <- list(release_exists = function() TRUE,
+             download = function(pattern, dir) {
+               src <- file.path(remote, pattern)
+               if (!file.exists(src)) return(FALSE)
+               file.copy(src, file.path(dir, basename(pattern)), overwrite = TRUE)
+             },
+             upload = function(path) { uploaded <<- c(uploaded, basename(path)); invisible(NULL) })
+  publish(io, con, out, "current", "live")
+
+  expect_true("vcs-signals-summary-prev.db" %in% uploaded)
+  # And it holds the OLD build, not a second copy of the new one.
+  kept <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-signals-summary-prev.db"))
+  on.exit(DBI::dbDisconnect(kept), add = TRUE)
+  expect_equal(DBI::dbGetQuery(kept, "SELECT COUNT(*) AS n FROM vcs_ai_signals")$n, 1L)
+  expect_equal(DBI::dbGetQuery(kept, "SELECT authored_commits FROM vcs_ai_signals")$authored_commits, 53L)
+
+  m <- jsonlite::fromJSON(file.path(out, "manifest.json"))
+  expect_equal(m$summary$previous_summary$asset, "vcs-signals-summary-prev.db")
+  expect_match(m$summary$previous_summary$sha256, "^[0-9a-f]{64}$")
+})
+
+test_that("a first publish keeps no rollback copy and claims none", {
+  out <- tempfile("first_"); dir.create(out)
+  uploaded <- character(0)
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  ensure_repo_schema(con); ensure_series_schema(con)
+  io <- list(release_exists = function() FALSE,
+             download = function(pattern, dir) FALSE,
+             upload = function(path) { uploaded <<- c(uploaded, basename(path)); invisible(NULL) })
+  publish(io, con, out, "v1", "live", force_full = TRUE)
+
+  expect_false("vcs-signals-summary-prev.db" %in% uploaded)
+  m <- jsonlite::fromJSON(file.path(out, "manifest.json"))
+  expect_null(m$summary$previous_summary)
+})
