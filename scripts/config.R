@@ -450,3 +450,9 @@ A,openhands,open,"tier A iterates cheap-pass evidence, which openhands can only 
 # no rows, which is indistinguishable from a table nothing has written yet.
 SUMMARY_EXTRA_TABLES <- c("vcs_ai_models", "vcs_ai_rule_inventory",
                           "vcs_ai_silent_channels")
+
+# Wall-clock budget for one deep shard, comfortably inside the 240 minute job
+# timeout in ai-weekly.yml. A cancelled job skips its upload step, so a shard
+# that overruns discards every repo it scanned; stopping short leaves a partial
+# shard that is uploaded and folded, and the tail rides the next dispatch.
+AI_DEEP_BUDGET_S <- 3.25 * 3600

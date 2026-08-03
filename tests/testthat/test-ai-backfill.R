@@ -1081,3 +1081,107 @@ test_that("run_deep counts a refused Tier-A search instead of reading it as an a
   expect_false(any(grepl("A", strsplit(got$evidence_tiers, ",")[[1]], fixed = TRUE)))
   expect_equal(got$authored, 0L)
 })
+
+test_that("a deep shard stops inside its budget and keeps what it scanned", {
+  # The first full re-scan lost all twelve shards: each ran past the 240 minute
+  # job timeout, and a cancelled job skips its upload step, so every repo it had
+  # scanned was discarded. A shard that stops short is a partial shard that is
+  # uploaded and folded.
+  out <- tempfile("bud_"); dir.create(out)
+  roster <- data.frame(
+    repo_id = sprintf("github.com/o/r%d", 1:4), owner = "o",
+    name = sprintf("r%d", 1:4), node_id = sprintf("R_%d", 1:4),
+    is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_,
+    stringsAsFactors = FALSE)
+  ev <- data.frame(repo_id = roster$repo_id, tool = "claude", tier = "D",
+                   marker = "CLAUDE.md", agnostic = 0L, stringsAsFactors = FALSE)
+  write_flagged_partial(file.path(out, "vcs-ai-flagged-roster.db"), roster, ev)
+
+  io <- list(
+    graphql = function(q) list(data = list(repository = list(defaultBranchRef = list(
+      target = list(history = list(pageInfo = list(endCursor = "", hasNextPage = FALSE),
+        nodes = list(list(committedDate = "2025-01-01T00:00:00Z")))))))),
+    search_hit = function(owner, name, query, delay = 0)
+      list(date = NA_character_, message = NA_character_, author = NA_character_,
+           total_count = 0L, unavailable = FALSE))
+
+  # A budget of zero stops before the first repo, which is the boundary case:
+  # the shard must still be written, not skipped.
+  withr::with_options(list(), {
+    old <- AI_DEEP_BUDGET_S
+    AI_DEEP_BUDGET_S <<- 0
+    on.exit(AI_DEEP_BUDGET_S <<- old, add = TRUE)
+    msgs <- testthat::capture_messages(
+      run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
+               marker_delay = 0, search_delay = 0))
+    expect_match(paste(msgs, collapse = "\n"), "budget reached")
+    expect_match(paste(msgs, collapse = "\n"), "PARTIAL")
+  })
+  expect_true(file.exists(file.path(out, "vcs-ai-shard-0.db")))
+})
+
+test_that("a repo confirmed today is not rescanned by a later dispatch", {
+  # A full gate hands every shard the whole roster, so without this the second
+  # dispatch spends its budget redoing the first one's work and never reaches
+  # the tail.
+  out <- tempfile("skip_"); dir.create(out)
+  db <- file.path(out, "vcs-signals-summary.db")
+  con <- DBI::dbConnect(RSQLite::SQLite(), db)
+  ensure_repo_schema(con); ensure_series_schema(con)
+  DBI::dbExecute(con, sprintf(
+    "INSERT INTO vcs_ai_signals (repo_id, tool, evidence_tiers, last_confirmed_date)
+     VALUES ('github.com/o/done','claude','D','%s')", format(Sys.Date())))
+  DBI::dbDisconnect(con)
+
+  got <- load_confirmed_today(file.path(out, "vcs-ai-flagged-roster.db"))
+  expect_true("github.com/o/done" %in% got)
+
+  # Yesterday's confirmation is not this campaign, so it is not skipped.
+  expect_false("github.com/o/done" %in%
+    load_confirmed_today(file.path(out, "vcs-ai-flagged-roster.db"),
+                         today = format(Sys.Date() - 1)))
+})
+
+test_that("no summary to read means skip nothing, not skip everything", {
+  # The failure that would be silent: reading nothing and concluding the whole
+  # roster is done, so the dispatch scans zero repos and reports success.
+  expect_null(load_confirmed_today(file.path(tempfile("none_"), "roster.db")))
+})
+
+test_that("run_deep actually skips the repo, not just knows it could", {
+  # The previous test proved load_confirmed_today returns the right repo and
+  # nothing more: removing the skip from the loop left it passing. This asserts
+  # the loop honours it, by recording which repos were reached.
+  out <- tempfile("skipdeep_"); dir.create(out)
+  roster <- data.frame(
+    repo_id = c("github.com/o/done", "github.com/o/todo"), owner = "o",
+    name = c("done", "todo"), node_id = c("R_1", "R_2"),
+    is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_,
+    stringsAsFactors = FALSE)
+  ev <- data.frame(repo_id = roster$repo_id, tool = "claude", tier = "D",
+                   marker = "CLAUDE.md", agnostic = 0L, stringsAsFactors = FALSE)
+  write_flagged_partial(file.path(out, "vcs-ai-flagged-roster.db"), roster, ev)
+
+  con <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-signals-summary.db"))
+  ensure_repo_schema(con); ensure_series_schema(con)
+  DBI::dbExecute(con, sprintf(
+    "INSERT INTO vcs_ai_signals (repo_id, tool, evidence_tiers, last_confirmed_date)
+     VALUES ('github.com/o/done','claude','D','%s')", format(Sys.Date())))
+  DBI::dbDisconnect(con)
+
+  reached <- character(0)
+  io <- list(
+    graphql = function(q) list(data = list(repository = list(defaultBranchRef = list(
+      target = list(history = list(pageInfo = list(endCursor = "", hasNextPage = FALSE),
+        nodes = list(list(committedDate = "2025-01-01T00:00:00Z")))))))),
+    search_hit = function(owner, name, query, delay = 0) {
+      reached <<- c(reached, name)
+      list(date = NA_character_, message = NA_character_, author = NA_character_,
+           total_count = 0L, unavailable = FALSE)
+    })
+  suppressMessages(run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
+                            marker_delay = 0, search_delay = 0))
+
+  expect_true("todo" %in% reached)
+  expect_false("done" %in% reached)   # already confirmed today: not rescanned
+})
