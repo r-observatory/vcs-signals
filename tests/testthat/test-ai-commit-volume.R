@@ -65,9 +65,10 @@ test_that("a real count beats an absent one when the rows disagree about being a
 })
 
 test_that("the authored flag is derived from the count rather than kept beside it", {
-  # Two fields that can disagree will eventually disagree.
+  # Two fields that can disagree will eventually disagree. Tier D throughout,
+  # because tier A sets the flag on its own and would mask the derivation.
   g <- data.frame(repo_id = "r", tool = "claude", first_seen_date = "2025-01-01",
-                  first_seen_censored = 0L, evidence_tiers = "A", markers = "A",
+                  first_seen_censored = 0L, evidence_tiers = "D", markers = "CLAUDE.md",
                   authored = 0L, authored_commits = 4L, assisted_commits = NA_integer_,
                   last_confirmed_date = "2026-01-01", stringsAsFactors = FALSE)
   expect_equal(.ai_reduce_group(g)$authored, 1L)
@@ -192,4 +193,37 @@ test_that("folding two repos onto one identity keeps every column it did not rea
   expect_equal(got$assisted_commits, 12L)
   expect_equal(got$markers, "CLAUDE.md")
   expect_equal(got$first_seen_date, "2025-01-01")
+})
+
+test_that("a fresh zero does not retract standing tier-A evidence", {
+  # Rows written before the counts existed carry authored = 1 and no number. A
+  # full_gate re-scan measures the tier-A search honestly, and where it now
+  # returns zero the fold published evidence_tiers "A,D" beside authored = 0: a
+  # row that contradicts itself. Tiers are a union that never expires, so the
+  # tier cannot be retracted by a later search either.
+  g <- data.frame(repo_id = "r", tool = "claude", first_seen_date = "2025-01-01",
+    first_seen_censored = 0L, evidence_tiers = c("A,D", "D"), markers = c("A", "CLAUDE.md"),
+    authored = c(1L, 0L), authored_commits = c(NA_integer_, 0L),
+    assisted_commits = NA_integer_, last_confirmed_date = "2026-01-01",
+    stringsAsFactors = FALSE)
+  out <- .ai_reduce_group(g)
+  expect_true(grepl("A", out$evidence_tiers, fixed = TRUE))
+  expect_equal(out$authored, 1L)
+})
+
+test_that("a measured zero with no tier-A evidence still reads as none", {
+  # The flag must still be able to say no, or it is not derived from anything.
+  g <- data.frame(repo_id = "r", tool = "claude", first_seen_date = "2025-01-01",
+    first_seen_censored = 0L, evidence_tiers = "B,D", markers = "B",
+    authored = 0L, authored_commits = 0L, assisted_commits = 37L,
+    last_confirmed_date = "2026-01-01", stringsAsFactors = FALSE)
+  expect_equal(.ai_reduce_group(g)$authored, 0L)
+})
+
+test_that("a positive count still wins outright", {
+  g <- data.frame(repo_id = "r", tool = "copilot", first_seen_date = "2025-01-01",
+    first_seen_censored = 0L, evidence_tiers = "D", markers = "copilot-instructions.md",
+    authored = 0L, authored_commits = 7L, assisted_commits = NA_integer_,
+    last_confirmed_date = "2026-01-01", stringsAsFactors = FALSE)
+  expect_equal(.ai_reduce_group(g)$authored, 1L)
 })
