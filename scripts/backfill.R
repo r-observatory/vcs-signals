@@ -243,7 +243,10 @@ run_merge <- function(io, out_dir, parts_dir, purge_metrics = character(0)) {
   message(sprintf("merge: %d shard partials, %d backfilled rows (%d newly inserted), %d year(s) touched",
                   length(parts), nrow(backfill_rows), n_inserted, length(touched_years)))
 
-  invisible(publish(io, con, out_dir, tag = "current", source_kind = "live", touched_years = touched_years))
+  # purge_metrics is passed through so publish's history fold does not put back
+  # the rows this run deliberately removed.
+  invisible(publish(io, con, out_dir, tag = "current", source_kind = "live",
+                    touched_years = touched_years, purged_metrics = purge_metrics))
 }
 
 # ---- CLI dispatch -----------------------------------------------------------------
