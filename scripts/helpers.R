@@ -779,7 +779,8 @@ export_series_shard <- function(path, rows) {
 #' repo_packages, and (when supplied) vcs_ai_signals and vcs_dev_tooling
 #' tables - the published "summary" shard.
 export_summary_shard <- function(path, summary_df, repos_df, repo_packages_df,
-                                 ai_signals_df = NULL, dev_tooling_df = NULL) {
+                                 ai_signals_df = NULL, dev_tooling_df = NULL,
+                                 extra = list()) {
   if (file.exists(path)) unlink(path)
 
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
@@ -796,6 +797,15 @@ export_summary_shard <- function(path, summary_df, repos_df, repo_packages_df,
     DBI::dbWriteTable(con, "vcs_ai_signals", ai_signals_df, append = TRUE)
   if (!is.null(dev_tooling_df) && nrow(dev_tooling_df) > 0)
     DBI::dbWriteTable(con, "vcs_dev_tooling", dev_tooling_df, append = TRUE)
+
+  # Everything else the working database carries for publication, by name.
+  # ensure_series_schema() creates these tables here whether or not they hold
+  # rows, so a table left out of this step ships EMPTY rather than absent, and
+  # a consumer cannot tell that from a table with nothing in it yet.
+  for (nm in names(extra)) {
+    df <- extra[[nm]]
+    if (!is.null(df) && nrow(df) > 0) DBI::dbWriteTable(con, nm, df, append = TRUE)
+  }
 
   DBI::dbExecute(con, "VACUUM")
   invisible(NULL)
@@ -998,7 +1008,13 @@ protect_history_pull <- function(io, dir) {
     }
   }
   for (nm in c("vcs_signals_summary", "repos", "repo_packages",
-               "series_latest", "pipeline_state", "vcs_ai_signals", "vcs_dev_tooling")) copy_table(nm)
+               "series_latest", "pipeline_state", "vcs_ai_signals", "vcs_dev_tooling",
+               # The AI merge writes these weekly and every other publish reads
+               # the working DB seeded from this shard. Left out, they return
+               # empty on the next daily run, which the regression gate then
+               # correctly refuses to publish: the tables must make the round
+               # trip or the gate stops the pipeline every Monday.
+               SUMMARY_EXTRA_TABLES)) copy_table(nm)
   invisible(NULL)
 }
 
@@ -1055,6 +1071,52 @@ build_release_notes <- function(summary, changed_shards, tag) {
 #' exports no year shard at all. Untouched years' shard files are left as
 #' whatever protect_history_pull pulled down, so their hashes match
 #' prev_hashes and they are never re-uploaded.
+#' Refuse to publish a summary that lost ground against the one already out.
+#'
+#' The published summary is a single asset, uploaded with --clobber, so a bad
+#' build overwrites the only copy and the previous one is gone. That is fine
+#' while every build is at least as complete as the last, and it has not been:
+#' reconcile_ai_identity spent months writing back seven of ten columns, so
+#' markers and both commit counts were destroyed on every merge that folded a
+#' renamed repository, and nothing noticed because nothing compared.
+#'
+#' Compares row counts per table and, for the columns that have actually been
+#' lost this way, how many rows carry a value. A drop beyond `tol` is refused.
+#' Growth, and a first publish with nothing to compare against, both pass.
+#'
+#' @return character(0) when the outgoing build is sound, else the reasons.
+summary_regressions <- function(prev_path, next_path, tol = 0.02) {
+  if (is.null(prev_path) || !file.exists(prev_path)) return(character(0))
+  pc <- DBI::dbConnect(RSQLite::SQLite(), prev_path)
+  nc <- DBI::dbConnect(RSQLite::SQLite(), next_path)
+  on.exit({ DBI::dbDisconnect(pc); DBI::dbDisconnect(nc) }, add = TRUE)
+
+  tbls <- function(con) DBI::dbGetQuery(con,
+    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")$name
+  count <- function(con, q) tryCatch(DBI::dbGetQuery(con, q)$n[1], error = function(e) NA_integer_)
+  out <- character(0)
+
+  for (t in intersect(tbls(pc), tbls(nc))) {
+    a <- count(pc, sprintf('SELECT COUNT(*) AS n FROM "%s"', t))
+    b <- count(nc, sprintf('SELECT COUNT(*) AS n FROM "%s"', t))
+    if (is.na(a) || is.na(b) || a == 0) next
+    if (b < a * (1 - tol))
+      out <- c(out, sprintf("%s: %d rows, was %d", t, b, a))
+  }
+
+  # Columns a partial read-modify-write has destroyed before. A row count can
+  # hold steady while every value in a column is quietly replaced by NULL, which
+  # is exactly what happened, so the count alone would not have caught it.
+  for (col in c("markers", "authored_commits", "assisted_commits")) {
+    q <- sprintf('SELECT COUNT(*) AS n FROM vcs_ai_signals WHERE "%s" IS NOT NULL', col)
+    a <- count(pc, q); b <- count(nc, q)
+    if (is.na(a) || is.na(b) || a == 0) next
+    if (b < a * (1 - tol))
+      out <- c(out, sprintf("vcs_ai_signals.%s: %d rows carry a value, was %d", col, b, a))
+  }
+  out
+}
+
 publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touched_years = NULL) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
@@ -1066,6 +1128,16 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
   prev_hashes <- stats::setNames(
     vapply(prev_names, function(nm) shard_hash(file.path(out_dir, nm)), character(1)),
     prev_names)
+
+  # protect_history_pull downloads the published shards into out_dir, and the
+  # export below writes over the summary in place. Copy it aside first so the
+  # outgoing build can be compared against what is currently live.
+  prev_summary_path <- NULL
+  pulled_summary <- file.path(out_dir, "vcs-signals-summary.db")
+  if ("vcs-signals-summary.db" %in% prev_names && file.exists(pulled_summary)) {
+    prev_summary_path <- file.path(out_dir, "_prev-summary.db")
+    file.copy(pulled_summary, prev_summary_path, overwrite = TRUE)
+  }
 
   all_years <- DBI::dbGetQuery(con, "SELECT DISTINCT substr(date, 1, 4) AS yr FROM signals_series WHERE date IS NOT NULL ORDER BY yr")$yr
   years <- as.integer(if (isTRUE(force_full) || is.null(touched_years)) all_years else touched_years)
@@ -1091,9 +1163,32 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
   ai_df      <- if (DBI::dbExistsTable(con, "vcs_ai_signals")) DBI::dbReadTable(con, "vcs_ai_signals") else data.frame()
   dev_df     <- if (DBI::dbExistsTable(con, "vcs_dev_tooling")) DBI::dbReadTable(con, "vcs_dev_tooling") else data.frame()
 
+  # Read by name from a single declared list, so adding a table to the pipeline
+  # does not also require remembering to add it here. Three tables shipped empty
+  # because this step took one explicit argument per table and nobody added
+  # theirs.
+  extra_df <- stats::setNames(lapply(SUMMARY_EXTRA_TABLES, function(nm)
+    if (DBI::dbExistsTable(con, nm)) DBI::dbReadTable(con, nm) else NULL),
+    SUMMARY_EXTRA_TABLES)
+
   summary_shard <- "vcs-signals-summary.db"
   summary_path <- file.path(out_dir, summary_shard)
-  export_summary_shard(summary_path, summary_df, repos_df, rp_df, ai_df, dev_df)
+  export_summary_shard(summary_path, summary_df, repos_df, rp_df, ai_df, dev_df,
+                       extra = extra_df)
+
+  # The previous build, when protect_history_pull fetched one, is still on disk
+  # under its own name only until export_summary_shard overwrites it, so the
+  # comparison happens here against the copy kept aside.
+  if (!is.null(prev_summary_path) && file.exists(prev_summary_path)) {
+    regressions <- summary_regressions(prev_summary_path, summary_path)
+    if (length(regressions) > 0 && !identical(Sys.getenv("VCS_ALLOW_REGRESSION"), "1")) {
+      stop(sprintf(paste0("publish refused: the outgoing summary lost ground against the ",
+                          "published one:\n  %s\nThe published asset is uploaded with --clobber ",
+                          "and there is no prior copy to fall back to. Set VCS_ALLOW_REGRESSION=1 ",
+                          "to publish anyway."),
+                   paste(regressions, collapse = "\n  ")), call. = FALSE)
+    }
+  }
   shard_names <- c(shard_names, summary_shard)
 
   # Integrity/completeness core for the PRIMARY published db a downstream

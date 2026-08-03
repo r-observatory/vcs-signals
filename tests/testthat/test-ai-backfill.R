@@ -1016,7 +1016,15 @@ test_that("an unreadable ignore history falls back to the scan date, not to sile
                marker = "gitignore:.claude", agnostic = 0L, stringsAsFactors = FALSE))
   io <- list(search_hit = function(...) list(date = NA_character_, unavailable = FALSE),
              search_hit = function(...) list(date = NA_character_, unavailable = FALSE),
-             graphql = function(q) list(errors = list(list(message = "nope"))))
+             # Answers the budget probe normally and fails only the history
+             # query, which is the condition this test is about. A fake that
+             # errors on everything now reads as a spent token and stops the
+             # shard, which is correct behaviour but a different test.
+             graphql = function(q) {
+               if (grepl("rateLimit", q, fixed = TRUE))
+                 return(list(data = list(rateLimit = list(remaining = 5000))))
+               list(errors = list(list(message = "nope")))
+             })
   run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
            marker_delay = 0, search_delay = 0)
   scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db"))

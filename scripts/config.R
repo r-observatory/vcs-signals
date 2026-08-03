@@ -442,3 +442,11 @@ A,devin,open,"tier A iterates cheap-pass evidence, which devin can only enter vi
 A,jules,open,"tier A iterates cheap-pass evidence, which jules can only enter via the PR channel; that channel matched nothing until the login-shape fix, still unscanned",2026-08-01
 A,openhands,open,"tier A iterates cheap-pass evidence, which openhands can only enter via the PR channel; that channel matched nothing until the login-shape fix, still unscanned",2026-08-01
 '), stringsAsFactors = FALSE)
+
+# Tables the summary shard carries beyond the five it takes as named arguments.
+# Declared in one place because the export step used to name every table
+# explicitly, so three tables added to the pipeline were created empty in the
+# published database and never filled: a consumer reading them saw a table with
+# no rows, which is indistinguishable from a table nothing has written yet.
+SUMMARY_EXTRA_TABLES <- c("vcs_ai_models", "vcs_ai_rule_inventory",
+                          "vcs_ai_silent_channels")
