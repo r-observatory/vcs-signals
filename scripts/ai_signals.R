@@ -45,12 +45,8 @@ classify_tree_markers <- function(root_entries, github_entries) {
 dev_tooling_marker_cols <- function() vapply(DEV_TOOLING_MARKERS, function(m) m$col, character(1))
 
 #' The full classifier output column order: the flag cols plus the two computed columns.
-dev_tooling_vignette_cols <- function()
-  c("vignette_rmarkdown", "vignette_quarto", "vignette_sweave",
-    "vignette_html", "vignette_markdown")
-
 dev_tooling_columns <- function()
-  c(dev_tooling_marker_cols(), "readme_source", "has_ci", dev_tooling_vignette_cols())
+  c(dev_tooling_marker_cols(), "readme_source", "has_ci")
 
 #' Typed 0-row frame with the IDENTICAL column set/types classify_dev_tooling produces.
 .devtool_empty <- function() {
@@ -93,35 +89,6 @@ classify_dev_tooling <- function(root_entries, github_entries) {
   ci_cols <- grep("^ci_", names(flags), value = TRUE)
   row$has_ci <- as.integer(any(flags[ci_cols] == 1L))
 
-  # Vignette source kinds, scoped to the vignettes subtree. Computed rather than
-  # expressed as markers because a bare ".Rmd" suffix would match README.Rmd,
-  # which nearly every package has and which is not a vignette.
-  #
-  # These name the SOURCE, not the output. .Rnw and .Rtex go through LaTeX and so
-  # are PDF by construction, and .Rhtml is HTML by construction, but an .Rmd or
-  # .qmd can render to either and the extension does not say which. Claiming an
-  # output format for those would be inventing a fact.
-  vign <- grep("^vignettes/", root_entries, value = TRUE)
-  known <- grepl("\\.(rmd|qmd|rnw|rtex|rhtml|html|md)$", tolower(vign))
-  # Unknown covers two cases, and the second was reported as five confident
-  # zeros. The first is a vignettes/ directory whose contents were never
-  # fetched. The second is a directory whose entries carry no extension any of
-  # these patterns claims: the pkgdown convention puts sources one level down in
-  # vignettes/articles/, and the tree scan is one level deep, so the entries are
-  # subdirectories. Saying "no Quarto vignettes" there is a claim about files
-  # nobody has seen.
-  unknown <- isTRUE(row$has_vignettes == 1L) && !any(known)
-  kind <- function(exts) {
-    if (unknown) return(NA_integer_)
-    as.integer(any(vapply(exts, function(e)
-      any(endsWith(tolower(vign), tolower(e))), logical(1))))
-  }
-  row$vignette_rmarkdown <- kind(c(".rmd"))
-  row$vignette_quarto    <- kind(c(".qmd"))
-  row$vignette_sweave    <- kind(c(".rnw", ".rtex"))
-  row$vignette_html      <- kind(c(".rhtml", ".html"))
-  row$vignette_markdown  <- kind(c(".md"))
-
   row[, dev_tooling_columns(), drop = FALSE]
 }
 
@@ -139,9 +106,7 @@ dev_tooling_create_sql <- function() {
 %s,
     readme_source TEXT,
     has_ci INTEGER,
-%s,
-    PRIMARY KEY (repo_id)) WITHOUT ROWID", marker_ddl,
-          paste(sprintf("    %s INTEGER", dev_tooling_vignette_cols()), collapse = ",\n"))
+    PRIMARY KEY (repo_id)) WITHOUT ROWID", marker_ddl)
 }
 
 #' The real repository path for a Tier-D config marker's entry name. AI_MARKERS records the

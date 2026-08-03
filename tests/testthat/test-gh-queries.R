@@ -139,7 +139,6 @@ test_that("subtree entries reach the classifier under their own prefix", {
   expect_true("site/_litedown.yml" %in% got[[1]]$root_entries)
 
   r <- classify_dev_tooling(got[[1]]$root_entries, got[[1]]$github_entries)
-  expect_equal(r$vignette_quarto, 1L)
   expect_equal(r$has_litedown, 1L)
 })
 

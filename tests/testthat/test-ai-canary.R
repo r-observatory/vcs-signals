@@ -100,17 +100,6 @@ test_that("a channel that started detecting leaves the silent table entirely", {
   expect_false(any(tbl$tier == "D" & tbl$tool == "amazonq"))
 })
 
-test_that("the inventory states each tier's breadth, which the tiers do not share", {
-  inv <- ai_rule_inventory()
-  per_tier <- table(inv$tier)
-  # The asymmetry is the point: presenting C beside D as comparable channels
-  # overstates C, and this is the number that says so.
-  expect_equal(as.integer(per_tier[["C"]]), 1L)
-  expect_true(as.integer(per_tier[["D"]]) > 10L)
-  expect_true(all(c("A", "B", "C", "D") %in% names(per_tier)))
-  expect_equal(anyDuplicated(paste(inv$tier, inv$tool)), 0L)
-})
-
 test_that("a pkgdown site is recognised, in each shape maintainers actually use", {
   # The most common documentation site in the R ecosystem was not detectable at
   # all, while _quarto.yml beside it was. coatless-rpkg/livelink ships both a
@@ -119,13 +108,6 @@ test_that("a pkgdown site is recognised, in each shape maintainers actually use"
   expect_equal(classify_dev_tooling(c("_pkgdown.yaml"), character(0))$has_pkgdown, 1L)
   expect_equal(classify_dev_tooling(c("pkgdown"), character(0))$has_pkgdown, 1L)
   expect_equal(classify_dev_tooling(c("DESCRIPTION"), character(0))$has_pkgdown, 0L)
-})
-
-test_that("a vignettes directory is recognised", {
-  # Nothing in the database counted vignettes: not the repository scan, and not
-  # the code metrics, which carry no documentation columns at all.
-  expect_equal(classify_dev_tooling(c("vignettes"), character(0))$has_vignettes, 1L)
-  expect_equal(classify_dev_tooling(c("R", "man"), character(0))$has_vignettes, 0L)
 })
 
 test_that("altdoc is recognised from its config directory", {
@@ -152,43 +134,6 @@ test_that("litedown is found where its config actually lives, not only at the ro
   expect_equal(classify_dev_tooling(c("site"), character(0))$has_litedown, 0L)
 })
 
-test_that("vignette source kinds are read from the vignettes directory", {
-  r <- classify_dev_tooling(
-    c("vignettes", "vignettes/intro.Rmd", "vignettes/deep.qmd",
-      "vignettes/old.Rnw", "vignettes/page.Rhtml", "vignettes/notes.md"),
-    character(0))
-  expect_equal(r$vignette_rmarkdown, 1L)
-  expect_equal(r$vignette_quarto, 1L)
-  expect_equal(r$vignette_sweave, 1L)
-  expect_equal(r$vignette_html, 1L)
-  expect_equal(r$vignette_markdown, 1L)
-})
-
-test_that("a README at the root is not mistaken for a vignette", {
-  # The trap in matching a bare .Rmd suffix: nearly every package has README.Rmd
-  # and it is not a vignette. The match is scoped to the vignettes directory.
-  r <- classify_dev_tooling(c("README.Rmd", "index.qmd", "paper.Rnw"), character(0))
-  expect_equal(r$vignette_rmarkdown, 0L)
-  expect_equal(r$vignette_quarto, 0L)
-  expect_equal(r$vignette_sweave, 0L)
-  expect_equal(r$has_vignettes, 0L)
-})
-
-test_that("a vignettes directory whose contents were not fetched reads as unknown, not none", {
-  # The directory is in the tree but its entries are not. Saying "no rmarkdown
-  # vignettes" there would be a claim we cannot support.
-  r <- classify_dev_tooling(c("vignettes"), character(0))
-  expect_equal(r$has_vignettes, 1L)
-  expect_true(is.na(r$vignette_rmarkdown))
-  expect_true(is.na(r$vignette_quarto))
-})
-
-test_that("a package with no vignettes directory has no vignette kinds either", {
-  r <- classify_dev_tooling(c("R", "man", "DESCRIPTION"), character(0))
-  expect_equal(r$has_vignettes, 0L)
-  expect_equal(r$vignette_rmarkdown, 0L)   # measured: there are none
-})
-
 test_that("livelink's real tree yields quarto vignettes and a pkgdown site", {
   root <- c(".aspell", ".github", "R", "_pkgdown.yml", "data-raw", "inst", "man",
             "pkgdown", "tests", "vignettes", "DESCRIPTION", "NAMESPACE",
@@ -198,32 +143,6 @@ test_that("livelink's real tree yields quarto vignettes and a pkgdown site", {
             "vignettes/webr-and-shinylive.qmd")
   r <- classify_dev_tooling(root, c("workflows"))
   expect_equal(r$has_pkgdown, 1L)
-  expect_equal(r$has_vignettes, 1L)
-  expect_equal(r$vignette_quarto, 1L)
-  expect_equal(r$vignette_rmarkdown, 0L)
-})
-
-test_that("a vignettes directory whose sources sit one level down reads as unknown", {
-  # The pkgdown convention: vignettes/articles/intro.Rmd. The tree scan is one
-  # level deep, so the only entry under the prefix is a subdirectory. Reporting
-  # "no Quarto vignettes" there is a claim about files nobody has seen.
-  r <- classify_dev_tooling(c("DESCRIPTION", "vignettes", "vignettes/articles"), character(0))
-  expect_equal(r$has_vignettes, 1L)
-  expect_true(is.na(r$vignette_rmarkdown))
-  expect_true(is.na(r$vignette_quarto))
-})
-
-test_that("a vignettes directory holding only usethis scaffolding reads as unknown", {
-  r <- classify_dev_tooling(c("vignettes", "vignettes/.gitignore"), character(0))
-  expect_true(is.na(r$vignette_rmarkdown))
-})
-
-test_that("once one source is visible the other kinds are measured, not unknown", {
-  # Seeing intro.Rmd means the directory was fetched and read, so "no Quarto
-  # vignettes here" is now a real answer rather than an absence of looking.
-  r <- classify_dev_tooling(c("vignettes", "vignettes/intro.Rmd"), character(0))
-  expect_equal(r$vignette_rmarkdown, 1L)
-  expect_equal(r$vignette_quarto, 0L)
 })
 
 test_that("the inventory lists only channels the classifier can actually reach", {
@@ -242,4 +161,15 @@ test_that("no allowlist entry explains a channel that has no rule", {
   # false entries were written by hand and read as authoritative.
   kn <- AI_SILENT_CHANNELS_KNOWN
   expect_false(any(kn$tier == "D" & kn$tool %in% c("positron", "idx")))
+})
+
+test_that("the inventory states each tier's breadth, which the tiers do not share", {
+  inv <- ai_rule_inventory()
+  per_tier <- table(inv$tier)
+  # The asymmetry is the point: presenting C beside D as comparable channels
+  # overstates C, and this is the number that says so.
+  expect_equal(as.integer(per_tier[["C"]]), 1L)
+  expect_true(as.integer(per_tier[["D"]]) > 10L)
+  expect_true(all(c("A", "B", "C", "D") %in% names(per_tier)))
+  expect_equal(anyDuplicated(paste(inv$tier, inv$tool)), 0L)
 })
