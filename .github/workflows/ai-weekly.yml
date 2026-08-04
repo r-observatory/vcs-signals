@@ -150,10 +150,25 @@ jobs:
           else
             Rscript scripts/ai_backfill.R gate-incremental
           fi
+      # The published summary rides along with the roster. The deep job needs it
+      # to know which repos an earlier dispatch of the same campaign already
+      # finished, and it has no token of its own to fetch anything. Without it
+      # every dispatch restarts each shard from repo 1 and the tail is never
+      # reached. Tolerates absence, because a first publish has none.
+      - name: Fetch the published summary for the deep pass
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download current --repo ${{ github.repository }} \
+            --pattern 'vcs-signals-summary.db' --dir out --clobber || \
+            echo "no published summary yet; the deep pass will skip nothing"
       - uses: actions/upload-artifact@v7
         with:
           name: ai-flagged-roster
-          path: out/vcs-ai-flagged-roster.db
+          path: |
+            out/vcs-ai-flagged-roster.db
+            out/vcs-signals-summary.db
+          if-no-files-found: error
       # The confirmation-row partial (refreshes last_confirmed_date for already-published
       # repos skipped from the deep matrix below, no new API calls). Uploaded separately from
       # the flagged roster so the merge job can gather it alongside the deep shard-* artifacts.
