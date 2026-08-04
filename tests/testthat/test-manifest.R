@@ -456,3 +456,51 @@ test_that("a real loss in a column both builds have is still refused", {
   expect_true(any(grepl("authored_commits", r)))
   expect_true(any(grepl("markers", r)))
 })
+
+test_that("a publish and a reseed keep the extra tables, both ways round", {
+  # .embed_recent_tables was fixed to carry these into the recent shard and
+  # seed_working_db was not, so every run read them back as empty, rebuilt a
+  # summary without them, and the gate refused the publish. The earlier test
+  # checked only the outbound half, which is why the inbound half stayed broken.
+  remote <- tempfile("rt_rem_"); dir.create(remote)
+  out    <- tempfile("rt_out_"); dir.create(out)
+
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+  ensure_repo_schema(con); ensure_series_schema(con)
+  DBI::dbExecute(con, "INSERT INTO signals_series VALUES ('R1','2026-07-06','stars',10)")
+  DBI::dbExecute(con, "INSERT INTO vcs_ai_rule_inventory (tier, tool, ruleset_version)
+    VALUES ('D','claude','v1'), ('B','codex','v1'), ('A','copilot','v1')")
+  DBI::dbExecute(con, "INSERT INTO vcs_ai_silent_channels (tier, tool, status, reason, recorded_on)
+    VALUES ('B','replit','open','only the author trailer remains','2026-08-01')")
+  DBI::dbExecute(con, "INSERT INTO vcs_ai_models
+    (repo_id, tool, family, version, commits, window_complete)
+    VALUES ('R1','claude','Opus','4.8',12,1)")
+
+  io_pub <- list(release_exists = function() FALSE,
+                 download = function(pattern, dir) FALSE,
+                 upload = function(path) {
+                   file.copy(path, file.path(remote, basename(path)), overwrite = TRUE)
+                 })
+  publish(io_pub, con, out, "v1", "live", force_full = TRUE)
+  DBI::dbDisconnect(con)
+
+  # Now the inbound half: a later run seeds its working DB from what was published.
+  work <- tempfile(fileext = ".db")
+  seed_dir <- tempfile("rt_seed_"); dir.create(seed_dir)
+  io_seed <- list(release_exists = function() TRUE,
+                  download = function(pattern, dir) {
+                    src <- file.path(remote, pattern)
+                    if (!file.exists(src)) return(FALSE)
+                    file.copy(src, file.path(dir, basename(pattern)), overwrite = TRUE)
+                  },
+                  upload = function(path) invisible(NULL))
+  seed_working_db(io_seed, seed_dir, work)
+
+  wc <- DBI::dbConnect(RSQLite::SQLite(), work)
+  on.exit(DBI::dbDisconnect(wc), add = TRUE)
+  for (nm in SUMMARY_EXTRA_TABLES) {
+    n <- DBI::dbGetQuery(wc, sprintf('SELECT COUNT(*) AS n FROM "%s"', nm))$n
+    expect_true(n > 0, info = paste(nm, "came back empty after the round trip"))
+  }
+  expect_equal(DBI::dbGetQuery(wc, "SELECT COUNT(*) AS n FROM vcs_ai_rule_inventory")$n, 3L)
+})

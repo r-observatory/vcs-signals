@@ -111,8 +111,14 @@ seed_working_db <- function(io, out_dir, working_path) {
   # prior summary row to read for a repo not collected this run: it is
   # embedded into the published recent shard by .embed_recent_tables, so it
   # must be seeded back the same way the other four tables are.
+  # SUMMARY_EXTRA_TABLES belongs here for the same reason it belongs in
+  # .embed_recent_tables, which was fixed and this was not. The recent shard
+  # carries the three AI tables; this is what reads them back out of it. Left
+  # off, every run starts with them empty, rebuilds a summary without them, and
+  # the regression gate refuses the publish.
   for (nm in c("repos", "repo_packages", "series_latest", "pipeline_state",
-               "signals_series", "vcs_signals_summary", "vcs_ai_signals", "vcs_dev_tooling")) {
+               "signals_series", "vcs_signals_summary", "vcs_ai_signals", "vcs_dev_tooling",
+               SUMMARY_EXTRA_TABLES)) {
     if (DBI::dbExistsTable(pcon, nm)) {
       df <- DBI::dbReadTable(pcon, nm)
       if (nrow(df) > 0) DBI::dbWriteTable(wcon, nm, df, append = TRUE)

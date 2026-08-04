@@ -92,11 +92,18 @@ test_that("a search query containing a space survives the shell", {
   # Asserting on the shell form rather than on a live call, because the failure is
   # in how the argument is handed over, not in what the API does with it.
   src <- paste(readLines("../../scripts/github.R", warn = FALSE), collapse = "\n")
-  # Counted against the call sites rather than a fixed number, so the guard holds
-  # as helpers are added or removed: every search/commits call must quote its q.
-  callsites <- length(gregexpr('"search/commits"', src, fixed = TRUE)[[1]])
-  quoted    <- length(gregexpr('shQuote(paste0("q=", q))', src, fixed = TRUE)[[1]])
+  # gregexpr returns -1 when nothing matches, and length(-1) is 1, so counting
+  # this way reported one match for zero. With a single call site that made the
+  # guard read 1 == 1 and pass whether the quoting was there or not: removing
+  # shQuote entirely left the whole suite green. Count occurrences properly.
+  n_matches <- function(pat, x) {
+    m <- gregexpr(pat, x, fixed = TRUE)[[1]]
+    if (length(m) == 1L && m[1] == -1L) 0L else length(m)
+  }
+  callsites <- n_matches('"search/commits"', src)
+  quoted    <- n_matches('shQuote(paste0("q=", q))', src)
   expect_gt(callsites, 0L)
+  expect_gt(quoted, 0L)
   expect_equal(quoted, callsites,
                info = "every commit-search helper quotes the q argument")
   expect_false(grepl('"-f", paste0("q=", q),', src, fixed = TRUE),
@@ -167,4 +174,18 @@ test_that("a fake with no rateLimit field is not throttled", {
   # spent budget would stop every fixture-driven scan.
   io <- list(graphql = function(q) list(data = list(repository = list(x = 1))))
   expect_true(is.infinite(graphql_rate_remaining(io)))
+})
+
+
+test_that("the counting helper itself distinguishes none from one", {
+  # The bug this guard had. gregexpr signals no match with -1, whose length is
+  # 1, so a naive count reports one match for zero and any equality against
+  # another count of one silently holds.
+  n_matches <- function(pat, x) {
+    m <- gregexpr(pat, x, fixed = TRUE)[[1]]
+    if (length(m) == 1L && m[1] == -1L) 0L else length(m)
+  }
+  expect_equal(n_matches("zzz", "abc"), 0L)
+  expect_equal(length(gregexpr("zzz", "abc", fixed = TRUE)[[1]]), 1L)  # the trap
+  expect_equal(n_matches("a", "abcabc"), 2L)
 })

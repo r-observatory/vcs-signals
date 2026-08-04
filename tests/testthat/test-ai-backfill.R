@@ -1185,3 +1185,25 @@ test_that("run_deep actually skips the repo, not just knows it could", {
   expect_true("todo" %in% reached)
   expect_false("done" %in% reached)   # already confirmed today: not rescanned
 })
+
+test_that("the deep job is given the file its resume check reads", {
+  # load_confirmed_today looks for vcs-signals-summary.db beside the roster.
+  # The deep job downloads the ai-flagged-roster artifact and has no token to
+  # fetch anything else, so unless the gate puts the summary INTO that artifact
+  # the check reads nothing, every dispatch restarts each shard from repo 1, and
+  # the second half of the roster is never reached. Asserted against the
+  # workflow because that is where the wiring lives.
+  path <- ".github/workflows/ai-weekly.yml"
+  for (up in c("", "../", "../../")) {
+    if (file.exists(paste0(up, path))) { path <- paste0(up, path); break }
+  }
+  if (!file.exists(path)) skip("workflow not reachable from the test directory")
+  wf <- paste(readLines(path, warn = FALSE), collapse = "\n")
+
+  expect_true(grepl("vcs-signals-summary.db", wf, fixed = TRUE),
+              info = "the gate fetches the published summary")
+  # And ships it in the same artifact the deep job already downloads.
+  art <- regmatches(wf, regexpr("name: ai-flagged-roster.*?if-no-files-found", wf))
+  expect_true(length(art) == 1 && grepl("vcs-signals-summary.db", art[1], fixed = TRUE),
+              info = "the summary is in the roster artifact, not a separate one")
+})
