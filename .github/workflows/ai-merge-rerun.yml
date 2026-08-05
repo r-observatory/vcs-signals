@@ -1,0 +1,107 @@
+name: ai-merge-rerun
+# Re-runs the merge alone, against the artifacts an earlier ai-weekly run
+# already produced.
+#
+# The deep scan costs many hours and its shards exist in exactly one place: the
+# artifacts of the run that produced them. When the merge job failed after a
+# 39-hour scan whose twelve deep shards had all succeeded, there was no way to
+# retry it. GitHub's own "re-run failed jobs" restarts the scan rather than the
+# merge, so the only recovery was downloading the artifacts to a laptop, staging
+# them by hand and publishing production data from there.
+#
+# Pointing this at the failed run's id merges those same artifacts in CI, with
+# the real secrets, and publishes. It is deliberately merge-only: it never
+# enumerates, gates or scans, so it cannot spend API budget or overwrite the
+# roster.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Run id of the ai-weekly run whose shards should be merged"
+        required: true
+        type: string
+permissions:
+  contents: write
+  actions: read      # reading another run's artifacts needs this; the default token lacks it
+concurrency:
+  # Shared with ai-weekly on purpose. Both publish to the same release, and a
+  # rerun racing a live weekly merge would have them clobbering each other's
+  # upload of vcs-signals-summary.db.
+  group: vcs-signals-ai-weekly
+  cancel-in-progress: false
+env:
+  TZ: UTC
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: |
+            any::DBI
+            any::RSQLite
+            any::jsonlite
+            any::testthat
+
+      # The three downloads mirror the merge job in ai-weekly.yml, with run-id
+      # pointing at the earlier run instead of this one.
+      - uses: actions/download-artifact@v8
+        with:
+          path: parts
+          pattern: shard-*
+          merge-multiple: true
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      # Optional for the same reason it is optional in ai-weekly: a full gate
+      # skips nobody, so run_gate writes no confirmation partial.
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: ai-confirm-shard
+          path: parts
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v8
+        with:
+          path: parts
+          pattern: dev-tooling-*
+          merge-multiple: true
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # A pattern that matches nothing is a success, not an error, so a wrong or
+      # expired run id would otherwise reach the merge with an empty parts
+      # directory. run_merge would then fold zero incoming rows over the
+      # published summary and republish it unchanged, reporting success. That
+      # looks identical to a real merge and would be read as "the rerun worked".
+      # Artifacts expire, so a stale id is the expected way to get here.
+      - name: Refuse an empty parts directory
+        run: |
+          shards=$(find parts -name 'vcs-ai-shard-*.db' 2>/dev/null | wc -l | tr -d ' ')
+          tooling=$(find parts -name 'vcs-dev-tooling-*.db' 2>/dev/null | wc -l | tr -d ' ')
+          echo "run ${{ inputs.run_id }}: ${shards} ai shard(s), ${tooling} dev-tooling shard(s)"
+          if [ "$shards" -eq 0 ] && [ "$tooling" -eq 0 ]; then
+            echo "::error::No shards were downloaded from run ${{ inputs.run_id }}. Either the id is wrong or its artifacts have expired. Refusing to publish a merge with no incoming data." >&2
+            exit 1
+          fi
+
+      - name: Merge and publish
+        env:
+          VCS_SIGNALS_TOKEN: ${{ secrets.VCS_SIGNALS_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VCS_OUT: out
+          VCS_PARTS: parts
+        run: Rscript scripts/ai_backfill.R merge
+
+      - name: Refresh release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -f out/release_notes.md ]; then
+            gh release edit current --repo ${{ github.repository }} --notes-file out/release_notes.md
+          fi
