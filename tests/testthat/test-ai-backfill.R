@@ -1207,3 +1207,23 @@ test_that("the deep job is given the file its resume check reads", {
   expect_true(length(art) == 1 && grepl("vcs-signals-summary.db", art[1], fixed = TRUE),
               info = "the summary is in the roster artifact, not a separate one")
 })
+
+test_that("the merge does not require an artifact a full gate never writes", {
+  # run_gate_incremental writes the confirmation partial, for repos it skipped.
+  # run_gate skips nobody and writes none. The merge downloaded it
+  # unconditionally, so a full-gate run failed at the last step after every one
+  # of its twelve deep shards had succeeded.
+  path <- ".github/workflows/ai-weekly.yml"
+  for (up in c("", "../", "../../")) {
+    if (file.exists(paste0(up, path))) { path <- paste0(up, path); break }
+  }
+  if (!file.exists(path)) skip("workflow not reachable from the test directory")
+  wf <- readLines(path, warn = FALSE)
+
+  at <- grep("name: ai-confirm-shard", wf)
+  expect_true(length(at) >= 1)
+  # The download in the merge job is the last one. It must tolerate absence.
+  block <- paste(wf[max(1, tail(at, 1) - 6):tail(at, 1)], collapse = "\n")
+  expect_true(grepl("continue-on-error: true", block, fixed = TRUE),
+              info = "the merge tolerates a missing confirmation partial")
+})
