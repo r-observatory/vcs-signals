@@ -246,7 +246,13 @@ jobs:
       # filename (vcs-ai-shard-confirm.db) already matches run_merge's unchanged
       # vcs-ai-shard-*.db glob, so no merge code change is needed - it folds through
       # ai_onset_reducer alongside the deep shards.
+      # Optional, and absent by design on a full gate. The confirmation partial
+      # refreshes last_confirmed_date for repos the incremental gate SKIPPED, and
+      # a full gate skips nobody, so run_gate never writes one. Downloading it
+      # unconditionally failed the merge after a 39-hour scan whose twelve deep
+      # shards had all succeeded.
       - uses: actions/download-artifact@v8
+        continue-on-error: true
         with:
           name: ai-confirm-shard
           path: parts
