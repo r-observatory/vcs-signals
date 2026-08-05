@@ -1227,3 +1227,82 @@ test_that("the merge does not require an artifact a full gate never writes", {
   expect_true(grepl("continue-on-error: true", block, fixed = TRUE),
               info = "the merge tolerates a missing confirmation partial")
 })
+
+.rerun_workflow <- function() {
+  path <- ".github/workflows/ai-merge-rerun.yml"
+  for (up in c("", "../", "../../")) {
+    if (file.exists(paste0(up, path))) return(readLines(paste0(up, path), warn = FALSE))
+  }
+  NULL
+}
+
+test_that("a failed merge can be retried against the run that produced the shards", {
+  # Fixing the one cause of the 39-hour loss left every other cause intact:
+  # GitHub's re-run restarts the scan, not the merge, so a merge that fails for
+  # any reason still stranded the shards until they expired.
+  wf <- .rerun_workflow()
+  if (is.null(wf)) skip("workflow not reachable from the test directory")
+  txt <- paste(wf, collapse = "\n")
+
+  expect_true(grepl("run_id:", txt, fixed = TRUE),
+              info = "the run whose artifacts to merge is an input")
+
+  # Every download must read the NAMED run. One left on the default reads this
+  # run, which has no artifacts, and contributes nothing while succeeding.
+  downloads <- grep("uses: actions/download-artifact", wf)
+  expect_equal(length(downloads), 3L)
+  for (d in downloads) {
+    block <- paste(wf[d:min(length(wf), d + 8)], collapse = "\n")
+    expect_true(grepl("run-id: ${{ inputs.run_id }}", block, fixed = TRUE),
+                info = sprintf("download at line %d reads the named run", d))
+  }
+
+  # Cross-run artifact reads are forbidden to the default token without this.
+  expect_true(grepl("actions: read", txt, fixed = TRUE),
+              info = "the token may read another run's artifacts")
+
+  # Both publish vcs-signals-summary.db to the same release.
+  expect_true(grepl("group: vcs-signals-ai-weekly", txt, fixed = TRUE),
+              info = "a rerun cannot race a live weekly merge")
+})
+
+test_that("the retry refuses to publish when it downloaded no shards", {
+  # A download pattern that matches nothing SUCCEEDS. With a wrong or expired
+  # run id the merge would fold zero incoming rows over the published summary
+  # and republish it unchanged, reporting success. Indistinguishable from a
+  # real merge, and it would be read as the salvage having worked.
+  wf <- .rerun_workflow()
+  if (is.null(wf)) skip("workflow not reachable from the test directory")
+  txt <- paste(wf, collapse = "\n")
+
+  guard <- grep("Refuse an empty parts directory", wf)
+  expect_equal(length(guard), 1L)
+
+  # The guard must sit between the downloads and the merge. Placed after the
+  # merge it would report the failure only once the bad publish had happened.
+  expect_true(max(grep("uses: actions/download-artifact", wf)) < guard,
+              info = "the guard runs after the downloads")
+  expect_true(guard < grep("name: Merge and publish", wf)[1],
+              info = "the guard runs before anything is published")
+
+  # And it must actually stop the run rather than only print.
+  block <- paste(wf[guard:min(length(wf), guard + 12)], collapse = "\n")
+  expect_true(grepl("exit 1", block, fixed = TRUE),
+              info = "an empty parts directory fails the run")
+})
+
+test_that("the retry merges and does not scan", {
+  # The shards are irreplaceable and the API budget is shared. A retry that
+  # re-enumerated or re-gated could overwrite the roster it is meant to salvage.
+  wf <- .rerun_workflow()
+  if (is.null(wf)) skip("workflow not reachable from the test directory")
+  txt <- paste(wf, collapse = "\n")
+
+  expect_true(grepl("ai_backfill.R merge", txt, fixed = TRUE))
+  for (verb in c("ai_backfill.R enumerate", "ai_backfill.R gate", "ai_backfill.R deep")) {
+    expect_false(grepl(verb, txt, fixed = TRUE), info = verb)
+  }
+  # One job. A matrix here would mean it is scanning something.
+  expect_false(grepl("strategy:", txt, fixed = TRUE),
+               info = "no fan-out, so nothing is being scanned")
+})
