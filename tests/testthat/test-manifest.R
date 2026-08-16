@@ -271,13 +271,24 @@ test_that("the churn allowance is nothing at all on a small table", {
   path
 }
 
-.mk_models <- function(repos, rows_each) {
+.mk_models <- function(repos, rows_each, tool = "claude", complete = 1L) {
   do.call(rbind, lapply(seq_along(repos), function(i) data.frame(
-    repo_id = repos[i], tool = "claude", provider = NA_character_,
+    repo_id = repos[i], tool = tool, provider = NA_character_,
     family = sprintf("Opus%d", seq_len(rows_each[i])), version = "4.8",
     context_window = NA_character_, commits = 3L,
-    first_seen = "2025-01-01", last_seen = "2026-01-01", window_complete = 1L,
+    first_seen = "2025-01-01", last_seen = "2026-01-01",
+    window_complete = as.integer(complete),
     stringsAsFactors = FALSE)))
+}
+
+# The table as the last weekly merge wrote it, under the list that was in the
+# config that week. B/devin was an open question then and is retired now.
+.kn_before_devin_answered <- function() {
+  rbind(AI_SILENT_CHANNELS_KNOWN, data.frame(
+    tier = "B", tool = "devin", status = "open",
+    reason = paste("rule added 2026-08-01, unscanned; and it can only fire on",
+                   "a repo some OTHER tool already flagged"),
+    recorded_on = "2026-08-01", stringsAsFactors = FALSE))
 }
 
 test_that("a silent channel that started detecting is progress, not a loss", {
@@ -299,6 +310,81 @@ test_that("a silent-channel table published empty is still refused", {
   kn <- AI_SILENT_CHANNELS_KNOWN
   prev <- .mk_extra(tempfile(fileext = ".db"), silent = kn)
   nxt  <- .mk_extra(tempfile(fileext = ".db"))
+  expect_match(paste(summary_regressions(prev, nxt), collapse = " "),
+               "vcs_ai_silent_channels")
+})
+
+test_that("the table the last merge left republishes against a config that moved", {
+  # The production shape, and none of the tests above reach it: both sides of
+  # every one of them come out of the AI_SILENT_CHANNELS_KNOWN in force right
+  # now, so the case where the published table was written by an EARLIER list
+  # was never exercised.
+  #
+  # Only the weekly AI merge rebuilds this table. The daily update seeds every
+  # SUMMARY_EXTRA_TABLE verbatim out of the recent shard and publishes it
+  # again, so between a retirement in the config and the next merge, every
+  # daily run hands the gate a table written under the older list. Here that is
+  # B/devin, carried as an open question by the merge that ran before it
+  # started detecting, and retired from the list in the same change that
+  # rewrote this rule. Nothing about that build is wrong, and refusing it is
+  # the same refusal-of-a-correct-build this gate was rewritten to stop.
+  was  <- .kn_before_devin_answered()
+  prev <- .mk_extra(tempfile(fileext = ".db"), silent = was)
+  nxt  <- .mk_extra(tempfile(fileext = ".db"), silent = was)
+  expect_equal(summary_regressions(prev, nxt), character(0))
+})
+
+test_that("the merge that retires an answered claim publishes against the older table", {
+  # The other half of the same skew, one week later: the published table is the
+  # one the previous merge wrote under the older list, and this merge rebuilds
+  # it from the list as it stands, so the retired entry leaves. Eleven rows
+  # become ten, which is the run that was refused, and every remaining row is
+  # recorded in the list in force.
+  prev <- .mk_extra(tempfile(fileext = ".db"), silent = .kn_before_devin_answered())
+  nxt  <- .mk_extra(tempfile(fileext = ".db"), silent = AI_SILENT_CHANNELS_KNOWN)
+  expect_equal(summary_regressions(prev, nxt), character(0))
+})
+
+test_that("a row the outgoing build introduced is checked against the list in force", {
+  # The carry-forward above is an exemption for rows that were already
+  # published, not an exemption for the table. A row this build put there for
+  # the first time has no earlier authority to inherit.
+  was  <- .kn_before_devin_answered()
+  bad  <- was[1, , drop = FALSE]
+  bad$tool <- "nosuchtool"; bad$status <- "genuine"
+  prev <- .mk_extra(tempfile(fileext = ".db"), silent = was)
+  nxt  <- .mk_extra(tempfile(fileext = ".db"), silent = rbind(was, bad))
+  expect_match(paste(summary_regressions(prev, nxt), collapse = " "), "nosuchtool")
+})
+
+test_that("the gate does not stand down when the list it checks against is missing", {
+  # A guard that quietly softens when a dependency is missing is how three
+  # tables got the wrong rule in the first place. With no list in scope the
+  # strict reading is that nothing is recorded, so every row this build
+  # introduced has to say for itself that no claim exists.
+  kn <- AI_SILENT_CHANNELS_KNOWN
+  withr::defer(assign("AI_SILENT_CHANNELS_KNOWN", kn, envir = globalenv()))
+  prev <- .mk_extra(tempfile(fileext = ".db"), silent = kn[1, , drop = FALSE])
+  nxt  <- .mk_extra(tempfile(fileext = ".db"), silent = kn)
+  rm("AI_SILENT_CHANNELS_KNOWN", envir = globalenv())
+  expect_true(length(summary_regressions(prev, nxt)) > 0)
+})
+
+test_that("a silent-channel table the gate cannot read is refused, not waved through", {
+  # Written before the status column existed, rows$status comes back NULL, and
+  # the subset that asks which rows are unexplained is then empty for reasons
+  # that have nothing to do with the rows. The gate passed a table it could not
+  # read, silently, which is worse than the loss it was watching for.
+  prev <- .mk_extra(tempfile(fileext = ".db"), silent = AI_SILENT_CHANNELS_KNOWN)
+  nxt  <- tempfile(fileext = ".db")
+  con <- DBI::dbConnect(RSQLite::SQLite(), nxt)
+  ensure_repo_schema(con); ensure_series_schema(con)
+  DBI::dbExecute(con, "DROP TABLE vcs_ai_silent_channels")
+  DBI::dbExecute(con, "CREATE TABLE vcs_ai_silent_channels (
+    tier TEXT NOT NULL, tool TEXT NOT NULL, reason TEXT, recorded_on TEXT)")
+  DBI::dbExecute(con, "INSERT INTO vcs_ai_silent_channels
+    VALUES ('B','replit','only the commit-author trailer remains','2026-08-01')")
+  DBI::dbDisconnect(con)
   expect_match(paste(summary_regressions(prev, nxt), collapse = " "),
                "vcs_ai_silent_channels")
 })
@@ -347,19 +433,53 @@ test_that("an inventory published empty is refused, which is the bug that starte
                "vcs_ai_rule_inventory")
 })
 
-test_that("a narrower scan window publishes fewer model rows without refusing the build", {
-  # A model tally describes the window that was examined this run. Re-scanning a
-  # repository over a shorter window legitimately yields fewer rows for it, and
-  # the merge says so in as many words where it replaces them.
+test_that("a scan that stopped reading past the first hit is refused", {
+  # The loss the row count was there for, and the reason a repository count
+  # cannot replace it: every repository stays in the table, carrying one model
+  # row where it carried its whole history. config.R records how close this
+  # came: the scan asked for a single hit until the page size went in, and
+  # "asking for a page rather than a single hit turns the same response into
+  # the repository's model history". Put AI_SEARCH_PAGE back to 1 and this is
+  # the shape the merge publishes, with the repository count untouched.
   repos <- sprintf("github.com/o/r%d", 1:20)
   prev <- .mk_extra(tempfile(fileext = ".db"), models = .mk_models(repos, rep(5L, 20)))
   nxt  <- .mk_extra(tempfile(fileext = ".db"), models = .mk_models(repos, rep(1L, 20)))
+  expect_match(paste(summary_regressions(prev, nxt), collapse = " "), "vcs_ai_models")
+})
+
+test_that("a tool whose search was refused this run does not refuse the publish", {
+  # The merge deletes every model row a repository has and writes back what the
+  # shards brought, and a throttled search brings nothing for that tool: the
+  # deep pass counts the refusal and moves on rather than recording a zero. So
+  # a (repository, tool) pair leaving the table is the throttle, not a loss of
+  # the scan's reach, and it happens often enough that refusing it would red
+  # most weeks.
+  repos <- sprintf("github.com/o/r%d", 1:20)
+  both <- rbind(.mk_models(repos, rep(3L, 20)),
+                .mk_models(repos, rep(2L, 20), tool = "codex"))
+  prev <- .mk_extra(tempfile(fileext = ".db"), models = both)
+  nxt  <- .mk_extra(tempfile(fileext = ".db"), models = .mk_models(repos, rep(3L, 20)))
+  expect_equal(summary_regressions(prev, nxt), character(0))
+})
+
+test_that("a window the scan never saw the end of is not held to what it showed", {
+  # window_complete is 0 when the search reported more hits than the page
+  # carried, so those rows are a prefix of a history cut off at whatever page
+  # size was in force when they were written. They are not a statement about
+  # what the repository has, and nothing can be said to have been lost from
+  # them.
+  repos <- sprintf("github.com/o/r%d", 1:20)
+  prev <- .mk_extra(tempfile(fileext = ".db"),
+                    models = .mk_models(repos, rep(5L, 20), complete = 0L))
+  nxt  <- .mk_extra(tempfile(fileext = ".db"),
+                    models = .mk_models(repos, rep(2L, 20), complete = 0L))
   expect_equal(summary_regressions(prev, nxt), character(0))
 })
 
 test_that("model rows disappearing for whole repositories is still refused", {
-  # Coverage, not row count, is what a merge folding renamed repositories
-  # destroys.
+  # Coverage, the other half. Every repository that carried model rows must
+  # still carry them: the table has shipped empty before, and a seed step that
+  # forgets it takes every repository out at once.
   repos <- sprintf("github.com/o/r%d", 1:20)
   prev <- .mk_extra(tempfile(fileext = ".db"), models = .mk_models(repos, rep(5L, 20)))
   nxt  <- .mk_extra(tempfile(fileext = ".db"),

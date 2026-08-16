@@ -153,6 +153,27 @@ test_that("an answered question is not re-printed as an open one", {
   expect_match(msg, "B/devin")
 })
 
+test_that("a recorded zero whose rule was retired is not reported as detecting", {
+  # "Detecting" is measured as absence from the silent set, and the silent set
+  # is built from ai_rule_inventory(), so a channel whose rule is no longer in
+  # the inventory is absent from it for the opposite reason: nothing scans for
+  # it at all. .positai and .idx were removed from the inventory on purpose, so
+  # a recorded claim outliving its rule is a shape this project has already
+  # produced once. The advice is the same either way, retire the entry, but the
+  # sentence under it is the one output this project treats as evidence about a
+  # zero, and it would have said the tool was working.
+  kn <- data.frame(
+    tier = "D", tool = "positron", status = "genuine",
+    reason = "the marker is ambient, written whether or not AI was used",
+    recorded_on = "2026-07-01", stringsAsFactors = FALSE)
+  rows <- data.frame(repo_id = "a", tool = "claude", evidence_tiers = "D",
+                     stringsAsFactors = FALSE)
+  msg <- paste(capture_messages(ai_canary_check(rows, kn, roster_n = 15000L)), collapse = "")
+  expect_false(grepl("detecting; the claim recorded", msg, fixed = TRUE))
+  expect_match(msg, "D/positron")
+  expect_match(msg, "no rule")
+})
+
 test_that("a question that is still open is still re-printed", {
   kn <- data.frame(
     tier = "B", tool = "devin", status = "open",

@@ -474,19 +474,38 @@ ai_canary_check <- function(signals, known = AI_SILENT_CHANNELS_KNOWN,
   inv <- ai_rule_inventory()
   # Every channel still at zero, recorded or not, read from this run's onsets.
   measured <- ai_silent_channels(signals, NULL)
-  still <- paste(known$tier, known$tool, sep = "\t") %in%
-           paste(measured$tier, measured$tool, sep = "\t")
+  recorded_key <- paste(known$tier, known$tool, sep = "\t")
+  still <- recorded_key %in% paste(measured$tier, measured$tool, sep = "\t")
+  # A channel absent from the silent set is not necessarily detecting. The
+  # silent set is derived from ai_rule_inventory(), so a recorded claim whose
+  # rule has left the inventory is absent from it for the opposite reason:
+  # nothing scans for that channel at all. This project retires rules on
+  # purpose, .positai and .idx among them, so an entry outliving its rule is a
+  # live shape rather than a hypothetical, and the first version of this report
+  # printed one as "detecting". Retiring the entry is the right advice either
+  # way, and the sentence under it is the one line this project reads as
+  # evidence about a zero, so it has to be the true one.
+  has_rule <- recorded_key %in% paste(inv$tier, inv$tool, sep = "\t")
   message(sprintf(paste0("AI detection canary: %d channels with a rule, %d silent ",
                          "(%d recorded, %d unexplained), %d detecting"),
                   nrow(inv), nrow(measured), sum(still), nrow(unexplained),
                   nrow(inv) - nrow(measured)))
-  answered <- known[!still, , drop = FALSE]
+  answered <- known[has_rule & !still, , drop = FALSE]
   if (nrow(answered) > 0) {
     message("  recorded zeros the data has answered, retire them from AI_SILENT_CHANNELS_KNOWN:")
     for (i in seq_len(nrow(answered)))
       message(sprintf("    %s/%-9s detecting; the claim recorded %s was: %s",
                       answered$tier[i], answered$tool[i], answered$recorded_on[i],
                       answered$reason[i]))
+  }
+  orphaned <- known[!has_rule, , drop = FALSE]
+  if (nrow(orphaned) > 0) {
+    message("  recorded zeros with no rule left, retire them from AI_SILENT_CHANNELS_KNOWN:")
+    for (i in seq_len(nrow(orphaned)))
+      message(sprintf(paste0("    %s/%-9s no rule in the inventory scans for it, so its zero ",
+                             "is not a measurement; the claim recorded %s was: %s"),
+                      orphaned$tier[i], orphaned$tool[i], orphaned$recorded_on[i],
+                      orphaned$reason[i]))
   }
   # Only the questions the data has not settled. Re-printing a claim about a
   # zero that is gone is not visibility, it is the file talking to itself.

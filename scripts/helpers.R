@@ -1083,6 +1083,20 @@ build_release_notes <- function(summary, changed_shards, tag) {
 # Elementwise, and a NULL status is not a claim of anything.
 .gate_status_is <- function(x, want) !is.na(x) & x == want
 
+# One string per row over the named columns, so two frames can be compared as
+# sets. NA is a value here, not a wildcard: three of the model key columns are
+# NA for every tool whose trailer names no model, and a join that dropped them
+# would exempt most of the table from the only rule that reads it.
+.gate_key <- function(df, cols) {
+  if (is.null(df) || nrow(df) == 0) return(character(0))
+  parts <- lapply(cols, function(k) {
+    v <- as.character(df[[k]])
+    v[is.na(v)] <- "\001"
+    v
+  })
+  do.call(paste, c(parts, list(sep = "\t")))
+}
+
 #' The rule for a table that only ever accumulates.
 #'
 #' What the gate was written for. A row that is in the published build and not
@@ -1122,8 +1136,30 @@ build_release_notes <- function(summary, changed_shards, tag) {
 #' no row count worth gating on, in either direction.
 #'
 #' What is worth refusing: the table published empty while recorded zeros stand,
-#' and a row that is neither a recorded claim nor an admission that no claim
-#' exists. Both mean the builder produced something nobody wrote.
+#' and a row this build INTRODUCED that is neither a recorded claim nor an
+#' admission that no claim exists. Both mean the builder produced something
+#' nobody wrote.
+#'
+#' Introduced, and not simply present, because of when this table is written
+#' against when it is read. Only the weekly AI merge rebuilds it. The daily
+#' update seeds every SUMMARY_EXTRA_TABLE verbatim out of the recent shard and
+#' publishes it again, so on six days in seven the outgoing table is the
+#' previous merge's table, byte for byte, produced by a config that has since
+#' moved. The first version of this rule checked every published row against
+#' AI_SILENT_CHANNELS_KNOWN as it stands now, and the change that retired
+#' B/devin from that list therefore refused the daily republish of the live
+#' table: the row was written the week before, when the entry existed, and
+#' nothing about the outgoing build was wrong. Worse, it was permanent as a
+#' rule, since every future retirement would red every daily run between the
+#' edit and the next merge. That is the same refusal-of-a-correct-build this
+#' file was opened to remove, reintroduced two functions away from the one it
+#' removed.
+#'
+#' So the ruleset in scope is asked about rows this build put there, and a row
+#' carried forward unchanged from the published table is left to the authority
+#' it was published under. A merge writing a row nobody recorded is still
+#' refused, which is the case that matters: that is the builder inventing a
+#' channel, and it arrives as a row that was not in the previous table.
 .regress_silent_channels <- function(pc, nc) {
   t <- "vcs_ai_silent_channels"
   a <- .gate_n(pc, t); b <- .gate_n(nc, t)
@@ -1134,18 +1170,39 @@ build_release_notes <- function(summary, changed_shards, tag) {
                                  "at once is a milestone, and a builder that wrote nothing ",
                                  "looks the same from here"), t, a))
   rows <- .gate_rows(nc, t)
+  if (is.null(rows) || nrow(rows) == 0) return(out)
+  # The three columns every judgement below reads. Against a summary written
+  # before status existed, rows$status is NULL, `!recorded & !.gate_status_is(NULL, ...)`
+  # is logical(0), the subset comes back empty and the check passes without
+  # comment on a table it could not read. A gate that cannot read its table has
+  # not cleared it.
+  need <- c("tier", "tool", "status")
+  absent <- setdiff(need, names(rows))
+  if (length(absent) > 0)
+    return(c(out, sprintf(paste0("%s: published without %s, so the gate cannot tell a ",
+                                 "recorded claim from a row nobody wrote"),
+                          t, paste(absent, collapse = ", "))))
+  prev_rows <- .gate_rows(pc, t)
+  carried <- if (!is.null(prev_rows) && nrow(prev_rows) > 0 &&
+                 all(need %in% names(prev_rows)))
+    .gate_key(rows, need) %in% .gate_key(prev_rows, need) else rep(FALSE, nrow(rows))
+  # A guard that quietly softens when a dependency is missing is how three
+  # tables got the wrong rule in the first place, and the first version of this
+  # one skipped the whole check when the list was out of scope. With no list,
+  # the strict reading is that nothing is recorded, so every introduced row has
+  # to say for itself that no claim exists.
   known <- if (exists("AI_SILENT_CHANNELS_KNOWN")) get("AI_SILENT_CHANNELS_KNOWN") else NULL
-  if (!is.null(rows) && nrow(rows) > 0 && !is.null(known)) {
-    recorded <- paste(rows$tier, rows$tool, sep = "\t") %in%
-                paste(known$tier, known$tool, sep = "\t")
-    loose <- rows[!recorded & !.gate_status_is(rows$status, "unexplained"), , drop = FALSE]
-    if (nrow(loose) > 0)
-      out <- c(out, sprintf(paste0("%s: %d row(s) report a channel silent on nobody's ",
-                                   "authority, neither recorded in AI_SILENT_CHANNELS_KNOWN ",
-                                   "nor marked unexplained: %s"),
-                            t, nrow(loose),
-                            paste(loose$tier, loose$tool, sep = "/", collapse = ", ")))
-  }
+  recorded <- if (!is.null(known) && nrow(known) > 0)
+    paste(rows$tier, rows$tool, sep = "\t") %in%
+      paste(known$tier, known$tool, sep = "\t") else rep(FALSE, nrow(rows))
+  loose <- rows[!carried & !recorded & !.gate_status_is(rows$status, "unexplained"), ,
+                drop = FALSE]
+  if (nrow(loose) > 0)
+    out <- c(out, sprintf(paste0("%s: %d row(s) this build introduced report a channel ",
+                                 "silent on nobody's authority, neither recorded in ",
+                                 "AI_SILENT_CHANNELS_KNOWN nor marked unexplained: %s"),
+                          t, nrow(loose),
+                          paste(loose$tier, loose$tool, sep = "/", collapse = ", ")))
   out
 }
 
@@ -1188,26 +1245,95 @@ build_release_notes <- function(summary, changed_shards, tag) {
           t, length(lost), paste(sub("\t", "/", lost), collapse = ", "))
 }
 
-#' The rule for vcs_ai_models, where the row count describes a window.
+#' The rules for vcs_ai_models: what each repository keeps, and how many keep it.
 #'
 #' The merge replaces model rows per repository rather than reducing them,
 #' because a model tally describes the window that was examined this run and
-#' folding it into an older window produces a count belonging to neither. A
-#' repository re-scanned over a narrower window therefore publishes fewer rows,
-#' legitimately, and the row count is not a measure of anything that can be
-#' lost.
+#' folding it into an older window produces a count belonging to neither. So a
+#' plain total row count is not an invariant here, and the first attempt at this
+#' replaced it with a count of repositories carrying model rows and stopped
+#' there. That check cannot fire on the path it was written for. The merge
+#' DELETEs only the repo_ids present in the incoming shards and then inserts
+#' those same shards, so every repository it touches is guaranteed at least one
+#' row back and COUNT(DISTINCT repo_id) is non-decreasing across a merge by
+#' construction. Deleting half the model rows while leaving every repository in
+#' place produced no finding at all, which is a table with no rule on it.
 #'
-#' Coverage is. A merge that folds a renamed repository and drops its rows takes
-#' the repository out of the table entirely, so the count of repositories
-#' carrying model rows is the number that must not fall.
+#' What the row count was worth is per (repository, tool). The scan pages the
+#' commit search oldest-first (sort=committer-date, order=asc), so the rows for
+#' a pair are a prefix of that pair's history, and a repository's history only
+#' grows: a later scan of a pair whose earlier scan reached the end of the
+#' history cannot legitimately see fewer models than it did. Every distinct
+#' model the published table records for such a pair must still be there.
+#'
+#' The loss that refuses: config.R records how narrowly this was avoided once
+#' already, where the scan asked for a single hit and "asking for a page rather
+#' than a single hit turns the same response into the repository's model
+#' history". Put AI_SEARCH_PAGE back to 1 and every repository keeps its row and
+#' loses its history, which is exactly the shape a repository count waves
+#' through.
+#'
+#' Two exemptions, both because the pair says of itself that it is not a
+#' statement about the whole history:
+#'
+#'   window_complete = 0 means the search reported more hits than the page
+#'   carried, so those rows were cut off at whatever page size was in force when
+#'   they were written and nothing can be said to be missing from them.
+#'
+#'   A pair that is gone from the outgoing table entirely is the throttle, not
+#'   the scan's reach: a refused search leaves the deep pass with no rows for
+#'   that tool and the merge writes back only what came, so the pair drops out
+#'   until the next scan. SEARCH_DELAY_S exists because that refusal is routine,
+#'   and refusing the publish over it would red most weeks.
+#'
+#' Exact, with no proportional allowance, because outside those two exemptions
+#' there is no ordinary churn to allow for: a search that fails is a refusal and
+#' lands in the second exemption, so a scan that came back and came back
+#' shorter is either the ruleset reading less than it did or the repository's
+#' history having been rewritten under it. Both are worth a red run. A rebase
+#' over the oldest AI-trailer commits of one repository would refuse a publish,
+#' and that is the price of the rule.
+#'
+#' The repository count stays alongside it, and it is honest about where it can
+#' fire: not on the merge, but on the daily path, where this table has shipped
+#' empty for weeks once already (#30) and where a seed step that forgets it
+#' takes every repository out at once.
 .regress_ai_models <- function(pc, nc, tol) {
   t <- "vcs_ai_models"
+  out <- character(0)
   a <- .gate_count(pc, sprintf('SELECT COUNT(DISTINCT repo_id) AS n FROM "%s"', t))
   b <- .gate_count(nc, sprintf('SELECT COUNT(DISTINCT repo_id) AS n FROM "%s"', t))
-  if (is.na(a) || is.na(b) || a == 0) return(character(0))
+  if (is.na(a) || is.na(b) || a == 0) return(out)
   if (b < a * (1 - tol))
-    sprintf("%s: %d repositories carry model rows, was %d", t, b, a)
-  else character(0)
+    out <- c(out, sprintf("%s: %d repositories carry model rows, was %d", t, b, a))
+
+  key <- c("repo_id", "tool", "provider", "family", "version", "context_window")
+  prev <- .gate_rows(pc, t); nxt <- .gate_rows(nc, t)
+  if (is.null(prev) || nrow(prev) == 0) return(out)
+  if (is.null(nxt) || !all(key %in% names(nxt)))
+    return(c(out, sprintf(paste0("%s: published without the columns that identify a model ",
+                                 "(%s), so the gate cannot say what a repository kept"),
+                          t, paste(setdiff(key, names(nxt)), collapse = ", "))))
+  # A column present on one side only is a schema difference, and a schema
+  # difference is not a regression: the same reading the per-column check below
+  # takes. window_complete arrived with a NOT NULL DEFAULT 1, so its absence on
+  # the published side means every row was written as a whole window.
+  if (!all(key %in% names(prev))) return(out)
+  cw <- if ("window_complete" %in% names(prev)) prev$window_complete else 1L
+  whole <- is.na(cw) | cw != 0
+  pair <- paste(prev$repo_id, prev$tool, sep = "\t")
+  still_scanned <- pair %in% unique(paste(nxt$repo_id, nxt$tool, sep = "\t"))
+  held <- whole & still_scanned & !(.gate_key(prev, key) %in% .gate_key(nxt, key))
+  if (!any(held)) return(out)
+  gone <- prev[held, , drop = FALSE]
+  lost <- unique(.gate_key(gone, key))
+  named <- unique(paste(gone$repo_id, gone$tool, sep = "/"))
+  c(out, sprintf(paste0("%s: %d model row(s) are gone from %d repository/tool pair(s) the ",
+                        "outgoing build still scans and the published one had read to the ",
+                        "end of: %s"),
+                 t, length(lost), length(named),
+                 paste(c(utils::head(named, 3), if (length(named) > 3)
+                         sprintf("and %d more", length(named) - 3)), collapse = ", ")))
 }
 
 #' Refuse to publish a summary that lost ground against the one already out.
@@ -1230,6 +1356,15 @@ build_release_notes <- function(summary, changed_shards, tag) {
 #' no-decrease rule written for vcs_ai_signals. Two of them shrink as a matter
 #' of course, and the third counts a window rather than a fact. The rules they
 #' have instead are above, each with the loss it does refuse.
+#'
+#' A rule here may not assume the two sides were produced by the same code. The
+#' three AI tables are written by the weekly merge and republished verbatim by
+#' every daily update in between, so the published side can predate any edit to
+#' the ruleset or to AI_SILENT_CHANNELS_KNOWN, and a rule that measures the
+#' published table against the config in front of it refuses six correct builds
+#' out of seven. That is not hypothetical: the first attempt at the
+#' silent-channel rule did exactly that, and would have refused the daily
+#' publish of the table that was live at the time.
 #'
 #' @return character(0) when the outgoing build is sound, else the reasons.
 summary_regressions <- function(prev_path, next_path, tol = 0.02) {
