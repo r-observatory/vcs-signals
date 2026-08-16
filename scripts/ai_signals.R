@@ -444,6 +444,19 @@ ai_silent_channels <- function(signals, known = AI_SILENT_CHANNELS_KNOWN) {
 #' printing it is what keeps it from rotting into an assumed absence. Silence
 #' nobody has examined stops the merge, because a zero published as fact is the
 #' failure this exists to prevent.
+#'
+#' Every count below is measured against the detections in front of it. The
+#' first version was not: it reported the silent total as nrow(known) plus the
+#' unexplained rows, so the recorded half was the length of a hand-written file
+#' and nothing ever re-checked whether those claims were still true. It printed
+#' "16 recorded, 0 unexplained" every week for a month, reading like a stable
+#' healthy invariant, while six of the sixteen recorded zeros had already been
+#' answered by the data underneath it: cursor, gemini, jules and openhands were
+#' detecting, five of them for weeks. The merge that recorded devin's first
+#' tier-B detection printed "rule added 2026-08-01, unscanned" about devin in
+#' the same output, because the open questions were read off the file rather
+#' than off the run. That is the rot this whole table exists to prevent,
+#' happening inside the table.
 ai_canary_check <- function(signals, known = AI_SILENT_CHANNELS_KNOWN,
                             roster_n = NA_integer_,
                             min_roster = AI_CANARY_MIN_ROSTER) {
@@ -459,9 +472,44 @@ ai_canary_check <- function(signals, known = AI_SILENT_CHANNELS_KNOWN,
   }
   unexplained <- ai_silent_channels(signals, known)
   inv <- ai_rule_inventory()
-  message(sprintf("AI detection canary: %d channels with a rule, %d silent (%d recorded, %d unexplained)",
-                  nrow(inv), nrow(known) + nrow(unexplained), nrow(known), nrow(unexplained)))
-  open <- known[known$status == "open", , drop = FALSE]
+  # Every channel still at zero, recorded or not, read from this run's onsets.
+  measured <- ai_silent_channels(signals, NULL)
+  recorded_key <- paste(known$tier, known$tool, sep = "\t")
+  still <- recorded_key %in% paste(measured$tier, measured$tool, sep = "\t")
+  # A channel absent from the silent set is not necessarily detecting. The
+  # silent set is derived from ai_rule_inventory(), so a recorded claim whose
+  # rule has left the inventory is absent from it for the opposite reason:
+  # nothing scans for that channel at all. This project retires rules on
+  # purpose, .positai and .idx among them, so an entry outliving its rule is a
+  # live shape rather than a hypothetical, and the first version of this report
+  # printed one as "detecting". Retiring the entry is the right advice either
+  # way, and the sentence under it is the one line this project reads as
+  # evidence about a zero, so it has to be the true one.
+  has_rule <- recorded_key %in% paste(inv$tier, inv$tool, sep = "\t")
+  message(sprintf(paste0("AI detection canary: %d channels with a rule, %d silent ",
+                         "(%d recorded, %d unexplained), %d detecting"),
+                  nrow(inv), nrow(measured), sum(still), nrow(unexplained),
+                  nrow(inv) - nrow(measured)))
+  answered <- known[has_rule & !still, , drop = FALSE]
+  if (nrow(answered) > 0) {
+    message("  recorded zeros the data has answered, retire them from AI_SILENT_CHANNELS_KNOWN:")
+    for (i in seq_len(nrow(answered)))
+      message(sprintf("    %s/%-9s detecting; the claim recorded %s was: %s",
+                      answered$tier[i], answered$tool[i], answered$recorded_on[i],
+                      answered$reason[i]))
+  }
+  orphaned <- known[!has_rule, , drop = FALSE]
+  if (nrow(orphaned) > 0) {
+    message("  recorded zeros with no rule left, retire them from AI_SILENT_CHANNELS_KNOWN:")
+    for (i in seq_len(nrow(orphaned)))
+      message(sprintf(paste0("    %s/%-9s no rule in the inventory scans for it, so its zero ",
+                             "is not a measurement; the claim recorded %s was: %s"),
+                      orphaned$tier[i], orphaned$tool[i], orphaned$recorded_on[i],
+                      orphaned$reason[i]))
+  }
+  # Only the questions the data has not settled. Re-printing a claim about a
+  # zero that is gone is not visibility, it is the file talking to itself.
+  open <- known[still & known$status == "open", , drop = FALSE]
   if (nrow(open) > 0) {
     message("  open questions, re-reported so they stay visible:")
     for (i in seq_len(nrow(open)))

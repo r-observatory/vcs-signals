@@ -409,6 +409,16 @@ AI_POINT_RESERVE <- 1500L
 #                     says what would settle it. These are re-reported every run
 #                     so they cannot rot into silence, which is the whole thing
 #                     this table exists to prevent.
+#
+# An entry is retired the moment the channel detects. Six were carried here long
+# after the data had answered them, because the canary counted the rows in this
+# file instead of the channels actually at zero: B/cursor, B/gemini, B/jules,
+# B/openhands and A/jules had been detecting for weeks, and B/devin's tier-B
+# trailer matched on 2026-08-16, on a repository the PR channel had already
+# flagged, exactly as the entry predicted it eventually would. All six are gone
+# from this list. If any of them falls back to zero it will arrive as an
+# unexplained channel and fail the merge, which is the right way to hear about a
+# detection that broke.
 # Below this many repos in the merged roster, a channel at zero is not evidence
 # of anything and the canary stands down. Production merges ~15,000; fixtures
 # merge a handful.
@@ -426,17 +436,11 @@ D,amazonq,genuine,".amazonq is scanned on every shard and no roster repo has it"
 D,grok,genuine,"GROK.md/.grok/.xai scanned on every shard, absent from the roster",2026-08-01
 D,junie,genuine,".junie is scanned on every shard and no roster repo has it",2026-08-01
 D,roo,genuine,".roo/.roomodes scanned on every shard, absent from the roster",2026-08-01
-B,devin,open,"rule added 2026-08-01, unscanned; and it can only fire on a repo some OTHER tool already flagged",2026-08-01
-B,jules,open,"rule added 2026-08-01, unscanned; and it can only fire on a repo some OTHER tool already flagged",2026-08-01
-B,openhands,open,"rule added 2026-08-01, unscanned; and it can only fire on a repo some OTHER tool already flagged",2026-08-01
 B,aider,open,"rule on main since 2026-07-15 but every trailer search was malformed until 2026-07-30; needs one clean scan",2026-08-01
-B,cursor,open,"rule on main since 2026-07-15 but every trailer search was malformed until 2026-07-30; needs one clean scan",2026-08-01
-B,gemini,open,"rule on main since 2026-07-15 but every trailer search was malformed until 2026-07-30; needs one clean scan",2026-08-01
 B,replit,open,"only Replit-Commit-Author remains after the prose rule was deleted; unseen in any sampled commit",2026-08-01
 B,windsurf,open,"rule on main since 2026-07-15 but every trailer search was malformed until 2026-07-30; needs one clean scan",2026-08-01
 A,cursor,open,"not the gate: 52 marker repos issued author:cursor[bot] and got nothing. Likely the wrong identity, since the coding agent commits as cursoragent@cursor.com (a tier-B rule); settle with a probe",2026-08-01
 A,devin,open,"tier A iterates cheap-pass evidence, which devin can only enter via the PR channel; that channel matched nothing until the login-shape fix, still unscanned",2026-08-01
-A,jules,open,"tier A iterates cheap-pass evidence, which jules can only enter via the PR channel; that channel matched nothing until the login-shape fix, still unscanned",2026-08-01
 A,openhands,open,"tier A iterates cheap-pass evidence, which openhands can only enter via the PR channel; that channel matched nothing until the login-shape fix, still unscanned",2026-08-01
 '), stringsAsFactors = FALSE)
 
