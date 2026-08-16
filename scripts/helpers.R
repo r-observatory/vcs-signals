@@ -1071,6 +1071,145 @@ build_release_notes <- function(summary, changed_shards, tag) {
 #' exports no year shard at all. Untouched years' shard files are left as
 #' whatever protect_history_pull pulled down, so their hashes match
 #' prev_hashes and they are never re-uploaded.
+.gate_count <- function(con, q)
+  tryCatch(DBI::dbGetQuery(con, q)$n[1], error = function(e) NA_integer_)
+
+.gate_rows <- function(con, t)
+  tryCatch(DBI::dbReadTable(con, t), error = function(e) NULL)
+
+.gate_n <- function(con, t)
+  .gate_count(con, sprintf('SELECT COUNT(*) AS n FROM "%s"', t))
+
+# Elementwise, and a NULL status is not a claim of anything.
+.gate_status_is <- function(x, want) !is.na(x) & x == want
+
+#' The rule for a table that only ever accumulates.
+#'
+#' What the gate was written for. A row that is in the published build and not
+#' in the outgoing one is a row that was destroyed between them.
+#'
+#' `tol` is proportional, and it was sized for the tables it was measured on:
+#' 2% of 16,128 repositories is 322 rows of genuine roster churn. It is worth
+#' saying out loud that this buys a small table nothing at all. At 34 rows the
+#' allowance is 0.68 of a row and at 11 rows it is 0.22, so on any table under
+#' about fifty rows this is an exact no-decrease rule and a single row leaving
+#' refuses the publish. That is right for a table that accumulates and wrong for
+#' one that is rebuilt from scratch, which is why the rebuilt ones below state
+#' their own invariant instead of inheriting this one.
+.regress_row_count <- function(t, pc, nc, tol) {
+  a <- .gate_n(pc, t); b <- .gate_n(nc, t)
+  if (is.na(a) || is.na(b) || a == 0) return(character(0))
+  if (b < a * (1 - tol)) sprintf("%s: %d rows, was %d", t, b, a) else character(0)
+}
+
+#' The rule for vcs_ai_silent_channels, which reports progress by shrinking.
+#'
+#' A row asserts that a channel has a detection rule, has produced zero
+#' detections anywhere on the roster, and here is the dated human claim about
+#' that zero. ai_backfill's merge DELETEs the table and rebuilds it from the
+#' channels that are still at zero, so a channel that starts detecting is not in
+#' the table at all: the claim is spent, and the row leaving is the answer
+#' arriving.
+#'
+#' The no-decrease rule refused the merge of 2026-08-16 over exactly that. B's
+#' devin trailer matched for the first time, on a repository the PR channel had
+#' already flagged, which is what the recorded open question had predicted would
+#' eventually happen. Eleven rows became ten, the gate read it as data loss, and
+#' the only shape progress can take here became the one shape that cannot
+#' publish. Growth, meanwhile, is either paperwork (somebody added a row to
+#' AI_SILENT_CHANNELS_KNOWN) or a detection breaking, and a break arrives as an
+#' unexplained row that ai_canary_check already fails the run over. So there is
+#' no row count worth gating on, in either direction.
+#'
+#' What is worth refusing: the table published empty while recorded zeros stand,
+#' and a row that is neither a recorded claim nor an admission that no claim
+#' exists. Both mean the builder produced something nobody wrote.
+.regress_silent_channels <- function(pc, nc) {
+  t <- "vcs_ai_silent_channels"
+  a <- .gate_n(pc, t); b <- .gate_n(nc, t)
+  if (is.na(a) || is.na(b)) return(character(0))
+  out <- character(0)
+  if (a > 0 && b == 0)
+    out <- c(out, sprintf(paste0("%s: published empty, was %d rows. Every channel answering ",
+                                 "at once is a milestone, and a builder that wrote nothing ",
+                                 "looks the same from here"), t, a))
+  rows <- .gate_rows(nc, t)
+  known <- if (exists("AI_SILENT_CHANNELS_KNOWN")) get("AI_SILENT_CHANNELS_KNOWN") else NULL
+  if (!is.null(rows) && nrow(rows) > 0 && !is.null(known)) {
+    recorded <- paste(rows$tier, rows$tool, sep = "\t") %in%
+                paste(known$tier, known$tool, sep = "\t")
+    loose <- rows[!recorded & !.gate_status_is(rows$status, "unexplained"), , drop = FALSE]
+    if (nrow(loose) > 0)
+      out <- c(out, sprintf(paste0("%s: %d row(s) report a channel silent on nobody's ",
+                                   "authority, neither recorded in AI_SILENT_CHANNELS_KNOWN ",
+                                   "nor marked unexplained: %s"),
+                            t, nrow(loose),
+                            paste(loose$tier, loose$tool, sep = "/", collapse = ", ")))
+  }
+  out
+}
+
+#' The rule for vcs_ai_rule_inventory, a catalogue derived from source.
+#'
+#' Republished whole on every merge from ai_rule_inventory(), so its row count
+#' tracks the ruleset rather than the data, and this project retires rules on
+#' purpose: .positai and .idx were removed from the inventory because listing
+#' markers the classifier never reads made the canary report two channels as
+#' silent, and those zeros were then recorded with a reason that was not true.
+#' Under a no-decrease rule the next retirement takes 34 channels to 33, which
+#' is below 34 * 0.98, and the pipeline stops publishing over a deliberate edit.
+#'
+#' The invariant is that nothing may be lost that the ruleset still has. A
+#' channel may leave the catalogue only when the rule behind it is gone. That
+#' still refuses the loss #30 found, where the table shipped as an empty table
+#' for weeks because the export step named its arguments one at a time and
+#' nobody added this one: zero of thirty-four is not a retirement.
+#'
+#' Deliberately not "equals ai_rule_inventory() exactly". The inventory is
+#' rewritten by the weekly AI merge and the daily update publishes whatever the
+#' last merge left, so a rule added on a Monday is legitimately absent from the
+#' published catalogue until the merge runs, and an exact-match rule would red
+#' every daily run in between.
+.regress_rule_inventory <- function(pc, nc) {
+  t <- "vcs_ai_rule_inventory"
+  prev <- .gate_rows(pc, t); nxt <- .gate_rows(nc, t)
+  if (is.null(prev) || is.null(nxt) || nrow(prev) == 0) return(character(0))
+  # A guard that quietly softens when a dependency is missing is how three
+  # tables got the wrong rule in the first place. With no ruleset in scope this
+  # falls back to the strict reading, not to no reading.
+  if (!exists("ai_rule_inventory", mode = "function"))
+    return(.regress_row_count(t, pc, nc, 0))
+  ruleset <- paste(ai_rule_inventory()$tier, ai_rule_inventory()$tool, sep = "\t")
+  was  <- paste(prev$tier, prev$tool, sep = "\t")
+  have <- paste(nxt$tier, nxt$tool, sep = "\t")
+  lost <- setdiff(intersect(was, ruleset), have)
+  if (length(lost) == 0) return(character(0))
+  sprintf("%s: %d channel(s) the ruleset still has left the catalogue: %s",
+          t, length(lost), paste(sub("\t", "/", lost), collapse = ", "))
+}
+
+#' The rule for vcs_ai_models, where the row count describes a window.
+#'
+#' The merge replaces model rows per repository rather than reducing them,
+#' because a model tally describes the window that was examined this run and
+#' folding it into an older window produces a count belonging to neither. A
+#' repository re-scanned over a narrower window therefore publishes fewer rows,
+#' legitimately, and the row count is not a measure of anything that can be
+#' lost.
+#'
+#' Coverage is. A merge that folds a renamed repository and drops its rows takes
+#' the repository out of the table entirely, so the count of repositories
+#' carrying model rows is the number that must not fall.
+.regress_ai_models <- function(pc, nc, tol) {
+  t <- "vcs_ai_models"
+  a <- .gate_count(pc, sprintf('SELECT COUNT(DISTINCT repo_id) AS n FROM "%s"', t))
+  b <- .gate_count(nc, sprintf('SELECT COUNT(DISTINCT repo_id) AS n FROM "%s"', t))
+  if (is.na(a) || is.na(b) || a == 0) return(character(0))
+  if (b < a * (1 - tol))
+    sprintf("%s: %d repositories carry model rows, was %d", t, b, a)
+  else character(0)
+}
+
 #' Refuse to publish a summary that lost ground against the one already out.
 #'
 #' The published summary is a single asset, uploaded with --clobber, so a bad
@@ -1080,9 +1219,17 @@ build_release_notes <- function(summary, changed_shards, tag) {
 #' markers and both commit counts were destroyed on every merge that folded a
 #' renamed repository, and nothing noticed because nothing compared.
 #'
-#' Compares row counts per table and, for the columns that have actually been
-#' lost this way, how many rows carry a value. A drop beyond `tol` is refused.
-#' Growth, and a first publish with nothing to compare against, both pass.
+#' Compares each table against an invariant chosen for how that table is
+#' produced, and, for the columns that have actually been lost this way, how
+#' many rows carry a value. Growth, and a first publish with nothing to compare
+#' against, both pass.
+#'
+#' One rule for every table was never a decision. #30 added three derived tables
+#' to the summary shard so they would stop shipping empty, and the loop below
+#' walks whatever tables are present on both sides, so all three inherited a
+#' no-decrease rule written for vcs_ai_signals. Two of them shrink as a matter
+#' of course, and the third counts a window rather than a fact. The rules they
+#' have instead are above, each with the loss it does refuse.
 #'
 #' @return character(0) when the outgoing build is sound, else the reasons.
 summary_regressions <- function(prev_path, next_path, tol = 0.02) {
@@ -1093,15 +1240,15 @@ summary_regressions <- function(prev_path, next_path, tol = 0.02) {
 
   tbls <- function(con) DBI::dbGetQuery(con,
     "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")$name
-  count <- function(con, q) tryCatch(DBI::dbGetQuery(con, q)$n[1], error = function(e) NA_integer_)
+  count <- function(con, q) .gate_count(con, q)
   out <- character(0)
 
   for (t in intersect(tbls(pc), tbls(nc))) {
-    a <- count(pc, sprintf('SELECT COUNT(*) AS n FROM "%s"', t))
-    b <- count(nc, sprintf('SELECT COUNT(*) AS n FROM "%s"', t))
-    if (is.na(a) || is.na(b) || a == 0) next
-    if (b < a * (1 - tol))
-      out <- c(out, sprintf("%s: %d rows, was %d", t, b, a))
+    out <- c(out, switch(t,
+      vcs_ai_silent_channels = .regress_silent_channels(pc, nc),
+      vcs_ai_rule_inventory  = .regress_rule_inventory(pc, nc),
+      vcs_ai_models          = .regress_ai_models(pc, nc, tol),
+      .regress_row_count(t, pc, nc, tol)))
   }
 
   # Columns a partial read-modify-write has destroyed before. A row count can

@@ -100,6 +100,71 @@ test_that("a channel that started detecting leaves the silent table entirely", {
   expect_false(any(tbl$tier == "D" & tbl$tool == "amazonq"))
 })
 
+test_that("the canary counts the channels that are silent, not the rows in the file", {
+  # It printed "16 recorded" every week by taking nrow() of a hand-written CSV
+  # and calling it a measurement. Six of those sixteen claims had already been
+  # answered by the data in front of it, five of them for weeks, and the line
+  # read as a stable healthy invariant the whole time. The one table built to
+  # stop a zero rotting into an assumed fact was reporting its own contents.
+  kn <- data.frame(
+    tier = c("D", "D"), tool = c("amazonq", "grok"), status = c("genuine", "genuine"),
+    reason = c("scanned everywhere, absent from the roster",
+               "scanned everywhere, absent from the roster"),
+    recorded_on = c("2026-08-01", "2026-08-01"), stringsAsFactors = FALSE)
+  # amazonq is detecting now; grok is not.
+  rows <- data.frame(repo_id = "a", tool = "amazonq", evidence_tiers = "D",
+                     stringsAsFactors = FALSE)
+  msg <- paste(capture_messages(ai_canary_check(rows, kn, roster_n = 15000L)), collapse = "")
+  measured <- nrow(ai_silent_channels(rows, NULL))
+  expect_match(msg, sprintf("%d silent", measured), fixed = TRUE)
+  expect_false(grepl("2 recorded", msg, fixed = TRUE))
+  expect_match(msg, "1 recorded", fixed = TRUE)
+})
+
+test_that("a recorded zero the data has answered is named, so it can be retired", {
+  # Nothing told anyone. The claim just sat in the file being re-printed as an
+  # open question, which is the rot the file exists to prevent, happening inside
+  # the file.
+  kn <- data.frame(
+    tier = "D", tool = "amazonq", status = "genuine",
+    reason = "scanned everywhere, absent from the roster",
+    recorded_on = "2026-08-01", stringsAsFactors = FALSE)
+  rows <- data.frame(repo_id = "a", tool = "amazonq", evidence_tiers = "D",
+                     stringsAsFactors = FALSE)
+  msg <- paste(capture_messages(ai_canary_check(rows, kn, roster_n = 15000L)), collapse = "")
+  expect_match(msg, "D/amazonq")
+  expect_match(msg, "AI_SILENT_CHANNELS_KNOWN")
+})
+
+test_that("an answered question is not re-printed as an open one", {
+  # The merge that recorded devin's first detection also printed "rule added
+  # 2026-08-01, unscanned" about devin, in the same output, because the open
+  # questions were read off the file rather than off the data.
+  kn <- data.frame(
+    tier = "B", tool = "devin", status = "open",
+    reason = "rule added 2026-08-01, unscanned; and it can only fire on a repo some OTHER tool already flagged",
+    recorded_on = "2026-08-01", stringsAsFactors = FALSE)
+  rows <- data.frame(repo_id = "github.com/o/r", tool = "devin", evidence_tiers = "B,PR",
+                     stringsAsFactors = FALSE)
+  msg <- paste(capture_messages(ai_canary_check(rows, kn, roster_n = 15000L)), collapse = "")
+  expect_false(grepl("open questions", msg, fixed = TRUE))
+  # It is still named, once, under the heading that says what to do about it.
+  expect_match(msg, "retire them from AI_SILENT_CHANNELS_KNOWN", fixed = TRUE)
+  expect_match(msg, "B/devin")
+})
+
+test_that("a question that is still open is still re-printed", {
+  kn <- data.frame(
+    tier = "B", tool = "devin", status = "open",
+    reason = "rule added 2026-08-01, unscanned; and it can only fire on a repo some OTHER tool already flagged",
+    recorded_on = "2026-08-01", stringsAsFactors = FALSE)
+  rows <- data.frame(repo_id = "github.com/o/r", tool = "claude", evidence_tiers = "B",
+                     stringsAsFactors = FALSE)
+  msg <- paste(capture_messages(ai_canary_check(rows, kn, roster_n = 15000L)), collapse = "")
+  expect_match(msg, "unscanned", fixed = TRUE)
+  expect_match(msg, "since 2026-08-01", fixed = TRUE)
+})
+
 test_that("a pkgdown site is recognised, in each shape maintainers actually use", {
   # The most common documentation site in the R ecosystem was not detectable at
   # all, while _quarto.yml beside it was. coatless-rpkg/livelink ships both a
