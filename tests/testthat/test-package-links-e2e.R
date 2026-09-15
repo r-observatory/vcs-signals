@@ -240,6 +240,77 @@ test_that("the weekly, backfill and AI merges publish the link table they were s
   }
 })
 
+# What a publish by code from before the table leaves on the release, as a re-run
+# of an Actions run attempt started before the table existed would. That code's
+# SUMMARY_EXTRA_TABLES and schema do not name repo_package_links, so the recent
+# shard and the summary go out without it; pipeline_state it carries through
+# unchanged, and the summary it replaces becomes the previous one.
+.publish_by_older_code <- function(rel) {
+  file.copy(file.path(rel$remote, "vcs-signals-summary.db"),
+            file.path(rel$remote, "vcs-signals-summary-prev.db"), overwrite = TRUE)
+  for (asset in c("vcs-signals-recent.db", "vcs-signals-summary.db")) {
+    con <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel$remote, asset))
+    DBI::dbExecute(con, "DROP TABLE IF EXISTS repo_package_links")
+    DBI::dbDisconnect(con)
+  }
+}
+
+test_that("a publish by code older than the table does not cost the links it dropped", {
+  .fast_batches()
+  rel <- .release()
+  opts <- list(links_backfill = .history_backfill())
+  .run_on(rel, "2026-09-01", .universe(pkgA = "repo1", pkgB = "repo2"), opts)
+  .run_on(rel, "2026-09-02", .universe(pkgA = "repo1"), opts)
+  .publish_by_older_code(rel)
+  expect_false("repo_package_links" %in% .published(rel,
+    "SELECT name FROM sqlite_master WHERE type = 'table'")$name)
+
+  .run_on(rel, "2026-09-03", .universe(pkgA = "repo1"), opts)
+
+  # Rebuilt from the backfill and today alone, pkgB, delisted after the backfill
+  # was cut, would be gone, and pkgA would start again on the day of the run.
+  b <- .link(rel, "repo2", "pkgB")
+  expect_equal(c(b$first_seen, b$last_seen), c("2026-09-01", "2026-09-01"))
+  a <- .link(rel, "repo1", "pkgA")
+  expect_equal(c(a$first_seen, a$last_seen), c("2026-09-01", "2026-09-03"))
+  expect_equal(.link(rel, "repo2", "pkgB", "vcs-signals-recent.db")$last_seen, "2026-09-01")
+})
+
+test_that("with no copy left to restore from, the links are refused rather than started over", {
+  .fast_batches()
+  rel <- .release()
+  opts <- list(links_backfill = .history_backfill())
+  .run_on(rel, "2026-09-01", .universe(pkgA = "repo1", pkgB = "repo2"), opts)
+  .run_on(rel, "2026-09-02", .universe(pkgA = "repo1"), opts)
+  # Two in a row, as the weekly and AI merges of one Sunday would be: the second
+  # replaces the previous summary with the first one's, which has no table either.
+  .publish_by_older_code(rel)
+  .publish_by_older_code(rel)
+  uploads <- rel$uploads
+  live <- file_sha256(file.path(rel$remote, "vcs-signals-summary.db"))
+
+  expect_error(.run_on(rel, "2026-09-03", .universe(pkgA = "repo1"), opts),
+               "published repo_package_links since 2026-09-01")
+  expect_equal(rel$uploads, uploads)
+  expect_equal(file_sha256(file.path(rel$remote, "vcs-signals-summary.db")), live)
+
+  # The merges seed the same way and would otherwise publish the table empty.
+  out <- tempfile("merge_"); dir.create(out)
+  parts <- tempfile("parts_"); dir.create(parts)
+  e <- new.env(parent = globalenv())
+  local({ wd <- setwd(.repo_root); on.exit(setwd(wd)); sys.source(file.path("scripts", "weekly.R"), envir = e) })
+  expect_error(suppressMessages(e$run_merge(rel$io, out, parts)),
+               "published repo_package_links since 2026-09-01")
+  expect_equal(rel$uploads, uploads)
+
+  # Accepting the loss is a decision someone makes, and then the daily run goes on.
+  withr::local_envvar(VCS_ALLOW_REGRESSION = "1")
+  expect_warning(.run_on(rel, "2026-09-03", .universe(pkgA = "repo1"), opts),
+                 "published repo_package_links since 2026-09-01")
+  a <- .link(rel, "repo1", "pkgA")
+  expect_equal(c(a$first_seen, a$last_seen), c("2026-09-02", "2026-09-03"))
+})
+
 test_that("a merge a daily run publishes inside seeds again and keeps the links that run advanced", {
   # The weekly merge seeds on Sunday morning and publishes hours later, and the
   # daily update can publish in between. Built from the older seed, the merge

@@ -154,6 +154,10 @@ seed_working_db <- function(io, out_dir, working_path) {
       if (nrow(df) > 0) DBI::dbWriteTable(wcon, nm, df, append = TRUE)
     }
   }
+  # Every publisher seeds here, and a table the seed brings back empty is what
+  # each of them then publishes. A link whose package has left cannot be
+  # resolved again, so an empty link table has to be caught here or not at all.
+  restore_package_links(io, wcon, file.path(out_dir, "_links_restore"))
   seeded(TRUE)
 }
 

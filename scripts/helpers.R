@@ -312,6 +312,92 @@ read_links_backfill <- function(path) {
   invisible(TRUE)
 }
 
+# The day the release first carried links, kept in pipeline_state. Code from
+# before the table carries pipeline_state through its seed and its recent shard
+# untouched while it drops the table itself, so this is what still says the
+# links existed after such a publish. Written once, by the first publish that
+# has any.
+LINKS_SINCE_KEY <- "repo_package_links_since"
+
+.mark_links_published <- function(con, today) {
+  if (!DBI::dbExistsTable(con, "repo_package_links") || !DBI::dbExistsTable(con, "pipeline_state"))
+    return(invisible(FALSE))
+  DBI::dbExecute(con, "INSERT OR IGNORE INTO pipeline_state (key, value)
+    SELECT ?, ? WHERE EXISTS (SELECT 1 FROM repo_package_links)",
+    params = list(LINKS_SINCE_KEY, today))
+  invisible(TRUE)
+}
+
+#' Put back the links a publish by older code dropped, or refuse to go on
+#' without them.
+#'
+#' An Actions run started before repo_package_links existed publishes code that
+#' does not know the table, and so does a re-run of one however much later,
+#' because a re-run runs the commit of its first attempt. The Sunday merges are
+#' scheduled for 07:00Z and publish hours later, and the weekly run of 2026-09-13
+#' was re-run on 09-15. That code seeds, embeds and exports only the tables it
+#' names, so the recent shard and the summary both go out without the table, and
+#' the regression gate on neither side can see the loss: it compares the tables
+#' present on both sides, and the published side has none. The next run then
+#' seeded an empty table, wrote the backfill and today's links into it and
+#' published that. Every link recorded since the backfill was cut that no longer
+#' resolves was gone, and every one that still did started over on that day.
+#'
+#' The previous summary is kept on the release for exactly one publish, and the
+#' first such publish moves the last summary that had the table into it, so the
+#' links are folded back from there, widen-only, as they would be from any
+#' published copy. A second publish by older code replaces that too. With no
+#' copy left the run stops, because the table published from the backfill alone
+#' would be held by the gate as the new truth from then on.
+#'
+#' Called on the working database straight after it is seeded, before anything
+#' writes to the table, which is the last point the loss can still be seen.
+restore_package_links <- function(io, con, dir) {
+  since <- tryCatch(DBI::dbGetQuery(con, "SELECT value FROM pipeline_state WHERE key = ?",
+                                    params = list(LINKS_SINCE_KEY))$value,
+                    error = function(e) character(0))
+  if (length(since) == 0) return(invisible(character(0)))
+  if (DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM repo_package_links")$n > 0)
+    return(invisible(character(0)))
+
+  dir.create(dir, showWarnings = FALSE, recursive = TRUE)
+  need <- c("repo_id", "package", "origin", "first_seen", "last_seen")
+  from <- character(0)
+  for (asset in c("vcs-signals-summary.db", "vcs-signals-summary-prev.db")) {
+    path <- file.path(dir, asset)
+    if (!isTRUE(io$download(asset, dir)) || !file.exists(path)) next
+    pc <- DBI::dbConnect(RSQLite::SQLite(), path)
+    rows <- .gate_rows(pc, "repo_package_links")
+    DBI::dbDisconnect(pc)
+    if (is.null(rows) || nrow(rows) == 0 || !all(need %in% names(rows))) next
+    .upsert_package_links(con, rows[need])
+    from <- c(from, asset)
+  }
+  if (length(from) > 0) {
+    message(sprintf(paste0("vcs-signals-recent.db carried no repo_package_links although the ",
+                           "release has published them since %s; restored %d from %s"),
+                    since[1], DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM repo_package_links")$n,
+                    paste(from, collapse = " and ")))
+    return(invisible(from))
+  }
+
+  msg <- sprintf(paste0(
+    "the release has published repo_package_links since %s, but vcs-signals-recent.db carries ",
+    "none and neither vcs-signals-summary.db nor vcs-signals-summary-prev.db has a copy to ",
+    "restore them from. Code from before the table publishes both shards without it; a re-run ",
+    "of an Actions run attempt started before the table existed runs that code, and two such ",
+    "publishes leave no copy on the release. Going on would publish the committed backfill and ",
+    "today's links as the whole history, and every link recorded since %s that is not in the ",
+    "backfill would be lost. The ai-flagged-roster artifact of a weekly AI run carries the summary ",
+    "that run started from. Set VCS_ALLOW_REGRESSION=1 on a daily update to accept the loss."),
+    since[1], since[1])
+  if (identical(Sys.getenv("VCS_ALLOW_REGRESSION"), "1")) {
+    warning(msg, call. = FALSE)
+    return(invisible(character(0)))
+  }
+  stop(msg, call. = FALSE)
+}
+
 #' `links_backfill`, when given, is a frame read_links_backfill() has already
 #' checked. It is applied in the same transaction as today's links on every run,
 #' which costs one no-op pass over the table on an ordinary day and puts the
@@ -1593,6 +1679,9 @@ build_release_notes <- function(summary, changed_shards, tag) {
   key <- c("repo_id", "package", "origin")
   need <- c(key, "first_seen", "last_seen")
   prev <- .gate_rows(pc, t); nxt <- .gate_rows(nc, t)
+  # A published summary without the table is either one from before it or one a
+  # publish by older code left, and nothing in the summary tells them apart.
+  # restore_package_links does, at the seed, from pipeline_state.
   if (is.null(prev) || nrow(prev) == 0) return(character(0))
   # A schema difference on the published side is not a regression. On the
   # outgoing side it is a table the gate cannot read, and a gate that cannot
@@ -2001,6 +2090,8 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
   recent_path <- file.path(out_dir, recent_shard)
   recent_rows <- extract_recent_rows(con, today, RECENT_WINDOW)
   export_series_shard(recent_path, recent_rows)
+  # Before the embed, so the recent shard the next run seeds from says so.
+  .mark_links_published(con, format(today))
   .embed_recent_tables(con, recent_path)
   shard_names <- c(shard_names, recent_shard)
 
