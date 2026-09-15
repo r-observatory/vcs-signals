@@ -570,12 +570,13 @@ test_that("retry_on_publish_conflict retries a conflict once and nothing else", 
   conflict <- function() stop(publish_conflict("before uploading",
                                                "a.db\tsha256:1\nb.db\tsha256:2",
                                                "a.db\tsha256:9\nb.db\tsha256:2"))
+  still <- list(generation = function() "a.db\tsha256:9", sleep = function(seconds) invisible(NULL))
   n <- 0L
-  expect_error(retry_on_publish_conflict(function() { n <<- n + 1L; stop("boom") }), "boom")
+  expect_error(retry_on_publish_conflict(still, function() { n <<- n + 1L; stop("boom") }), "boom")
   expect_equal(n, 1L)
 
   n <- 0L
-  res <- suppressMessages(retry_on_publish_conflict(function() {
+  res <- suppressMessages(retry_on_publish_conflict(still, function() {
     n <<- n + 1L
     if (n == 1L) conflict()
     "published"
@@ -584,12 +585,49 @@ test_that("retry_on_publish_conflict retries a conflict once and nothing else", 
   expect_equal(n, 2L)
 
   n <- 0L
-  err <- tryCatch(suppressMessages(retry_on_publish_conflict(function() { n <<- n + 1L; conflict() })),
+  err <- tryCatch(suppressMessages(retry_on_publish_conflict(still, function() { n <<- n + 1L; conflict() })),
                   error = function(e) e)
   expect_s3_class(err, "vcs_publish_conflict")
   expect_equal(n, 2L)
   expect_match(conditionMessage(err), "a.db", fixed = TRUE)
   expect_no_match(conditionMessage(err), "b.db", fixed = TRUE)
+})
+
+test_that("retry_on_publish_conflict waits for the release to stop changing before it runs again", {
+  # A conflict usually means the other publisher is done, but not always: it can
+  # be seen part way through that publisher's uploads, and a seed taken then is
+  # refused again after a full rebuild.
+  reads <- 0L
+  listing <- c("g1", "g2", "g2", "g2", "g2")
+  events <- character(0)
+  io <- list(
+    generation = function() { reads <<- reads + 1L; events <<- c(events, "read"); listing[min(reads, 5L)] },
+    sleep = function(seconds) events <<- c(events, "sleep"))
+  n <- 0L
+  suppressMessages(retry_on_publish_conflict(io, function() {
+    n <<- n + 1L
+    events <<- c(events, "run")
+    if (n == 1L) stop(publish_conflict("before uploading", "a\tsha256:1", "a\tsha256:2"))
+    "published"
+  }, poll = 20, quiet = 3, limit = 30))
+  # g1, then g2 (changed, so the count starts over), then three more reads of g2.
+  expect_equal(events, c("run", "read", "sleep", "read", "sleep", "read", "sleep", "read",
+                         "sleep", "read", "run"))
+
+  # Bounded: a release that never stops changing is seeded again after the limit,
+  # and the checks in publish() decide from there.
+  reads <- 0L
+  slept <- 0L
+  moving <- list(generation = function() { reads <<- reads + 1L; paste0("g", reads) },
+                 sleep = function(seconds) slept <<- slept + 1L)
+  n <- 0L
+  expect_message(retry_on_publish_conflict(moving, function() {
+    n <<- n + 1L
+    if (n == 1L) stop(publish_conflict("before uploading", "a\tsha256:1", "a\tsha256:2"))
+    "published"
+  }, poll = 20, quiet = 3, limit = 4), "still changing")
+  expect_equal(slept, 4L)
+  expect_equal(n, 2L)
 })
 
 # ---- the pull no longer switches the gate off --------------------------------
@@ -632,4 +670,141 @@ test_that("a failed pull stops the publish instead of switching the gate off", {
                "vcs-signals-summary.db", fixed = TRUE)
   expect_length(io$uploaded(), 0)
   expect_identical(local_release_snapshot(rel), before)
+})
+
+# ---- a pull that fails because another publisher is part way through ----------
+
+# The release as the AI merge leaves it, built beside rel so a test can land it
+# on rel a piece at a time. gh release upload --clobber deletes an asset before
+# it uploads the new one, so another publisher's uploads can be caught half done,
+# or with an asset missing altogether.
+.ai_publish_beside <- function(rel) {
+  side <- tempfile("side_"); dir.create(side)
+  file.copy(list.files(rel, full.names = TRUE), side)
+  .run_ai_merge(side)
+  side
+}
+.land <- function(side, rel, names = list.files(side))
+  file.copy(file.path(side, names), rel, overwrite = TRUE)
+
+# A published asset, after this publisher seeded, fails to download once, and
+# `change()` runs at that moment.
+.download_fails_once <- function(rel, asset, change) {
+  healthy <- local_release_io(rel)
+  failed <- FALSE
+  function(pattern, dir) {
+    if (!failed && identical(pattern, asset)) { failed <<- TRUE; change(); return(FALSE) }
+    healthy$download(pattern, dir)
+  }
+}
+
+.seeded_publish <- function(rel) {
+  out <- tempfile("pull_"); dir.create(out)
+  seed <- seed_working_db(local_release_io(rel), out, file.path(out, "work.db"))
+  list(out = out, base = attr(seed, "generation"),
+       con = DBI::dbConnect(RSQLite::SQLite(), file.path(out, "work.db")))
+}
+
+test_that("publish() reports a pull that fails while the release moves as a conflict", {
+  rel <- .race_release()
+  s <- .seeded_publish(rel)
+  on.exit(DBI::dbDisconnect(s$con), add = TRUE)
+  io <- local_release_io(rel, download = .download_fails_once(rel, "manifest.json", function()
+    writeLines("another build", file.path(rel, "vcs-signals-summary-prev.db"))))
+
+  err <- tryCatch(publish(io, s$con, s$out, "current", "live", touched_years = character(0),
+                          base_generation = s$base), error = function(e) e)
+  expect_s3_class(err, "vcs_publish_conflict")
+  expect_match(conditionMessage(err), "while pulling", fixed = TRUE)
+  expect_match(conditionMessage(err), "vcs-signals-summary-prev.db", fixed = TRUE)
+  expect_length(io$uploaded(), 0)
+})
+
+test_that("publish() lets a pull that fails on a release that did not move stop as itself", {
+  rel <- .race_release()
+  s <- .seeded_publish(rel)
+  on.exit(DBI::dbDisconnect(s$con), add = TRUE)
+  before <- local_release_snapshot(rel)
+  io <- local_release_io(rel, download = .download_fails_once(rel, "manifest.json", function() NULL))
+
+  err <- tryCatch(publish(io, s$con, s$out, "current", "live", touched_years = character(0),
+                          base_generation = s$base), error = function(e) e)
+  expect_false(inherits(err, "vcs_publish_conflict"))
+  expect_match(conditionMessage(err), "manifest.json could not be downloaded", fixed = TRUE)
+  expect_length(io$uploaded(), 0)
+  expect_identical(local_release_snapshot(rel), before)
+})
+
+test_that("a seed whose download fails while the release moves is a conflict, and otherwise is not", {
+  rel <- .race_release()
+  out <- tempfile("seed_"); dir.create(out)
+  io <- local_release_io(rel, download = .download_fails_once(rel, "vcs-signals-recent.db", function()
+    unlink(file.path(rel, "vcs-signals-recent.db"))))
+  expect_error(seed_working_db(io, out, file.path(out, "work.db")), class = "vcs_publish_conflict")
+
+  rel <- .race_release()
+  io <- local_release_io(rel, download = .download_fails_once(rel, "vcs-signals-recent.db", function() NULL))
+  err <- tryCatch(seed_working_db(io, out, file.path(out, "work.db")), error = function(e) e)
+  expect_false(inherits(err, "vcs_publish_conflict"))
+  expect_match(conditionMessage(err), "vcs-signals-recent.db could not be downloaded", fixed = TRUE)
+})
+
+test_that("a weekly merge whose own history pull lands in another publisher's upload re-seeds and keeps both", {
+  # The weekly merge pulls the full history itself before publish() does. The AI
+  # merge has uploaded its rollback copy and deleted the recent shard to replace
+  # it; the weekly pull then fails on that shard. That is a conflict, not lost
+  # history, and the merge waits for the AI merge to finish before seeding again.
+  rel <- .race_release()
+  side <- .ai_publish_beside(rel)
+  weekly_io <- local_release_io(rel,
+    on_download = .after_seed(function() {
+      .land(side, rel, "vcs-signals-summary-prev.db")
+      unlink(file.path(rel, "vcs-signals-recent.db"))
+    }),
+    sleep = function(seconds) if (!file.exists(file.path(rel, "vcs-signals-recent.db"))) .land(side, rel))
+  withr::local_envvar(VCS_PARTS = .weekly_parts())
+
+  suppressMessages(expect_message(
+    .weekly$main("merge", tempfile("weekly_out_"), io = weekly_io),
+    "while pulling the published history"))
+
+  got <- .published(rel)
+  expect_equal(got$ai_tools, c("claude", "copilot"))
+  expect_equal(got$latest_commits, 500L)
+  expect_equal(got$summary_commits, 500L)
+})
+
+test_that("a merge that sees another publisher half done waits for it before seeding again", {
+  # The AI merge has uploaded everything but its summary and manifest when the
+  # weekly merge's check finds the release moved. Those two land just after the
+  # weekly merge has looked at the half-published release again. Seeded straight
+  # away, the second attempt is refused as well, after a second full rebuild.
+  rel <- .race_release()
+  side <- .ai_publish_beside(rel)
+  later <- c("vcs-signals-summary.db", "manifest.json")
+  first <- setdiff(names(local_release_snapshot(side)), later)
+  half <- NULL
+  seen_half <- 0L
+  weekly_io <- local_release_io(rel,
+    on_download = .after_seed(function() {
+      .land(side, rel, first)
+      half <<- local_release_generation(rel)
+    }),
+    on_generation = function(n) {
+      if (!is.null(half) && identical(local_release_generation(rel), half)) {
+        seen_half <<- seen_half + 1L
+        if (seen_half == 2L) .land(side, rel, later)
+      }
+    })
+  withr::local_envvar(VCS_PARTS = .weekly_parts())
+
+  suppressMessages(expect_message(
+    .weekly$main("merge", tempfile("weekly_out_"), io = weekly_io),
+    "another publisher"))
+
+  expect_equal(seen_half, 2L)
+  got <- .published(rel)
+  expect_equal(got$ai_tools, c("claude", "copilot"))
+  expect_equal(got$latest_commits, 500L)
+  expect_equal(got$summary_commits, 500L)
 })

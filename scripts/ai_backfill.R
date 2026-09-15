@@ -823,10 +823,11 @@ main <- function(mode, out_dir, io = NULL) {
     run_deep(io, out_dir, file.path(flagged_dir, "vcs-ai-flagged-roster.db"), i, N)
   } else if (mode == "merge") {
     # If another publisher replaced the release between this merge's seed and its
-    # publish (the weekly merge shares this Sunday cron), the merge seeds again from
-    # what that publisher left and rebuilds. The canary's stop() comes after publish
-    # and is an ordinary error, so a run it fails is not repeated.
-    retry_on_publish_conflict(function() run_merge(io, out_dir, Sys.getenv("VCS_PARTS", "parts")))
+    # publish (the weekly merge shares this Sunday cron), the merge waits for that
+    # publisher to finish, seeds again from what it left, and rebuilds. The canary's
+    # stop() comes after publish and is an ordinary error, so a run it fails is not
+    # repeated.
+    retry_on_publish_conflict(io, function() run_merge(io, out_dir, Sys.getenv("VCS_PARTS", "parts")))
   } else {
     stop("usage: ai_backfill.R [enumerate|cheap|gate|gate-incremental|deep|merge]")
   }

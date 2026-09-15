@@ -189,8 +189,11 @@ run_merge <- function(io, out_dir, parts_dir, purge_metrics = character(0)) {
   # of ALL metrics (forks/issues/PRs/releases and the forward stars points) -
   # that have aged out of the 400-day recent window. publish() re-pulls these
   # same shards afterward (idempotent), so the redundant download is harmless;
-  # what matters is that this load happens before publish() re-exports.
-  protect_history_pull(io, out_dir)
+  # what matters is that this load happens before publish() re-exports. A pull
+  # that fails while another publisher is replacing assets is a conflict, which
+  # main() retries, and not lost history.
+  .pull_or_conflict(io, attr(seed, "generation"), "while pulling the published history",
+                    function() protect_history_pull(io, out_dir))
   year_shards <- list.files(out_dir, pattern = "^vcs-signals-[0-9]{4}\\.db$", full.names = TRUE)
   for (ys in year_shards) {
     ycon <- DBI::dbConnect(RSQLite::SQLite(), ys)
@@ -279,8 +282,9 @@ main <- function(mode, out_dir, io = NULL) {
     purge <- trimws(strsplit(Sys.getenv("VCS_PURGE_METRICS", ""), ",")[[1]])
     purge <- purge[nzchar(purge)]
     # If another publisher replaced the release between this merge's seed and its
-    # publish, the merge seeds again from what that publisher left and rebuilds.
-    retry_on_publish_conflict(function()
+    # publish, the merge waits for that publisher to finish, seeds again from what
+    # it left, and rebuilds.
+    retry_on_publish_conflict(io, function()
       run_merge(io, out_dir, Sys.getenv("VCS_PARTS", "parts"), purge_metrics = purge))
   } else {
     stop("usage: backfill.R [enumerate|fetch|merge]")

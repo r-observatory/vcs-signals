@@ -145,7 +145,10 @@ run_merge <- function(io, out_dir, parts_dir) {
   ensure_repo_schema(con)
   ensure_series_schema(con)
 
-  protect_history_pull(io, out_dir)
+  # A pull that fails while another publisher is replacing assets is a conflict,
+  # which main() retries, and not lost history.
+  .pull_or_conflict(io, attr(seed, "generation"), "while pulling the published history",
+                    function() protect_history_pull(io, out_dir))
   year_shards <- list.files(out_dir, pattern = "^vcs-signals-[0-9]{4}\\.db$", full.names = TRUE)
   for (ys in year_shards) {
     ycon <- DBI::dbConnect(RSQLite::SQLite(), ys)
@@ -269,9 +272,9 @@ main <- function(mode, out_dir, io = NULL) {
     run_fetch_shard(io, out_dir, file.path(roster_dir, "vcs-signals-roster.db"), i, N)
   } else if (mode == "merge") {
     # If another publisher replaced the release between this merge's seed and its
-    # publish (the AI merge shares this Sunday cron), the merge seeds again from
-    # what that publisher left and rebuilds.
-    retry_on_publish_conflict(function() run_merge(io, out_dir, Sys.getenv("VCS_PARTS", "parts")))
+    # publish (the AI merge shares this Sunday cron), the merge waits for that
+    # publisher to finish, seeds again from what it left, and rebuilds.
+    retry_on_publish_conflict(io, function() run_merge(io, out_dir, Sys.getenv("VCS_PARTS", "parts")))
   } else {
     stop("usage: weekly.R [enumerate|fetch|merge]")
   }

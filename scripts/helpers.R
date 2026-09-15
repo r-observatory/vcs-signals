@@ -1482,6 +1482,51 @@ publish_conflict <- function(stage, base, now) {
   invisible(now)
 }
 
+# Runs pull(), a download from the release this build was seeded from. gh release
+# upload --clobber deletes an asset before it uploads the new one, so a publisher
+# pulling while another is part way through its uploads can find an asset missing.
+# That failure says nothing about accumulated history; the release moved, and it
+# is raised as the conflict it is, so a merge seeds again instead of going red on
+# "could not be downloaded". When the release has not moved, or cannot be read to
+# tell, the pull's own error stands.
+.pull_or_conflict <- function(io, base, stage, pull) {
+  withCallingHandlers(pull(), error = function(e) {
+    if (inherits(e, "vcs_publish_conflict")) return()
+    now <- tryCatch(.release_generation(io), error = function(e2) base)
+    if (!identical(now, base)) stop(publish_conflict(stage, base, now))
+  })
+}
+
+# Blocks until the release generation has read the same `quiet` times in a row,
+# `poll` seconds apart, or `limit` polls have gone by. A conflict is often seen
+# while the other publisher is still uploading (its first assets are up and its
+# summary and manifest are not), and a seed taken then is refused again after a
+# second full rebuild. One asset's upload can show no change in the listing while
+# it is in flight, so the quiet period has to outlast the upload of the largest
+# asset, the recent shard of about 100 MB. If the release is still changing at
+# the limit, the merge seeds anyway and the checks in publish() decide.
+.await_release_settled <- function(io, poll = PUBLISH_SETTLE_POLL_S,
+                                   quiet = PUBLISH_SETTLE_QUIET_READS,
+                                   limit = PUBLISH_SETTLE_MAX_READS) {
+  sleep <- if (is.function(io$sleep)) io$sleep else Sys.sleep
+  last <- .release_generation(io)
+  same <- 0L
+  for (i in seq_len(limit)) {
+    sleep(poll)
+    now <- .release_generation(io)
+    if (identical(now, last)) {
+      same <- same + 1L
+      if (same >= quiet) return(invisible(TRUE))
+    } else {
+      last <- now
+      same <- 0L
+    }
+  }
+  message(sprintf("release 'current' was still changing after %d reads %gs apart; seeding again anyway",
+                  limit + 1L, poll))
+  invisible(FALSE)
+}
+
 #' Run fn, and once more from the top if it was refused as a conflict.
 #'
 #' Only for a caller whose fn seeds its working database again and rebuilds from
@@ -1491,15 +1536,22 @@ publish_conflict <- function(stage, base, now) {
 #' run_update is not one: its gauges were collected in memory over an hour and a
 #' half, and a second pass would be a second collection. Any other error passes
 #' straight through on the first attempt, and the last conflict is the error the
-#' run fails with.
-retry_on_publish_conflict <- function(fn, attempts = 2L) {
+#' run fails with. Before running fn again it waits for the release read through
+#' io to stop changing (.await_release_settled), so the second seed is not taken
+#' from a publish that is still going up.
+retry_on_publish_conflict <- function(io, fn, attempts = 2L, poll = PUBLISH_SETTLE_POLL_S,
+                                      quiet = PUBLISH_SETTLE_QUIET_READS,
+                                      limit = PUBLISH_SETTLE_MAX_READS) {
   for (i in seq_len(attempts)) {
     conflict <- NULL
     value <- tryCatch(fn(), vcs_publish_conflict = function(e) { conflict <<- e; NULL })
     if (is.null(conflict)) return(invisible(value))
-    if (i < attempts)
+    if (i < attempts) {
       message(conditionMessage(conflict),
-              sprintf("\nSeeding again and rebuilding (attempt %d of %d).", i + 1L, attempts))
+              sprintf(paste0("\nWaiting for the release to stop changing, then seeding again ",
+                             "and rebuilding (attempt %d of %d)."), i + 1L, attempts))
+      .await_release_settled(io, poll = poll, quiet = quiet, limit = limit)
+    }
   }
   stop(conflict)
 }
@@ -1584,11 +1636,8 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
   # stops the publish. A failure while the release is being replaced underneath is
   # reported as the conflict it is, so a merge seeds again instead of failing.
   pulled <- if (!nzchar(base_generation)) character(0) else
-    withCallingHandlers(protect_history_pull(io, out_dir), error = function(e) {
-      now <- tryCatch(.release_generation(io), error = function(e2) base_generation)
-      if (!identical(now, base_generation))
-        stop(publish_conflict("while pulling the published state", base_generation, now))
-    })
+    .pull_or_conflict(io, base_generation, "while pulling the published state",
+                      function() protect_history_pull(io, out_dir))
 
   # Before the gate reads anything. If the release moved after this build was
   # seeded, the build is stale, and comparing it with the newer release would

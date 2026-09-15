@@ -114,13 +114,18 @@ seed_working_db <- function(io, out_dir, working_path) {
     return(seeded(FALSE))
   }
   if (!isTRUE(io$release_exists())) return(seeded(FALSE))
-  if (!isTRUE(io$download("vcs-signals-recent.db", out_dir)))
-    stop("release 'current' exists but vcs-signals-recent.db could not be downloaded; ",
-         "aborting rather than treating accumulated history as absent")
+  # A download that fails because another publisher has the recent shard deleted
+  # for its --clobber is a conflict, so a merge's retry seeds again once that
+  # publisher is done (see .pull_or_conflict).
   prior_path <- file.path(out_dir, "vcs-signals-recent.db")
-  if (!file.exists(prior_path))
-    stop("vcs-signals-recent.db reported a successful download but is not on disk; ",
-         "aborting rather than treating accumulated history as absent")
+  .pull_or_conflict(io, generation, "while seeding", function() {
+    if (!isTRUE(io$download("vcs-signals-recent.db", out_dir)))
+      stop("release 'current' exists but vcs-signals-recent.db could not be downloaded; ",
+           "aborting rather than treating accumulated history as absent")
+    if (!file.exists(prior_path))
+      stop("vcs-signals-recent.db reported a successful download but is not on disk; ",
+           "aborting rather than treating accumulated history as absent")
+  })
 
   pcon <- DBI::dbConnect(RSQLite::SQLite(), prior_path)
   on.exit(DBI::dbDisconnect(pcon), add = TRUE)
