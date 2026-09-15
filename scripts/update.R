@@ -97,13 +97,23 @@ acquire_bioc <- function() {
 # publish time as a conflict and the merge seeds again; read afterwards, that publish
 # would be absorbed into the base, and the stale build would go out as if current.
 # A generation of "" is a release with no assets at all (update.yml creates the
-# release before the first run uploads into it), which is a first run too: there is
-# nothing to download, so nothing to fail on.
+# release before the first run uploads into it), which is a first run too, and a
+# missing recent shard is then not a failure. But "" also switches off publish()'s
+# pull and its regression gate, so it is not taken on the generation's word alone:
+# if the recent shard downloads after all, the digests came from a different
+# release than the one downloads and uploads reach, and nothing may start cold.
 seed_working_db <- function(io, out_dir, working_path) {
   generation <- .release_generation(io)
   seeded <- function(ok) invisible(structure(ok, generation = generation))
   if (file.exists(working_path)) unlink(working_path)
-  if (!nzchar(generation) || !isTRUE(io$release_exists())) return(seeded(FALSE))
+  if (!nzchar(generation)) {
+    if (isTRUE(io$release_exists()) && isTRUE(io$download("vcs-signals-recent.db", out_dir)))
+      stop("the release generation lists no assets, yet vcs-signals-recent.db downloaded from release ",
+           "'current'; the digests describe a different release than downloads and uploads reach, ",
+           "so this run neither starts cold nor publishes", call. = FALSE)
+    return(seeded(FALSE))
+  }
+  if (!isTRUE(io$release_exists())) return(seeded(FALSE))
   if (!isTRUE(io$download("vcs-signals-recent.db", out_dir)))
     stop("release 'current' exists but vcs-signals-recent.db could not be downloaded; ",
          "aborting rather than treating accumulated history as absent")
@@ -344,9 +354,16 @@ gh_release_exists <- function(repo, tag = "current") {
 
 #' The release generation of `tag` on `repo`: one "name<TAB>digest" line per asset,
 #' sorted, joined by newlines. GitHub reports a sha256 digest on every asset; one
-#' without falls back to "<id>@<updated_at>", which --clobber also changes, since
+#' without falls back to "<node id>@<updatedAt>", which --clobber also changes, since
 #' the asset is deleted and created again. "" when the release has no assets or
-#' does not exist (HTTP 404), which is the one state with nothing to overwrite.
+#' gh reports "release not found", which is the one state with nothing to overwrite.
+#'
+#' Read through gh release view, the lookup gh release download and upload use.
+#' It finds a draft "current" as well as a published one, where GET
+#' releases/tags/<tag> answers 404 for a draft (for instance after the tag is
+#' deleted). Asked that way, a draft read as an empty release while its downloads
+#' and uploads still worked, so the merge started cold, skipped the pull and the
+#' regression gate, and published one run's rows over the draft's history.
 #'
 #' Any other failure stops, rather than returning something a caller could read
 #' as a generation: a 502 turned into "" would look like an empty release, and
@@ -360,18 +377,18 @@ gh_release_exists <- function(repo, tag = "current") {
 #' asked twice.
 gh_release_generation <- function(repo, tag = "current", run = system2,
                                   waits = RELEASE_READ_RETRY_WAITS_S, sleep = Sys.sleep) {
-  jq <- '.assets[] | [.name, (.digest // ((.id | tostring) + "@" + .updated_at))] | join("\t")'
+  jq <- '.assets[] | [.name, (.digest // (.id + "@" + .updatedAt))] | join("\t")'
   read_once <- function() {
     err_file <- tempfile("gh-release-generation-")
     on.exit(unlink(err_file), add = TRUE)
-    out <- suppressWarnings(run("gh", c("api", sprintf("repos/%s/releases/tags/%s", repo, tag),
+    out <- suppressWarnings(run("gh", c("release", "view", tag, "--repo", repo, "--json", "assets",
                                         "--jq", shQuote(jq)),
                                 stdout = TRUE, stderr = err_file))
     status <- attr(out, "status")
     status <- if (is.null(status)) 0L else as.integer(status)
     err <- if (file.exists(err_file)) paste(readLines(err_file, warn = FALSE), collapse = "\n") else ""
     if (!identical(status, 0L)) {
-      if (grepl("HTTP 404", err, fixed = TRUE)) return("")
+      if (grepl("release not found", err, fixed = TRUE)) return("")
       stop(sprintf("could not read the asset digests of release '%s' on %s (gh exit %s): %s",
                    tag, repo, status, err), call. = FALSE)
     }

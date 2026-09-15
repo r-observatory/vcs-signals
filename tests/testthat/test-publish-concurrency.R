@@ -413,15 +413,34 @@ test_that("seed_working_db reads the generation before it downloads anything", {
 
 test_that("a release that exists but carries no assets seeds as a first run", {
   # update.yml creates the release before the first run publishes into it. The
-  # generation already says there is nothing to seed from, so there is nothing
-  # to download and fail on.
+  # generation says there is nothing to seed from, and a download that finds no
+  # recent shard agrees, so the missing shard is not a failure.
   out <- tempfile("seed_"); dir.create(out)
+  asked <- character(0)
   io <- list(release_exists = function() TRUE,
              generation = function() "",
-             download = function(pattern, dir) stop("must not be called"))
+             download = function(pattern, dir) { asked <<- c(asked, pattern); FALSE })
   seed <- seed_working_db(io, out, file.path(out, "work.db"))
   expect_false(seed)
   expect_identical(attr(seed, "generation"), "")
+  expect_equal(asked, "vcs-signals-recent.db")
+})
+
+test_that("a generation that reads as empty over a release with history stops instead of starting cold", {
+  # "current" as a draft: the REST lookup by tag is blind to drafts, while gh's
+  # download and upload find them. Read as empty, the merge started cold, skipped
+  # the pull and the gate, and published one run's rows over the draft's history.
+  rel <- .race_release()
+  before <- local_release_snapshot(rel)
+  io <- local_release_io(rel, generation = function() "")
+
+  err <- tryCatch(suppressMessages(.ai$run_merge(io, tempfile("ai_out_"), .ai_parts())),
+                  error = function(e) e)
+  expect_s3_class(err, "error")
+  expect_match(conditionMessage(err), "vcs-signals-recent.db", fixed = TRUE)
+  expect_match(conditionMessage(err), "no assets", fixed = TRUE)
+  expect_length(io$uploaded(), 0)
+  expect_identical(local_release_snapshot(rel), before)
 })
 
 test_that("publish() refuses to run without the generation it was seeded from", {
@@ -472,25 +491,32 @@ test_that("gh_release_generation: a missing release is empty and any other failu
 
   got <- gh_release_generation("o/r", run = fake_gh(
     out = c("vcs-signals-summary.db\tsha256:bb", "manifest.json\tsha256:aa",
-            "vcs-signals-2019.db\t123@2026-07-09T00:00:00Z"),
+            "vcs-signals-2019.db\tRA_kwDO@2026-07-09T00:00:00Z"),
     err = "A new release of gh is available"))
-  expect_identical(got, paste("manifest.json\tsha256:aa", "vcs-signals-2019.db\t123@2026-07-09T00:00:00Z",
+  expect_identical(got, paste("manifest.json\tsha256:aa", "vcs-signals-2019.db\tRA_kwDO@2026-07-09T00:00:00Z",
                               "vcs-signals-summary.db\tsha256:bb", sep = "\n"))
   expect_no_match(got, "new release of gh", fixed = TRUE)
 
   expect_identical(gh_release_generation("o/r", run = fake_gh()), "")
-  expect_identical(gh_release_generation("o/r", run = fake_gh(
-    out = '{"message":"Not Found","status":"404"}', err = "gh: Not Found (HTTP 404)", status = 1L)), "")
+  expect_identical(gh_release_generation("o/r", run = fake_gh(err = "release not found", status = 1L)), "")
   no_wait <- function(seconds) invisible(NULL)
   expect_error(gh_release_generation("o/r", sleep = no_wait, run = fake_gh(
     err = "gh: Server Error (HTTP 502)", status = 1L)), "HTTP 502")
   expect_error(gh_release_generation("o/r", sleep = no_wait, run = fake_gh(
     err = "gh: Bad credentials (HTTP 401)", status = 1L)), "HTTP 401")
+  # Only gh's own "release not found" means there is no release. Any other 404
+  # is something this function cannot interpret, and "" is the dangerous guess.
+  expect_error(gh_release_generation("o/r", sleep = no_wait, run = fake_gh(
+    err = "gh: Not Found (HTTP 404)", status = 1L)), "HTTP 404")
 
+  # The same lookup gh release download and upload use, which finds a draft
+  # "current" as well as a published one. GET releases/tags/<tag> is 404 for a
+  # draft, and read as an empty release that started the merge cold.
   seen <- NULL
   gh_release_generation("r-observatory/vcs-signals", tag = "current",
     run = function(command, args, stdout, stderr) { seen <<- c(command, args); character(0) })
-  expect_equal(seen[1:3], c("gh", "api", "repos/r-observatory/vcs-signals/releases/tags/current"))
+  expect_equal(seen[1:8], c("gh", "release", "view", "current", "--repo", "r-observatory/vcs-signals",
+                            "--json", "assets"))
   expect_true(any(grepl(".digest", seen, fixed = TRUE)))
 })
 
@@ -524,7 +550,7 @@ test_that("gh_release_generation reads again through a transient failure before 
   expect_identical(gh_release_generation("o/r", waits = c(5, 20), sleep = function(s) stop("no wait"),
     run = function(command, args, stdout, stderr) {
       calls <<- calls + 1L
-      writeLines("gh: Not Found (HTTP 404)", stderr)
+      writeLines("release not found", stderr)
       structure(character(0), status = 1L)
     }), "")
   expect_equal(calls, 1L)
