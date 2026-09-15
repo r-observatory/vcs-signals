@@ -944,6 +944,35 @@ changed_shards <- function(prev_hashes, curr_hashes) {
   nm[keep]
 }
 
+#' What to say after a required asset could not be downloaded, for the case where
+#' the release no longer has it. gh release upload --clobber deletes an asset
+#' before it uploads the replacement, so a publish that fails between the two
+#' leaves the release without an asset its manifest still names or the next seed
+#' still needs. Nothing repairs that: the seed or this pull stops on it in every
+#' publisher, run after run, and the stop is the one place that can say where a
+#' copy is. A year shard has one on its per-year release, which
+#' scripts/mirror-year-tags.sh refreshes after each successful run that changed
+#' it. The recent shard and the manifest are kept nowhere else, and the message
+#' says so rather than leave someone looking. A transient failure produces the
+#' same stop, so the hint is conditional on the release really lacking the asset.
+lost_asset_hint <- function(pattern, repo = RELEASE_REPO) {
+  lead <- sprintf(paste0(
+    " If the release no longer lists %s, a publish that failed part way through its uploads ",
+    "deleted it, and every publisher stops here until it is put back."), pattern)
+  year <- regmatches(pattern, regexec("^vcs-signals-([0-9]{4})\\.db$", pattern))[[1]][2]
+  if (!is.na(year))
+    return(sprintf(paste0(
+      "%s The per-year release %s keeps the copy mirrored after the last successful run that ",
+      "changed it: gh release download %s --repo %s --pattern %s, then ",
+      "gh release upload current %s --repo %s --clobber"),
+      lead, year, year, repo, pattern, pattern, repo))
+  if (identical(pattern, "manifest.json"))
+    return(paste0(lead, " No other release keeps a copy of manifest.json. This pull reads only ",
+                  "its summary.years, the years whose vcs-signals-<YYYY>.db assets the release holds, ",
+                  "and the next publish writes the rest."))
+  sprintf("%s No other release keeps a copy of %s.", lead, pattern)
+}
+
 #' Pull the prior release's manifest, recent shard, and year shards into
 #' `dir`, so the change-gate has something to hash against and accumulated
 #' history is never silently discarded by a bad run. A no-op (returns
@@ -959,8 +988,8 @@ protect_history_pull <- function(io, dir) {
   pull_or_stop <- function(pattern) {
     ok <- isTRUE(io$download(pattern, dir))
     if (!ok) stop(sprintf(
-      "release 'current' exists but %s could not be downloaded; aborting to protect accumulated history",
-      pattern))
+      "release 'current' exists but %s could not be downloaded; aborting to protect accumulated history.%s",
+      pattern, lost_asset_hint(pattern)))
     pattern
   }
 

@@ -124,7 +124,8 @@ seed_working_db <- function(io, out_dir, working_path) {
   .pull_or_conflict(io, generation, "while seeding", function() {
     if (!isTRUE(io$download("vcs-signals-recent.db", out_dir)))
       stop("release 'current' exists but vcs-signals-recent.db could not be downloaded; ",
-           "aborting rather than treating accumulated history as absent")
+           "aborting rather than treating accumulated history as absent.",
+           lost_asset_hint("vcs-signals-recent.db"))
     if (!file.exists(prior_path))
       stop("vcs-signals-recent.db reported a successful download but is not on disk; ",
            "aborting rather than treating accumulated history as absent")

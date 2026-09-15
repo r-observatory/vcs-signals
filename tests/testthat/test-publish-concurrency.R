@@ -779,6 +779,44 @@ test_that("a failed pull stops the publish instead of switching the gate off", {
   expect_identical(local_release_snapshot(rel), before)
 })
 
+test_that("a download stopped by an asset the release lost says where a copy is kept, or that none is", {
+  # gh release upload --clobber deletes an asset before it uploads the replacement,
+  # so a publish that fails between the two leaves the release without an asset
+  # its manifest still names or the next seed still needs. Every publisher then
+  # stops on that download, run after run, until someone puts the asset back, and
+  # the stop is the only place that can say where to put it back from.
+  lost <- function(rel, fn) {
+    out <- tempfile("lost_"); dir.create(out)
+    conditionMessage(tryCatch(fn(local_release_io(rel), out), error = function(e) e))
+  }
+  pull <- function(io, out) protect_history_pull(io, out)
+  seed <- function(io, out) seed_working_db(io, out, file.path(out, "work.db"))
+
+  rel <- .race_release()
+  write_manifest(file.path(rel, "manifest.json"), character(0), "current",
+                 list(source_kind = "live", years = list(2025L)))
+  msg <- lost(rel, pull)
+  expect_match(msg, "vcs-signals-2025.db could not be downloaded", fixed = TRUE)
+  expect_match(msg, sprintf("gh release download 2025 --repo %s --pattern vcs-signals-2025.db",
+                            RELEASE_REPO), fixed = TRUE)
+  expect_match(msg, sprintf("gh release upload current vcs-signals-2025.db --repo %s --clobber",
+                            RELEASE_REPO), fixed = TRUE)
+
+  unlink(file.path(rel, "manifest.json"))
+  msg <- lost(rel, pull)
+  expect_match(msg, "manifest.json could not be downloaded", fixed = TRUE)
+  expect_match(msg, "No other release keeps a copy of manifest.json", fixed = TRUE)
+  expect_match(msg, "summary.years", fixed = TRUE)
+
+  rel <- .race_release()
+  unlink(file.path(rel, "vcs-signals-recent.db"))
+  for (msg in list(lost(rel, seed), lost(rel, pull))) {
+    expect_match(msg, "vcs-signals-recent.db could not be downloaded", fixed = TRUE)
+    expect_match(msg, "No other release keeps a copy of vcs-signals-recent.db", fixed = TRUE)
+    expect_no_match(msg, "gh release download", fixed = TRUE)
+  }
+})
+
 # ---- a pull that fails because another publisher is part way through ----------
 
 # The release as the AI merge leaves it, built beside rel so a test can land it
