@@ -167,7 +167,9 @@ seed_working_db <- function(io, out_dir, working_path) {
 #' gh_release_generation); download(pattern, dir) -> logical; upload(path) ->
 #' invisible.
 #' opts$force_full re-exports and re-uploads every shard regardless of the
-#' change-gate; opts$tag overrides the release tag (default "current").
+#' change-gate; opts$tag overrides the release tag (default "current");
+#' opts$links_backfill names the link backfill file (default
+#' LINKS_BACKFILL_PATH, the committed one).
 #' A publish refused because another publisher moved the release in the meantime
 #' is not retried here: see retry_on_publish_conflict for why.
 run_update <- function(io, out_dir, opts = list()) {
@@ -197,7 +199,11 @@ run_update <- function(io, out_dir, opts = list()) {
   curr_pkgs <- length(unique(paste(idx$repo_packages$package, idx$repo_packages$origin)))
   universe_guard(prev_pkgs, prev_repos, curr_pkgs, nrow(idx$repos))
 
-  write_repo_tables(con, idx$repos, idx$repo_packages, today_s)
+  # Read and checked in full before anything is written, so a malformed file
+  # stops the run here rather than landing the rows that parsed before it.
+  links_backfill <- read_links_backfill(
+    if (is.null(opts$links_backfill)) LINKS_BACKFILL_PATH else opts$links_backfill)
+  write_repo_tables(con, idx$repos, idx$repo_packages, today_s, links_backfill = links_backfill)
   print_coverage(input, resolved, idx)
 
   # ---- Rate-limit preflight (I3): below-reserve skips resolve + collection

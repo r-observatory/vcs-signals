@@ -468,8 +468,42 @@ A,openhands,open,"tier A iterates cheap-pass evidence, which openhands can only 
 # explicitly, so three tables added to the pipeline were created empty in the
 # published database and never filled: a consumer reading them saw a table with
 # no rows, which is indistinguishable from a table nothing has written yet.
+#
+# repo_package_links is here for the same round trip and has more riding on it
+# than the others. Only the daily update writes it, every merge publishes it as
+# seeded, and once a package has left CRAN or moved its URL it is the only record
+# anywhere of which repository the package was. A path that dropped it would
+# lose those links for good, because nothing resolves a delisted package again.
 SUMMARY_EXTRA_TABLES <- c("vcs_ai_models", "vcs_ai_rule_inventory",
-                          "vcs_ai_silent_channels")
+                          "vcs_ai_silent_channels", "repo_package_links")
+
+# Package-to-repository links this pipeline published before it kept them. Built
+# from every surviving copy of what it published: the vcs_signals_summary in a
+# merged observatory.db of 2026-08-01, the summaries the weekly AI runs carried
+# in their artifacts from 2026-08-04 to 2026-09-13, and the release's previous
+# summary of 2026-09-14 and summary of 2026-09-15. Each row spans the
+# first and last of those copies the link appears in. first_seen is 2026-08-01
+# for most rows because that is the oldest copy left, not the day the link
+# began, and a link that came and went during July is not here at all. The
+# artifacts expire, so this file is the only place the history lives.
+#
+# The copies are up to a week apart, so every date here is a bound and not a
+# sighting: first_seen is on or before the day the link began, last_seen on or
+# after the day it ended. 63 of the 80 links the published table had already
+# lost sit on a retired repository whose repos.last_seen is one to six days past
+# the link's last_seen here. They were not tightened from it, because
+# repos.last_seen dates the repository and not the link: the 3 on repositories
+# still active are 9 days past it, since another package kept them listed.
+#
+# Applied by every daily run, so a link table that was reset gets these rows back
+# on the next one. Only these: a link first recorded by a daily run is not in
+# this file, and nothing restores it.
+#
+# Resolved to an absolute path now, while the working directory is the
+# repository root: every script sources this file by a root-relative path, and
+# the suite then runs its tests from tests/testthat, where a relative path would
+# find nothing.
+LINKS_BACKFILL_PATH <- file.path(getwd(), "data", "repo-package-links-backfill.csv.gz")
 
 # Wall-clock budget for one deep shard, comfortably inside the 240 minute job
 # timeout in ai-weekly.yml. A cancelled job skips its upload step, so a shard
