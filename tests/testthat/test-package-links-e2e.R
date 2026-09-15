@@ -311,6 +311,46 @@ test_that("with no copy left to restore from, the links are refused rather than 
   expect_equal(c(a$first_seen, a$last_seen), c("2026-09-02", "2026-09-03"))
 })
 
+test_that("a link restore that fails while another publisher replaces the release is a conflict", {
+  # The restore downloads the summary and its previous copy after the seed has
+  # read the generation. gh release upload --clobber deletes an asset before it
+  # uploads the new one, so a publisher part way through its uploads can take the
+  # only copy away for that moment. The links are not lost then, the release
+  # moved, and a merge has to seed again rather than go red saying no copy is left.
+  .fast_batches()
+  opts <- list(links_backfill = .history_backfill())
+  older_code_release <- function() {
+    rel <- .release()
+    .run_on(rel, "2026-09-01", .universe(pkgA = "repo1", pkgB = "repo2"), opts)
+    .run_on(rel, "2026-09-02", .universe(pkgA = "repo1"), opts)
+    .publish_by_older_code(rel)
+    rel
+  }
+  prev_fails_once <- function(rel, change) {
+    failed <- FALSE
+    function(pattern, dir) {
+      if (!failed && identical(pattern, "vcs-signals-summary-prev.db")) {
+        failed <<- TRUE; change(); return(FALSE)
+      }
+      rel$io$download(pattern, dir)
+    }
+  }
+  out <- tempfile("seed_"); dir.create(out)
+
+  rel <- older_code_release()
+  io <- local_release_io(rel$remote, download = prev_fails_once(rel, function()
+    unlink(file.path(rel$remote, "vcs-signals-summary-prev.db"))))
+  err <- tryCatch(seed_working_db(io, out, file.path(out, "work.db")), error = function(e) e)
+  expect_s3_class(err, "vcs_publish_conflict")
+  expect_match(conditionMessage(err), "while restoring the link table", fixed = TRUE)
+
+  rel <- older_code_release()
+  io <- local_release_io(rel$remote, download = prev_fails_once(rel, function() NULL))
+  err <- tryCatch(seed_working_db(io, out, file.path(out, "work.db")), error = function(e) e)
+  expect_false(inherits(err, "vcs_publish_conflict"))
+  expect_match(conditionMessage(err), "published repo_package_links since 2026-09-01", fixed = TRUE)
+})
+
 test_that("a merge a daily run publishes inside seeds again and keeps the links that run advanced", {
   # The weekly merge seeds on Sunday morning and publishes hours later, and the
   # daily update can publish in between. Built from the older seed, the merge

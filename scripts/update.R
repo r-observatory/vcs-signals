@@ -157,7 +157,12 @@ seed_working_db <- function(io, out_dir, working_path) {
   # Every publisher seeds here, and a table the seed brings back empty is what
   # each of them then publishes. A link whose package has left cannot be
   # resolved again, so an empty link table has to be caught here or not at all.
-  restore_package_links(io, wcon, file.path(out_dir, "_links_restore"))
+  # The restore downloads the summary and its previous copy after the generation
+  # was read, as the recent shard's download above does, so one that finds its
+  # copy deleted for another publisher's --clobber is the same conflict and not
+  # a history with nothing left to restore from.
+  .pull_or_conflict(io, generation, "while restoring the link table", function()
+    restore_package_links(io, wcon, file.path(out_dir, "_links_restore")))
   seeded(TRUE)
 }
 
