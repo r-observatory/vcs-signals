@@ -188,3 +188,32 @@ test_that("a link table that was reset gets the backfilled rows back on the next
                     links_backfill = .backfill())
   expect_identical(.links(con), before)
 })
+
+test_that("the packages the last run left in repo_packages are linked on that run's day", {
+  # The backfill stops at 2026-09-15 and the first run that keeps links is some
+  # day after it. Every run in between left repo_packages naming what resolved
+  # on its day, and that run moved each of those repositories' last_seen to the
+  # same day. So the seeded state already proves those links and their date, and
+  # dropping it with the DELETE below loses a package that arrived after the
+  # backfill was cut and left before the first run that kept links.
+  con <- new_test_db(); on.exit(DBI::dbDisconnect(con))
+  ra <- "github.com/o/repoa"; rb <- "github.com/o/repob"; rd <- "github.com/o/repod"
+  write_repo_tables(con, rbind(.repo_row(ra), .repo_row(rb), .repo_row(rd)),
+                    rbind(.rp_row(ra, "pkgA"), .rp_row(ra, "pkgE"), .rp_row(rb, "pkgB"),
+                          .rp_row(rd, "pkgD")), "2026-09-22")
+  # Seeded from a shard written before the table existed.
+  DBI::dbExecute(con, "DROP TABLE repo_package_links")
+
+  bf <- data.frame(repo_id = rb, package = "pkgB", origin = "cran",
+                   first_seen = "2026-08-01", last_seen = "2026-09-15", stringsAsFactors = FALSE)
+  write_repo_tables(con, .repo_row(ra), .rp_row(ra, "pkgA"), "2026-09-23", links_backfill = bf)
+
+  got <- .links(con)
+  span <- function(pkg) unlist(got[got$package == pkg, c("first_seen", "last_seen")], use.names = FALSE)
+  expect_equal(span("pkgD"), c("2026-09-22", "2026-09-22"))   # in no backfill, gone today
+  expect_equal(span("pkgB"), c("2026-08-01", "2026-09-22"))   # the backfill's end moves on
+  expect_equal(span("pkgA"), c("2026-09-22", "2026-09-23"))
+  # repoa is seen again today, and still pkgE left it yesterday: the day comes
+  # from the repository as the last run left it, not after today moved it.
+  expect_equal(span("pkgE"), c("2026-09-22", "2026-09-22"))
+})

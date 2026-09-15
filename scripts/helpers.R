@@ -319,6 +319,21 @@ read_links_backfill <- function(path) {
 write_repo_tables <- function(con, repos_df, repo_packages_df, today, links_backfill = NULL) {
   ensure_repo_schema(con)
   existing <- DBI::dbGetQuery(con, "SELECT repo_id, status FROM repos")
+  # What the previous run resolved, dated by that run. repo_packages is replaced
+  # whole on every run, in the same transaction that sets each of its
+  # repositories' last_seen to the run's day, so every row still here is a link
+  # sighted on its repository's last_seen. Recording them before the DELETE
+  # below changes nothing on a day after a run that kept links, since those rows
+  # already reach that day. It is what keeps the days a run that did not keep
+  # links saw: the backfill stops at 2026-09-15, and a package that arrived
+  # after that and left before the first run with this table was otherwise in
+  # no record at all, while a package listed until then had its link end at
+  # 2026-09-15. Read before the repos upsert, which moves last_seen to today for
+  # every repository seen today, including one a package left yesterday.
+  seeded_links <- DBI::dbGetQuery(con,
+    "SELECT rp.repo_id, rp.package, rp.origin, r.last_seen AS first_seen, r.last_seen
+       FROM repo_packages rp JOIN repos r ON r.repo_id = rp.repo_id
+      WHERE r.last_seen IS NOT NULL")
   DBI::dbBegin(con)
   ok <- FALSE
   on.exit(if (!ok) tryCatch(DBI::dbRollback(con), error = function(e) NULL), add = TRUE)
@@ -354,6 +369,7 @@ write_repo_tables <- function(con, repos_df, repo_packages_df, today, links_back
   # repo_packages above forgets a package the day it stops resolving; this is the
   # half that does not. Today's links widen to today, links not seen today are
   # left exactly as they were, and nothing here deletes.
+  .upsert_package_links(con, seeded_links)
   if (nrow(repo_packages_df) > 0) {
     .upsert_package_links(con, data.frame(
       repo_id = repo_packages_df$repo_id, package = repo_packages_df$package,
