@@ -343,6 +343,49 @@ test_that("a release listing that lags the uploads is read again before it is ca
   expect_equal(slept, 1L)
 })
 
+test_that("a confirmation read that fails once after the uploads does not fail a publish that landed", {
+  # The release API has served 502s here (the update of 2026-08-20). After the
+  # manifest is up the data is out, and a red run would skip the release notes
+  # and the year-tag mirror and send update.yml's catch-up round again.
+  rel <- .race_release()
+  manifest_up <- FALSE
+  blipped <- FALSE
+  slept <- 0L
+  base <- local_release_io(rel, on_upload = function(name)
+    if (identical(name, "manifest.json")) manifest_up <<- TRUE)
+  io <- utils::modifyList(base, list(
+    generation = function() {
+      if (manifest_up && !blipped) { blipped <<- TRUE; stop("gh: Server Error (HTTP 502)") }
+      base$generation()
+    },
+    sleep = function(seconds) slept <<- slept + 1L))
+
+  expect_no_error(suppressMessages(.ai$run_merge(io, tempfile("ai_out_"), .ai_parts())))
+  expect_true(blipped)
+  expect_equal(slept, 1L)
+  expect_equal(.published(rel)$ai_tools, c("claude", "copilot"))
+})
+
+test_that("a confirmation that can never be read says the uploads went through", {
+  rel <- .race_release()
+  manifest_up <- FALSE
+  base <- local_release_io(rel, on_upload = function(name)
+    if (identical(name, "manifest.json")) manifest_up <<- TRUE)
+  io <- utils::modifyList(base, list(generation = function() {
+    if (manifest_up) stop("gh: Server Error (HTTP 502)")
+    base$generation()
+  }))
+
+  err <- tryCatch(suppressMessages(.ai$run_merge(io, tempfile("ai_out_"), .ai_parts())),
+                  error = function(e) e)
+  expect_s3_class(err, "error")
+  expect_false(inherits(err, "vcs_publish_conflict"))
+  expect_match(conditionMessage(err), "uploads went through", fixed = TRUE)
+  expect_match(conditionMessage(err), "could not be read back", fixed = TRUE)
+  expect_match(conditionMessage(err), "HTTP 502", fixed = TRUE)
+  expect_true("manifest.json" %in% io$uploaded())
+})
+
 # ---- the generation itself ---------------------------------------------------
 
 test_that("seed_working_db reads the generation before it downloads anything", {
@@ -438,9 +481,10 @@ test_that("gh_release_generation: a missing release is empty and any other failu
   expect_identical(gh_release_generation("o/r", run = fake_gh()), "")
   expect_identical(gh_release_generation("o/r", run = fake_gh(
     out = '{"message":"Not Found","status":"404"}', err = "gh: Not Found (HTTP 404)", status = 1L)), "")
-  expect_error(gh_release_generation("o/r", run = fake_gh(
+  no_wait <- function(seconds) invisible(NULL)
+  expect_error(gh_release_generation("o/r", sleep = no_wait, run = fake_gh(
     err = "gh: Server Error (HTTP 502)", status = 1L)), "HTTP 502")
-  expect_error(gh_release_generation("o/r", run = fake_gh(
+  expect_error(gh_release_generation("o/r", sleep = no_wait, run = fake_gh(
     err = "gh: Bad credentials (HTTP 401)", status = 1L)), "HTTP 401")
 
   seen <- NULL
@@ -448,6 +492,42 @@ test_that("gh_release_generation: a missing release is empty and any other failu
     run = function(command, args, stdout, stderr) { seen <<- c(command, args); character(0) })
   expect_equal(seen[1:3], c("gh", "api", "repos/r-observatory/vcs-signals/releases/tags/current"))
   expect_true(any(grepl(".digest", seen, fixed = TRUE)))
+})
+
+test_that("gh_release_generation reads again through a transient failure before giving up", {
+  # Every publish reads the generation at least four times, and none of those
+  # reads may throw away a merge or fail a publish over one 5xx.
+  calls <- 0L
+  slept <- numeric(0)
+  flaky <- function(fails) function(command, args, stdout, stderr) {
+    calls <<- calls + 1L
+    if (calls <= fails) {
+      writeLines("gh: Server Error (HTTP 502)", stderr)
+      return(structure(character(0), status = 1L))
+    }
+    "manifest.json\tsha256:aa"
+  }
+  got <- gh_release_generation("o/r", run = flaky(2L), waits = c(5, 20),
+                               sleep = function(s) slept <<- c(slept, s))
+  expect_identical(got, "manifest.json\tsha256:aa")
+  expect_equal(calls, 3L)
+  expect_length(slept, 2L)
+
+  calls <- 0L
+  slept <- numeric(0)
+  expect_error(gh_release_generation("o/r", run = flaky(99L), waits = c(5, 20),
+                                     sleep = function(s) slept <<- c(slept, s)), "HTTP 502")
+  expect_equal(calls, 3L)
+
+  # A release that is not there is an answer, not a failure, and is not asked again.
+  calls <- 0L
+  expect_identical(gh_release_generation("o/r", waits = c(5, 20), sleep = function(s) stop("no wait"),
+    run = function(command, args, stdout, stderr) {
+      calls <<- calls + 1L
+      writeLines("gh: Not Found (HTTP 404)", stderr)
+      structure(character(0), status = 1L)
+    }), "")
+  expect_equal(calls, 1L)
 })
 
 test_that("every publisher's real io reads the release generation", {

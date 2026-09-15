@@ -354,23 +354,31 @@ gh_release_exists <- function(repo, tag = "current") {
 #' stderr goes to its own file, so a gh upgrade notice or warning never becomes
 #' part of the string and a false conflict. `run` is system2, injected so the
 #' suite can answer for gh without a network.
-gh_release_generation <- function(repo, tag = "current", run = system2) {
+#'
+#' A failed read is tried again after each of `waits` (sleep injected like run),
+#' and only the last failure stops. A missing release is an answer and is not
+#' asked twice.
+gh_release_generation <- function(repo, tag = "current", run = system2,
+                                  waits = RELEASE_READ_RETRY_WAITS_S, sleep = Sys.sleep) {
   jq <- '.assets[] | [.name, (.digest // ((.id | tostring) + "@" + .updated_at))] | join("\t")'
-  err_file <- tempfile("gh-release-generation-")
-  on.exit(unlink(err_file), add = TRUE)
-  out <- suppressWarnings(run("gh", c("api", sprintf("repos/%s/releases/tags/%s", repo, tag),
-                                      "--jq", shQuote(jq)),
-                              stdout = TRUE, stderr = err_file))
-  status <- attr(out, "status")
-  status <- if (is.null(status)) 0L else as.integer(status)
-  err <- if (file.exists(err_file)) paste(readLines(err_file, warn = FALSE), collapse = "\n") else ""
-  if (!identical(status, 0L)) {
-    if (grepl("HTTP 404", err, fixed = TRUE)) return("")
-    stop(sprintf("could not read the asset digests of release '%s' on %s (gh exit %s): %s",
-                 tag, repo, status, err), call. = FALSE)
+  read_once <- function() {
+    err_file <- tempfile("gh-release-generation-")
+    on.exit(unlink(err_file), add = TRUE)
+    out <- suppressWarnings(run("gh", c("api", sprintf("repos/%s/releases/tags/%s", repo, tag),
+                                        "--jq", shQuote(jq)),
+                                stdout = TRUE, stderr = err_file))
+    status <- attr(out, "status")
+    status <- if (is.null(status)) 0L else as.integer(status)
+    err <- if (file.exists(err_file)) paste(readLines(err_file, warn = FALSE), collapse = "\n") else ""
+    if (!identical(status, 0L)) {
+      if (grepl("HTTP 404", err, fixed = TRUE)) return("")
+      stop(sprintf("could not read the asset digests of release '%s' on %s (gh exit %s): %s",
+                   tag, repo, status, err), call. = FALSE)
+    }
+    lines <- out[nzchar(out)]
+    paste(sort(lines, method = "radix"), collapse = "\n")
   }
-  lines <- out[nzchar(out)]
-  paste(sort(lines, method = "radix"), collapse = "\n")
+  with_retry(read_once, waits = waits, sleep = sleep)
 }
 
 gh_release_download <- function(repo, pattern, dir, tag = "current") {

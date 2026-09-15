@@ -57,6 +57,11 @@ RELEASE_REPO     <- "r-observatory/vcs-signals"
 # that has already put its data out should not go red over it. A real mixture of
 # two builds is still there after the last wait, and is reported then.
 PUBLISH_CONFIRM_WAITS_S <- c(5, 15)
+# Waits, in seconds, before reading the release's asset digests again after gh
+# fails to. A publish reads them at least four times, and the release API has
+# served 502s here (the update of 2026-08-20), so one bad answer would otherwise
+# throw away a 90-minute update or fail a publish whose data is already out.
+RELEASE_READ_RETRY_WAITS_S <- c(5, 20)
 FORWARD_METRICS  <- c("stars", "forks", "watchers", "issues_open", "issues_closed",
                       "prs_open", "prs_closed", "prs_merged",
                       "releases_total", "size_kb")

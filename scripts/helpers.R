@@ -1510,6 +1510,10 @@ retry_on_publish_conflict <- function(fn, attempts = 2L) {
 # can only detect a mixture of two builds, not prevent one, and it says which
 # assets to look at. Read again after short waits before concluding, so a listing
 # served a moment behind the upload does not fail a run that published correctly.
+# A read that fails is treated the same way: by then the data is out, and a red
+# run skips the release notes and the year-tag mirror and, for the daily update,
+# sends the catch-up round to collect and publish everything again. Only when the
+# last read also fails does the run stop, saying the uploads went through.
 .confirm_publish_landed <- function(io, base, uploaded, waits = PUBLISH_CONFIRM_WAITS_S) {
   sleep <- if (is.function(io$sleep)) io$sleep else Sys.sleep
   uploaded <- unique(uploaded)
@@ -1525,11 +1529,17 @@ retry_on_publish_conflict <- function(fn, attempts = 2L) {
     c(sprintf("%s does not hold the file this run uploaded", replaced),
       sprintf("%s changed although this run did not upload it", moved))
   }
-  found <- problems()
+  look <- function() tryCatch(problems(), error = function(e) e)
+  found <- look()
   for (w in waits) {
-    if (!length(found)) break
+    if (is.character(found) && !length(found)) break
     sleep(w)
-    found <- problems()
+    found <- look()
+  }
+  if (inherits(found, "error")) {
+    stop(sprintf(paste0(
+      "this run's uploads went through, but the release could not be read back to confirm that ",
+      "no other publisher interleaved with them: %s"), conditionMessage(found)), call. = FALSE)
   }
   if (length(found)) {
     stop(sprintf(paste0(
