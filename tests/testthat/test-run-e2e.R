@@ -1,47 +1,42 @@
 test_that("run_update resolves, collects, materializes, and publishes with a fake io", {
   out <- tempfile("out"); dir.create(out)
   # fake io: SP1 acquisition returns a fixed 1-repo input; graphql returns fixtures;
-  # release IO records uploads.
-  uploaded <- new.env(); uploaded$paths <- character(0)
-  io <- list(
+  # release IO is an empty local release that records uploads.
+  rel <- tempfile("rel"); dir.create(rel)
+  io <- local_release_io(rel,
     acquire = function() data.frame(package = "ggplot2", origin = "cran",
       url_raw = "https://github.com/tidyverse/ggplot2", bugreports_raw = NA, stringsAsFactors = FALSE),
     graphql = function(query) {
       f <- if (grepl("followRenames", query)) "resolve_one.json"
            else if (grepl("history \\{ totalCount", query)) "commits.json" else "gauges_one.json"
       jsonlite::fromJSON(readLines(file.path("fixtures", f), warn = FALSE), simplifyVector = FALSE)
-    },
-    release_exists = function() FALSE, download = function(pattern, dir) FALSE,
-    upload = function(path) uploaded$paths <- c(uploaded$paths, basename(path)))
+    })
   run_update(io, out, list(force_full = TRUE))
   con <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-signals-recent.db"))
   on.exit(DBI::dbDisconnect(con))
   expect_true(DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM signals_series")$n >= 1)
   expect_equal(DBI::dbGetQuery(con, "SELECT value FROM series_latest WHERE metric='stars'")$value, 6959)
   expect_true(DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM vcs_signals_summary WHERE package='ggplot2'")$n == 1)
-  expect_true("manifest.json" %in% uploaded$paths)
+  expect_true("manifest.json" %in% io$uploaded())
 })
 
 test_that("run_update floor: a total collection failure on a later run leaves series_latest and summary unchanged", {
-  # Same out_dir reused across both calls (mirrors a real daily run: the
-  # second call's release_exists/download read back exactly what the first
-  # call's publish() wrote directly into out_dir, so a no-op download that
-  # just reports "yes, it's there" is a faithful fake for this repo/io
-  # contract without needing a separate fake-remote directory).
+  # Same out_dir and the same local release across both calls, mirroring a real
+  # daily run: the second call seeds from exactly what the first call's publish()
+  # uploaded.
   out <- tempfile("out_floor"); dir.create(out)
+  rel <- tempfile("rel_floor"); dir.create(rel)
   acquire_one <- function() data.frame(package = "ggplot2", origin = "cran",
     url_raw = "https://github.com/tidyverse/ggplot2", bugreports_raw = NA, stringsAsFactors = FALSE)
 
-  io1 <- list(
+  io1 <- local_release_io(rel,
     acquire = acquire_one,
     graphql = function(query) {
       if (grepl("rateLimit", query)) return(list(data = list(nodes = list())))
       f <- if (grepl("followRenames", query)) "resolve_one.json"
            else if (grepl("history \\{ totalCount", query)) "commits.json" else "gauges_one.json"
       jsonlite::fromJSON(readLines(file.path("fixtures", f), warn = FALSE), simplifyVector = FALSE)
-    },
-    release_exists = function() FALSE, download = function(pattern, dir) FALSE,
-    upload = function(path) invisible(NULL))
+    })
   run_update(io1, out, list(force_full = TRUE))
 
   con1 <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-signals-recent.db"))
@@ -53,14 +48,12 @@ test_that("run_update floor: a total collection failure on a later run leaves se
   # Run 2: rateLimit preflight reports unlimited (so I3's preflight does not
   # itself explain an empty run), but every gauge/commit query errors, so
   # stage-3 collection returns nothing at all.
-  io2 <- list(
+  io2 <- local_release_io(rel,
     acquire = acquire_one,
     graphql = function(query) {
       if (grepl("rateLimit", query)) return(list(data = list(nodes = list())))
       list(data = NULL, errors = list(list(message = "SERVICE_UNAVAILABLE")))
-    },
-    release_exists = function() TRUE, download = function(pattern, dir) TRUE,
-    upload = function(path) invisible(NULL))
+    })
   run_update(io2, out, list(force_full = FALSE))
 
   con2 <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-signals-recent.db"))
@@ -86,6 +79,7 @@ test_that("run_update carries last_release_date/median_days_between_releases for
   # then runs a repo that IS collected again on every pass, proving those two
   # columns survive the summary rebuild instead of being wiped to NA.
   out <- tempfile("out_release_facts"); dir.create(out)
+  rel <- tempfile("rel_release_facts"); dir.create(rel)
   repo_id <- repo_slug("github.com", "tidyverse", "ggplot2")
 
   # Seed series_latest's releases_total at the same value gauges_one.json
@@ -95,7 +89,7 @@ test_that("run_update carries last_release_date/median_days_between_releases for
   # build_signals_summary's release_last_date) at NA every run, so the
   # seeded prior value is what must carry forward, not a value the window
   # happens to recompute today.
-  seed_path <- file.path(out, "vcs-signals-recent.db")
+  seed_path <- file.path(rel, "vcs-signals-recent.db")
   scon <- DBI::dbConnect(RSQLite::SQLite(), seed_path)
   ensure_repo_schema(scon); ensure_series_schema(scon)
   DBI::dbExecute(scon, "INSERT INTO repos
@@ -112,19 +106,20 @@ test_that("run_update carries last_release_date/median_days_between_releases for
     VALUES (?,?,?,?,?,?,?)",
     params = list("ggplot2", "cran", repo_id, "2023-05-05", 30L, "2020-01-01", "2020-01-01"))
   DBI::dbDisconnect(scon)
+  # A published recent shard always has a manifest beside it, and the publish-time
+  # pull now stops rather than carrying on when one is missing.
+  writeLines('{"summary":{"years":[]}}', file.path(rel, "manifest.json"))
 
   acquire_one <- function() data.frame(package = "ggplot2", origin = "cran",
     url_raw = "https://github.com/tidyverse/ggplot2", bugreports_raw = NA, stringsAsFactors = FALSE)
-  io <- list(
+  io <- local_release_io(rel,
     acquire = acquire_one,
     graphql = function(query) {
       if (grepl("rateLimit", query)) return(list(data = list(nodes = list())))
       f <- if (grepl("followRenames", query)) "resolve_one.json"
            else if (grepl("history \\{ totalCount", query)) "commits.json" else "gauges_one.json"
       jsonlite::fromJSON(readLines(file.path("fixtures", f), warn = FALSE), simplifyVector = FALSE)
-    },
-    release_exists = function() TRUE, download = function(pattern, dir) TRUE,
-    upload = function(path) invisible(NULL))
+    })
 
   # Two passes, mirroring the floor test's two-call shape: the repo is
   # collected successfully both times (unlike the floor test's second call),

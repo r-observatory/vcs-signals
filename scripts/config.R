@@ -51,6 +51,12 @@ SUPPORTED_HOSTS <- c("github")
 # ---- GitHub forward-gauge collection + publishing ----
 GRAPHQL_ENDPOINT <- "https://api.github.com/graphql"
 RELEASE_REPO     <- "r-observatory/vcs-signals"
+# Waits, in seconds, before publish() reads the release listing again when the
+# assets it has just uploaded do not yet show the digests of the files it sent.
+# A listing served a moment behind the upload is not another publisher, and a run
+# that has already put its data out should not go red over it. A real mixture of
+# two builds is still there after the last wait, and is reported then.
+PUBLISH_CONFIRM_WAITS_S <- c(5, 15)
 FORWARD_METRICS  <- c("stars", "forks", "watchers", "issues_open", "issues_closed",
                       "prs_open", "prs_closed", "prs_merged",
                       "releases_total", "size_kb")

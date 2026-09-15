@@ -17,21 +17,15 @@ test_that("export_summary_shard writes the ai_signals_df param to vcs_ai_signals
 
 test_that("vcs_ai_signals survives a full publish -> re-seed round trip", {
   # Fake io backed by a local 'release' dir: upload copies in, download copies out.
-  # Model on the fake io in test-publisher.R; reuse its io builder if present.
   rel <- tempfile("rel_"); dir.create(rel)
-  io <- list(
-    release_exists = function() length(list.files(rel)) > 0,
-    download = function(pattern, dir) {
-      f <- list.files(rel, pattern = utils::glob2rx(pattern), full.names = TRUE)
-      if (!length(f)) return(FALSE)
-      file.copy(f, file.path(dir, basename(f)), overwrite = TRUE); TRUE },
-    upload = function(path) { file.copy(path, file.path(rel, basename(path)), overwrite = TRUE); TRUE })
+  io <- local_release_io(rel)
 
   out1 <- tempfile("o1_"); dir.create(out1)
   con <- DBI::dbConnect(RSQLite::SQLite(), file.path(out1, "w.db"))
   ensure_repo_schema(con); ensure_series_schema(con)
   DBI::dbExecute(con, "INSERT INTO vcs_ai_signals (repo_id, tool, first_seen_date, first_seen_censored, evidence_tiers, authored, last_confirmed_date) VALUES ('github.com/o/r','claude','2024-03-01',0,'A',1,'2025-01-01')")
-  publish(io, con, out1, tag = "current", source_kind = "live", force_full = TRUE)
+  publish(io, con, out1, tag = "current", source_kind = "live", force_full = TRUE,
+          base_generation = "")
   DBI::dbDisconnect(con)
 
   out2 <- tempfile("o2_"); dir.create(out2)
@@ -49,6 +43,7 @@ test_that("a failed history pull aborts instead of looking like a first run", {
   # rows, and the published table is deleted and rewritten from one run's shards.
   out <- tempfile("seed_"); dir.create(out)
   io <- list(release_exists = function() TRUE,
+             generation = function() "vcs-signals-recent.db\tsha256:0",
              download = function(pattern, dir) FALSE)
   expect_error(seed_working_db(io, out, file.path(out, "work.db")),
                "could not be downloaded")
@@ -57,6 +52,7 @@ test_that("a failed history pull aborts instead of looking like a first run", {
 test_that("a download that reports success but leaves no file also aborts", {
   out <- tempfile("seed_"); dir.create(out)
   io <- list(release_exists = function() TRUE,
+             generation = function() "vcs-signals-recent.db\tsha256:0",
              download = function(pattern, dir) TRUE)   # lies: writes nothing
   expect_error(seed_working_db(io, out, file.path(out, "work.db")),
                "not on disk")
@@ -66,6 +62,7 @@ test_that("no release at all is still a legitimate first run", {
   # The one harmless case must stay harmless, or every bootstrap breaks.
   out <- tempfile("seed_"); dir.create(out)
   io <- list(release_exists = function() FALSE,
+             generation = function() "",
              download = function(pattern, dir) stop("must not be called"))
   expect_false(seed_working_db(io, out, file.path(out, "work.db")))
 })

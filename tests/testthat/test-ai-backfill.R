@@ -261,22 +261,17 @@ test_that("run_deep pauses before a repo when rate remaining is below AI_POINT_R
 })
 
 test_that("run_merge reduces prior onsets against incoming shard partials and republishes", {
-  # Local-release fake io (upload copies in, download copies out), as in test-ai-persistence.R.
+  # Local-release fake io (upload copies in, download copies out), from helper-setup.R.
   rel <- tempfile("rel_"); dir.create(rel)
-  io <- list(
-    release_exists = function() length(list.files(rel)) > 0,
-    download = function(pattern, dir) {
-      f <- list.files(rel, pattern = utils::glob2rx(pattern), full.names = TRUE)
-      if (!length(f)) return(FALSE)
-      file.copy(f, file.path(dir, basename(f)), overwrite = TRUE); TRUE },
-    upload = function(path) { file.copy(path, file.path(rel, basename(path)), overwrite = TRUE); TRUE })
+  io <- local_release_io(rel)
 
   # Prior published state: one claude onset recorded as a censored floor at 2024-06-01.
   out1 <- tempfile("o1_"); dir.create(out1)
   con <- DBI::dbConnect(RSQLite::SQLite(), file.path(out1, "w.db"))
   ensure_repo_schema(con); ensure_series_schema(con)
   DBI::dbExecute(con, "INSERT INTO vcs_ai_signals (repo_id,tool,first_seen_date,first_seen_censored,evidence_tiers,authored,last_confirmed_date) VALUES ('github.com/o/r','claude','2024-06-01',1,'D',0,'2024-06-01')")
-  publish(io, con, out1, tag = "current", source_kind = "live", force_full = TRUE)
+  publish(io, con, out1, tag = "current", source_kind = "live", force_full = TRUE,
+          base_generation = "")
   DBI::dbDisconnect(con)
 
   # Incoming deep partial: an EXACT claude onset at 2024-03-01 (earlier than the floor).
@@ -302,21 +297,16 @@ test_that("run_merge reduces prior onsets against incoming shard partials and re
 })
 
 test_that("run_merge unions vcs-dev-tooling shards into the republished summary", {
-  # Local-release fake io (upload copies in, download copies out), matching the run_merge test.
+  # Local-release fake io (upload copies in, download copies out), from helper-setup.R.
   rel <- tempfile("rel_"); dir.create(rel)
-  io <- list(
-    release_exists = function() length(list.files(rel)) > 0,
-    download = function(pattern, dir) {
-      f <- list.files(rel, pattern = utils::glob2rx(pattern), full.names = TRUE)
-      if (!length(f)) return(FALSE)
-      file.copy(f, file.path(dir, basename(f)), overwrite = TRUE); TRUE },
-    upload = function(path) { file.copy(path, file.path(rel, basename(path)), overwrite = TRUE); TRUE })
+  io <- local_release_io(rel)
 
   # Establish an initial (empty) release so run_merge's non-force_full publish has assets to pull.
   out0 <- tempfile("o0_"); dir.create(out0)
   con0 <- DBI::dbConnect(RSQLite::SQLite(), file.path(out0, "w.db"))
   ensure_repo_schema(con0); ensure_series_schema(con0)
-  publish(io, con0, out0, tag = "current", source_kind = "live", force_full = TRUE)
+  publish(io, con0, out0, tag = "current", source_kind = "live", force_full = TRUE,
+          base_generation = "")
   DBI::dbDisconnect(con0)
 
   # This week's cheap dev-tooling shard: two repos.
@@ -345,13 +335,7 @@ test_that("run_merge preserves a prior dev-tooling repo absent from this dispatc
   # A partial weekly run (run_cheap paused on budget) scans only some repos; a repo onset last
   # week but not in this dispatch's shards must SURVIVE the merge, not be wiped by the fold.
   rel <- tempfile("rel_"); dir.create(rel)
-  io <- list(
-    release_exists = function() length(list.files(rel)) > 0,
-    download = function(pattern, dir) {
-      f <- list.files(rel, pattern = utils::glob2rx(pattern), full.names = TRUE)
-      if (!length(f)) return(FALSE)
-      file.copy(f, file.path(dir, basename(f)), overwrite = TRUE); TRUE },
-    upload = function(path) { file.copy(path, file.path(rel, basename(path)), overwrite = TRUE); TRUE })
+  io <- local_release_io(rel)
 
   # Prior published state: repo OLD has a dev-tooling row from an earlier week.
   out0 <- tempfile("o0_"); dir.create(out0)
@@ -361,7 +345,8 @@ test_that("run_merge preserves a prior dev-tooling repo absent from this dispatc
   old$repo_id <- "github.com/old/one"; old$last_scanned <- "2026-07-03"
   DBI::dbWriteTable(con0, "vcs_dev_tooling",
                     old[c("repo_id", "last_scanned", dev_tooling_columns())], append = TRUE)
-  publish(io, con0, out0, tag = "current", source_kind = "live", force_full = TRUE)
+  publish(io, con0, out0, tag = "current", source_kind = "live", force_full = TRUE,
+          base_generation = "")
   DBI::dbDisconnect(con0)
 
   # This dispatch's shard covers only a DIFFERENT repo NEW.
@@ -387,13 +372,7 @@ test_that("run_merge with zero dev-tooling shards leaves the prior snapshot inta
   # The unwired-backfill / all-shards-paused case: parts_dir has no vcs-dev-tooling-*.db at all.
   # The empty incoming union must NOT blank the seeded prior snapshot.
   rel <- tempfile("rel_"); dir.create(rel)
-  io <- list(
-    release_exists = function() length(list.files(rel)) > 0,
-    download = function(pattern, dir) {
-      f <- list.files(rel, pattern = utils::glob2rx(pattern), full.names = TRUE)
-      if (!length(f)) return(FALSE)
-      file.copy(f, file.path(dir, basename(f)), overwrite = TRUE); TRUE },
-    upload = function(path) { file.copy(path, file.path(rel, basename(path)), overwrite = TRUE); TRUE })
+  io <- local_release_io(rel)
 
   out0 <- tempfile("o0_"); dir.create(out0)
   con0 <- DBI::dbConnect(RSQLite::SQLite(), file.path(out0, "w.db"))
@@ -402,7 +381,8 @@ test_that("run_merge with zero dev-tooling shards leaves the prior snapshot inta
   keep$repo_id <- "github.com/keep/me"; keep$last_scanned <- "2026-07-03"
   DBI::dbWriteTable(con0, "vcs_dev_tooling",
                     keep[c("repo_id", "last_scanned", dev_tooling_columns())], append = TRUE)
-  publish(io, con0, out0, tag = "current", source_kind = "live", force_full = TRUE)
+  publish(io, con0, out0, tag = "current", source_kind = "live", force_full = TRUE,
+          base_generation = "")
   DBI::dbDisconnect(con0)
 
   parts <- tempfile("parts_"); dir.create(parts)   # deliberately EMPTY of dev-tooling shards
@@ -667,13 +647,7 @@ test_that("ai-weekly.yml is the 5-job incremental pipeline (Sunday cron, increme
 
 test_that("a daily-style seed + publish preserves an existing vcs_dev_tooling snapshot", {
   rel <- tempfile("rel_"); dir.create(rel)
-  io <- list(
-    release_exists = function() length(list.files(rel)) > 0,
-    download = function(pattern, dir) {
-      f <- list.files(rel, pattern = utils::glob2rx(pattern), full.names = TRUE)
-      if (!length(f)) return(FALSE)
-      file.copy(f, file.path(dir, basename(f)), overwrite = TRUE); TRUE },
-    upload = function(path) { file.copy(path, file.path(rel, basename(path)), overwrite = TRUE); TRUE })
+  io <- local_release_io(rel)
 
   # Prior published state carries a dev-tooling row (built by the weekly merge last week).
   out1 <- tempfile("o1_"); dir.create(out1)
@@ -683,7 +657,8 @@ test_that("a daily-style seed + publish preserves an existing vcs_dev_tooling sn
   dv$repo_id <- "github.com/o/r"; dv$last_scanned <- "2026-07-10"
   DBI::dbWriteTable(con, "vcs_dev_tooling",
                     dv[c("repo_id", "last_scanned", dev_tooling_columns())], append = TRUE)
-  publish(io, con, out1, tag = "current", source_kind = "live", force_full = TRUE)
+  publish(io, con, out1, tag = "current", source_kind = "live", force_full = TRUE,
+          base_generation = "")
   DBI::dbDisconnect(con)
 
   # A daily run: seed a fresh working DB from the published recent shard, then publish WITHOUT
@@ -691,10 +666,11 @@ test_that("a daily-style seed + publish preserves an existing vcs_dev_tooling sn
   # seed_working_db carrying the table forward so publish() re-embeds it.
   out2 <- tempfile("o2_"); dir.create(out2)
   working2 <- file.path(out2, "_working.db")
-  seed_working_db(io, out2, working2)
+  seed <- seed_working_db(io, out2, working2)
   con2 <- DBI::dbConnect(RSQLite::SQLite(), working2)
   ensure_repo_schema(con2); ensure_series_schema(con2)
-  publish(io, con2, out2, tag = "current", source_kind = "live", touched_years = character(0))
+  publish(io, con2, out2, tag = "current", source_kind = "live", touched_years = character(0),
+          base_generation = attr(seed, "generation"))
   DBI::dbDisconnect(con2)
 
   chk <- tempfile("chk_"); dir.create(chk)

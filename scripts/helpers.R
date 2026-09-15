@@ -1414,13 +1414,149 @@ summary_regressions <- function(prev_path, next_path, tol = 0.02) {
   out
 }
 
+# ---- one publisher at a time on release "current" ------------------------------
+# Every publisher seeds from the release when its job starts and writes whole
+# tables back 15 to 90 minutes later with --clobber, and nothing stopped two of
+# them overlapping. The weekly and AI merges share a Sunday cron. On 2026-08-30 and
+# 09-06 the AI merge published last from a seed taken before the weekly merge
+# published, and the weekly commit and contributor values in series_latest and the
+# summary went back a week without a word. On 09-13 the order reversed and the
+# regression gate refused the weekly publish, but only because the AI merge's
+# gains that week happened to exceed its 2% tolerance, and it called a stale build
+# "lost ground". The gate compares against a copy pulled inside publish(), so it
+# only ever caught a race by coincidence, in one order of the two.
+#
+# The generation is what the release holds, fingerprinted by content: one
+# "name<TAB>digest" line per asset, sorted, "" for a release with no assets.
+# seed_working_db reads it before its first download, and publish() refuses when
+# the live release no longer matches it. The manifest alone would not do: it is
+# uploaded last, so a publish that died part way (the 502 of 2026-08-20) changes
+# assets under an unchanged manifest.
+#
+# No soft fallback when io cannot answer. A publisher that cannot say what the
+# release holds cannot say whether it is about to overwrite someone else.
+.release_generation <- function(io) {
+  if (!is.function(io$generation))
+    stop("io has no generation(): without the release's asset digests there is no way to tell ",
+         "whether another publisher replaced them since this build was seeded", call. = FALSE)
+  g <- io$generation()
+  if (!is.character(g) || length(g) != 1L || is.na(g))
+    stop("the release generation did not come back as one string; refusing to go on without it",
+         call. = FALSE)
+  g
+}
+
+# name -> digest for every asset a generation lists.
+.generation_assets <- function(generation) {
+  if (!nzchar(generation)) return(stats::setNames(character(0), character(0)))
+  lines <- strsplit(generation, "\n", fixed = TRUE)[[1]]
+  stats::setNames(sub("^[^\t]*\t", "", lines), sub("\t.*$", "", lines))
+}
+
+# Asset names added, removed, or holding different bytes between two generations.
+.moved_assets <- function(base, now) {
+  was <- .generation_assets(base)
+  is <- .generation_assets(now)
+  nms <- sort(union(names(was), names(is)))
+  nms[is.na(was[nms]) | is.na(is[nms]) | was[nms] != is[nms]]
+}
+
+#' The condition publish() raises when the release moved after this build was
+#' seeded. Its own class, so a merge can seed again on exactly this and on
+#' nothing else, and never the "lost ground" wording: the build is stale, and
+#' comparing it with what is live says nothing about whether anything was lost.
+publish_conflict <- function(stage, base, now) {
+  moved <- .moved_assets(base, now)
+  structure(class = c("vcs_publish_conflict", "error", "condition"), list(
+    message = sprintf(paste0(
+      "publish refused %s: another publisher replaced assets on the release after this build ",
+      "was seeded (%s). Nothing was uploaded. The build is stale, not short, so it was not ",
+      "compared against what is live; seed again from the release as it is now and rebuild."),
+      stage, if (length(moved)) paste(moved, collapse = ", ") else "the asset listing changed"),
+    call = NULL, moved = moved))
+}
+
+.assert_release_unmoved <- function(io, base, stage) {
+  now <- .release_generation(io)
+  if (!identical(now, base)) stop(publish_conflict(stage, base, now))
+  invisible(now)
+}
+
+#' Run fn, and once more from the top if it was refused as a conflict.
+#'
+#' Only for a caller whose fn seeds its working database again and rebuilds from
+#' inputs already on local disk, which the three merges do: the shards are
+#' downloaded artifacts, seed_working_db unlinks the working database first, and
+#' the fold, the reducer and the INSERT OR IGNOREs give the same result run twice.
+#' run_update is not one: its gauges were collected in memory over an hour and a
+#' half, and a second pass would be a second collection. Any other error passes
+#' straight through on the first attempt, and the last conflict is the error the
+#' run fails with.
+retry_on_publish_conflict <- function(fn, attempts = 2L) {
+  for (i in seq_len(attempts)) {
+    conflict <- NULL
+    value <- tryCatch(fn(), vcs_publish_conflict = function(e) { conflict <<- e; NULL })
+    if (is.null(conflict)) return(invisible(value))
+    if (i < attempts)
+      message(conditionMessage(conflict),
+              sprintf("\nSeeding again and rebuilding (attempt %d of %d).", i + 1L, attempts))
+  }
+  stop(conflict)
+}
+
+# After the last upload: the release must now be exactly what it was at seed time,
+# with every asset this run uploaded holding the bytes it sent. The checks before
+# uploading cannot close the minute or two the uploads themselves take, so this
+# can only detect a mixture of two builds, not prevent one, and it says which
+# assets to look at. Read again after short waits before concluding, so a listing
+# served a moment behind the upload does not fail a run that published correctly.
+.confirm_publish_landed <- function(io, base, uploaded, waits = PUBLISH_CONFIRM_WAITS_S) {
+  sleep <- if (is.function(io$sleep)) io$sleep else Sys.sleep
+  uploaded <- unique(uploaded)
+  sent <- stats::setNames(paste0("sha256:", vapply(uploaded, file_sha256, character(1))),
+                          basename(uploaded))
+  was <- .generation_assets(base)
+  problems <- function() {
+    now <- .generation_assets(.release_generation(io))
+    mine <- names(sent)
+    replaced <- mine[is.na(now[mine]) | now[mine] != sent]
+    others <- setdiff(union(names(was), names(now)), mine)
+    moved <- others[is.na(was[others]) | is.na(now[others]) | was[others] != now[others]]
+    c(sprintf("%s does not hold the file this run uploaded", replaced),
+      sprintf("%s changed although this run did not upload it", moved))
+  }
+  found <- problems()
+  for (w in waits) {
+    if (!length(found)) break
+    sleep(w)
+    found <- problems()
+  }
+  if (length(found)) {
+    stop(sprintf(paste0(
+      "publish interleaved with another publisher: this run's uploads went through, but the ",
+      "release is not what it was seeded from plus what this run sent:\n  %s\n",
+      "The release may now hold parts of two builds.%s"),
+      paste(found, collapse = "\n  "),
+      if ("vcs-signals-summary-prev.db" %in% names(sent))
+        " vcs-signals-summary-prev.db holds the summary this run replaced." else ""),
+      call. = FALSE)
+  }
+  invisible(NULL)
+}
+
+#' base_generation is the release generation the working database was seeded
+#' from (attr(seed_working_db(...), "generation")). It has no default on purpose:
+#' a publish that does not know what it was built from cannot know it is about to
+#' overwrite a newer release.
 publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touched_years = NULL,
-                    purged_metrics = character(0)) {
+                    purged_metrics = character(0),
+                    base_generation = stop("publish() needs base_generation, the release ",
+                                           "generation its working database was seeded from")) {
+  if (!is.character(base_generation) || length(base_generation) != 1L || is.na(base_generation))
+    stop("publish() needs base_generation as one string, the release generation its working ",
+         "database was seeded from", call. = FALSE)
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
-  # A full rebuild re-exports and re-uploads every shard, so there is no prior
-  # state to protect; skip the pull (which would abort on a freshly-created,
-  # asset-less release).
   # Pulled on every path, including force_full. The old exemption assumed a full
   # rebuild had nothing to protect, which is true of a fresh release and false of
   # the one case that actually sets it: update.yml exposes FORCE_FULL_REBUILD
@@ -1428,8 +1564,38 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
   # RECENT_WINDOW tail. Exporting every year from that tail rewrote each year
   # shard with a fragment of itself and uploaded it with --clobber, and the
   # per-year archive tags were mirrored from the same run, so no copy survived.
-  # protect_history_pull already tolerates an asset-less release.
-  pulled <- tryCatch(protect_history_pull(io, out_dir), error = function(e) character(0))
+  #
+  # This pull is also the regression gate's switch: the gate compares against the
+  # summary it fetches. It used to sit inside tryCatch(..., error = character(0)),
+  # so a download that failed read as "nothing has ever been published": no
+  # summary, no gate, and every shard counted as changed and uploaded over the top.
+  # The generation already tells a release with no assets from a pull that failed,
+  # so the one pull skipped is the one with nothing to fetch, and any other failure
+  # stops the publish. A failure while the release is being replaced underneath is
+  # reported as the conflict it is, so a merge seeds again instead of failing.
+  pulled <- if (!nzchar(base_generation)) character(0) else
+    withCallingHandlers(protect_history_pull(io, out_dir), error = function(e) {
+      now <- tryCatch(.release_generation(io), error = function(e2) base_generation)
+      if (!identical(now, base_generation))
+        stop(publish_conflict("while pulling the published state", base_generation, now))
+    })
+
+  # Before the gate reads anything. If the release moved after this build was
+  # seeded, the build is stale, and comparing it with the newer release would
+  # either refuse it as "lost ground" (09-13) or, in the other order, find nothing
+  # to object to and publish last week's values over this week's (08-30, 09-06).
+  .assert_release_unmoved(io, base_generation, "after pulling the published state")
+
+  # The summary pull inside protect_history_pull is best effort, from when the
+  # summary held nothing that could not be rebuilt. It is now the gate's baseline
+  # and the only published copy of the onset history, and a summary the release
+  # lists but this run could not fetch switched the gate off exactly as above.
+  if ("vcs-signals-summary.db" %in% names(.generation_assets(base_generation)) &&
+      !("vcs-signals-summary.db" %in% pulled))
+    stop("release 'current' lists vcs-signals-summary.db but it could not be downloaded; ",
+         "the regression gate would have nothing to compare against, so nothing is published",
+         call. = FALSE)
+
   prev_names <- setdiff(pulled, "manifest.json")
   prev_hashes <- stats::setNames(
     vapply(prev_names, function(nm) shard_hash(file.path(out_dir, nm)), character(1)),
@@ -1555,19 +1721,30 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
   # overwritten this too, and a rotation would only move that boundary rather
   # than remove it. The manifest records which build this is a copy of so a
   # reader can tell what they would be rolling back to.
+  #
+  # Checked again immediately before the first upload: the export, the hashing and
+  # the gate above take minutes on the real tables, and a publish that lands in
+  # that time is as much a conflict as one that landed before the pull.
+  .assert_release_unmoved(io, base_generation, "before uploading")
+  uploaded <- character(0)
+  upload <- function(path) {
+    io$upload(path)
+    uploaded <<- c(uploaded, path)
+  }
+
   prev_asset <- NULL
   if (!is.null(prev_summary_path) && file.exists(prev_summary_path) &&
       "vcs-signals-summary.db" %in% changed) {
     prev_asset <- file.path(out_dir, "vcs-signals-summary-prev.db")
     if (file.copy(prev_summary_path, prev_asset, overwrite = TRUE)) {
-      io$upload(prev_asset)
+      upload(prev_asset)
     } else {
       prev_asset <- NULL
       warning("could not stage the previous summary; publishing without a rollback copy")
     }
   }
 
-  for (nm in changed) io$upload(file.path(out_dir, nm))
+  for (nm in changed) upload(file.path(out_dir, nm))
 
   # I6: the manifest's years list is a UNION of the prior manifest's years
   # (read back here, before it is overwritten below) with the years touched
@@ -1602,7 +1779,8 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
       bytes  = file.size(prev_asset))
   }
   write_manifest(manifest_path, changed, tag, summary_block, core = summary_core)
-  io$upload(manifest_path)
+  upload(manifest_path)
+  .confirm_publish_landed(io, base_generation, uploaded)
 
   writeLines(build_release_notes(summary_block, changed, tag),
              file.path(out_dir, "release_notes.md"))

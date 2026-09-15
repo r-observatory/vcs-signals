@@ -119,18 +119,6 @@ test_that("run_fetch_shard leaves commits_total NA for a whole failed batched ch
                         file.path(released_dir, "manifest.json"), auto_unbox = TRUE)
 }
 
-.weekly_merge_io <- function(released_dir) {
-  list(
-    release_exists = function() TRUE,
-    download = function(pattern, dir) {
-      src <- file.path(released_dir, pattern)
-      if (!file.exists(src)) return(FALSE)
-      file.copy(src, file.path(dir, pattern), overwrite = TRUE)
-      TRUE
-    },
-    upload = function(path) invisible(NULL))
-}
-
 test_that("run_merge appends today's commits_total/contributors_total change-only rows and leaves stars untouched", {
   out_dir <- tempfile("out"); dir.create(out_dir)
   parts_dir <- tempfile("parts"); dir.create(parts_dir)
@@ -143,7 +131,7 @@ test_that("run_merge appends today's commits_total/contributors_total change-onl
               median_days_to_close_issue = NA_integer_, median_days_to_close_pr = NA_integer_,
               median_open_issue_age_days = NA_integer_, stringsAsFactors = FALSE))
 
-  run_merge(.weekly_merge_io(released), out_dir, parts_dir)
+  run_merge(local_release_io(released), out_dir, parts_dir)
 
   rec_con <- DBI::dbConnect(RSQLite::SQLite(), file.path(out_dir, "vcs-signals-recent.db"))
   on.exit(DBI::dbDisconnect(rec_con))
@@ -173,17 +161,17 @@ test_that("run_merge is change-only: an unchanged weekly value on a second run a
     data.frame(repo_id = "github.com/a/ok", commits_total = 500L, contributors_total = 10L,
               median_days_to_close_issue = NA_integer_, median_days_to_close_pr = NA_integer_,
               median_open_issue_age_days = NA_integer_, stringsAsFactors = FALSE))
-  run_merge(.weekly_merge_io(released), out_dir1, parts_dir1)
+  run_merge(local_release_io(released), out_dir1, parts_dir1)
 
   # Second run: same repo, same values, against the release the first run
-  # just published (out_dir1 stands in for "released" this time).
+  # just published into.
   out_dir2 <- tempfile("out2"); dir.create(out_dir2)
   parts_dir2 <- tempfile("parts2"); dir.create(parts_dir2)
   export_snapshot_shard(file.path(parts_dir2, "vcs-signals-shard-0.db"),
     data.frame(repo_id = "github.com/a/ok", commits_total = 500L, contributors_total = 10L,
               median_days_to_close_issue = NA_integer_, median_days_to_close_pr = NA_integer_,
               median_open_issue_age_days = NA_integer_, stringsAsFactors = FALSE))
-  run_merge(.weekly_merge_io(out_dir1), out_dir2, parts_dir2)
+  run_merge(local_release_io(released), out_dir2, parts_dir2)
 
   rec_con <- DBI::dbConnect(RSQLite::SQLite(), file.path(out_dir2, "vcs-signals-recent.db"))
   on.exit(DBI::dbDisconnect(rec_con))
