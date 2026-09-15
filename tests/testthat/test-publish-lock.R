@@ -30,21 +30,45 @@
   "backfill.R"    = c("enumerate", "fetch"),
   "ai_backfill.R" = c("enumerate", "cheap", "gate", "gate-incremental", "deep"))
 
-# Publishes whatever else the line says. Comment lines are dropped before
-# matching, so a job that only mentions a merge in a comment is not one. `gh
-# release create` is deliberately absent: the enumerate jobs create "current"
-# only when it does not exist, which replaces nothing, and holding the lock
-# there would make every scan's start wait behind a ninety-minute update for no
-# protection.
+# Publishes whatever else the command says, Octokit's release writes included.
+# Comment lines are dropped before matching, so a job that only mentions a merge
+# in a comment is not one.
 .PUBLISH_SIGNATURES <- c(
   "\\b(run_update|run_merge|publish|gh_release_upload)\\(",
-  "\\bgh\\s+release\\s+(upload|edit|delete|delete-asset)\\b",
-  "\\b(gh\\s+api|curl)\\b.*\\breleases\\b|uploads\\.github\\.com")
+  "\\b(gh\\s+api|curl)\\b.*\\breleases\\b|uploads\\.github\\.com",
+  "\\b(upload|update|delete)Release(Asset)?\\b")
 
-# A step that uses a local action, whose steps this file cannot see, or an
-# action built to write releases. Checked below the job's own keys only, since a
-# job-level uses: is a called workflow and is handled on its own.
-.PUBLISH_STEP_USES <- "^\\s*(-\\s+)?uses:\\s*['\"]?(\\./|[^\\s#'\"]*release)"
+# A gh release call fails closed like a script call. Listing the write verbs
+# let `gh release -R <repo> upload` through, since -R sat where the verb was
+# expected, so any gh release call counts unless its verb, with -R or --repo
+# taken out wherever they sit, is one of these. `create` is here deliberately:
+# the enumerate jobs create "current" only when it does not exist, which
+# replaces nothing, and holding the lock there would make every scan's start
+# wait behind a ninety-minute update for no protection.
+.RELEASE_VERBS_REPLACING_NOTHING <- c("view", "list", "download", "create",
+                                      "verify", "verify-asset")
+
+# Matching a releases path let `gh api -X DELETE "$ASSET_URL"` through, so gh
+# api and curl are judged by what they send, not where. Either one writes when
+# it names a method other than GET, a method held in a variable included, or
+# sends a body without naming one, since both then POST. A GraphQL query sent
+# with gh api -f is a POST and counts, since nothing here tells a mutation from
+# a read; -X GET is how a read with fields says so.
+.HTTP_WRITES <- list(
+  gh_api = c(call   = "(?<![\\w.-])gh\\s+api(?![\\w-])",
+             method = "(?<!\\S)(?:-X\\s*|--method(?:\\s+|=))(\\S+)",
+             body   = "(?<!\\S)(?:-[fF]|--field|--raw-field|--input)"),
+  curl   = c(call   = "(?<![\\w.-])curl(?![\\w.-])",
+             method = "(?<!\\S)(?:-X\\s*|--request(?:\\s+|=))(\\S+)",
+             body   = "(?<!\\S)(?:-[dFT]|--data|--form|--upload-file|--json)"))
+
+# A step that uses a local action, whose steps this file cannot see, an action
+# built to write releases, or actions/github-script, which runs whatever
+# JavaScript it is handed with the job's token. A step is any `- uses:` item,
+# since a compact sequence puts it level with the job's own keys, or a bare
+# uses: below them; a bare uses: level with them is a called workflow and is
+# handled on its own.
+.PUBLISH_STEP_USES <- "^\\s*(-\\s+)?uses:\\s*['\"]?(\\./|[^\\s#'\"]*(release|github-script))"
 
 .is_code <- function(lines) !grepl("^\\s*(#.*)?$", lines)
 .indent  <- function(lines) nchar(sub("^( *).*$", "\\1", lines))
@@ -100,10 +124,72 @@
   if (length(drop)) lines[-drop] else lines
 }
 
-# The lines of a job's code that make it a publisher, empty when it is not one.
-# `workflows` names the files in this directory, whose jobs are audited in their
-# own right; `scripts` names the files under scripts/, so a call that reaches
-# one by its bare name (after a cd) is still seen.
+# A job's code lines as the shell runs them: a line ending in a backslash joined
+# with the next, and a folded block scalar (run: >-) joined with its key, so a
+# flag on the line after its command is still read as that command's.
+.shell_commands <- function(code) {
+  ind <- .indent(code)
+  out <- character(0)
+  i <- 1L
+  while (i <= length(code)) {
+    j <- i
+    if (grepl(":\\s*>[-+0-9]*\\s*(#.*)?$", code[i])) {
+      key <- nchar(sub("^(\\s*(-\\s+)?).*$", "\\1", code[i]))
+      while (j < length(code) && ind[j + 1L] > key) j <- j + 1L
+    } else {
+      while (j < length(code) && grepl("\\\\\\s*$", code[j])) j <- j + 1L
+    }
+    out <- c(out, paste(trimws(sub("\\\\\\s*$", "", code[i:j])), collapse = " "))
+    i <- j + 1L
+  }
+  out
+}
+
+# The arguments of the call that starts `rest`: everything up to the first |, ;
+# or & outside quotes, so `curl ... | tr -d` is not read as curl sending a body
+# while a jq filter in quotes stays whole.
+.own_args <- function(rest) {
+  ch <- strsplit(rest, "")[[1]]
+  quote <- ""
+  for (k in seq_along(ch)) {
+    if (nzchar(quote)) {
+      if (ch[k] == quote) quote <- ""
+    } else if (ch[k] %in% c("'", "\"")) {
+      quote <- ch[k]
+    } else if (ch[k] %in% c("|", ";", "&")) {
+      return(paste(ch[seq_len(k - 1L)], collapse = ""))
+    }
+  }
+  rest
+}
+
+# TRUE when a command writes a release through gh release, gh api or curl. Its
+# ${{ }} expressions must already be replaced: they carry spaces, and -R ${{
+# github.repository }} would otherwise leave half the expression as the verb.
+.raw_release_write <- function(command) {
+  bare <- gsub("(?<!\\S)(-R\\s*|--repo(\\s+|=))\\S+", " ", command, perl = TRUE)
+  verbs <- paste(.RELEASE_VERBS_REPLACING_NOTHING, collapse = "|")
+  if (grepl(sprintf("(?<![\\w.-])gh\\s+release(?!\\s+['\"]?(%s)['\"]?(\\s|[;&|)]|$))", verbs),
+            bare, perl = TRUE))
+    return(TRUE)
+  for (client in .HTTP_WRITES) {
+    at <- gregexpr(client[["call"]], command, perl = TRUE)[[1]]
+    if (at[1] < 0) next
+    for (h in seq_along(at)) {
+      args <- .own_args(substring(command, at[h] + attr(at, "match.length")[h]))
+      named <- regmatches(args, gregexec(client[["method"]], args, perl = TRUE))[[1]]
+      methods <- if (length(named)) toupper(gsub("['\"]", "", named[2, ])) else character(0)
+      if (any(methods != "GET")) return(TRUE)
+      if (!length(methods) && grepl(client[["body"]], args, perl = TRUE)) return(TRUE)
+    }
+  }
+  FALSE
+}
+
+# The lines, or whole shell commands, that make a job a publisher, empty when it
+# is not one. `workflows` names the files in this directory, whose jobs are
+# audited in their own right; `scripts` names the files under scripts/, so a
+# call that reaches one by its bare name (after a cd) is still seen.
 .publish_evidence <- function(job, workflows, scripts) {
   code <- job[.is_code(job)]
   if (!length(code)) return(character(0))
@@ -119,11 +205,16 @@
     sub("^\\./\\.github/workflows/", "", called) %in% workflows
   evidence <- c(evidence, called[!local])
 
-  for (p in .PUBLISH_SIGNATURES) evidence <- c(evidence, code[grepl(p, code, perl = TRUE)])
-  evidence <- c(evidence, code[!own & grepl(.PUBLISH_STEP_USES, code, perl = TRUE)])
+  step <- grepl("^\\s*-\\s+uses:", code) | (!own & grepl("^\\s*uses:", code))
+  evidence <- c(evidence, code[step & grepl(.PUBLISH_STEP_USES, code, perl = TRUE)])
+
+  commands <- .shell_commands(code)
+  plain <- gsub("\\$\\{\\{.*?\\}\\}", "EXPR", commands, perl = TRUE)
+  for (p in .PUBLISH_SIGNATURES) evidence <- c(evidence, commands[grepl(p, plain, perl = TRUE)])
+  evidence <- c(evidence, commands[vapply(plain, .raw_release_write, logical(1))])
 
   names_re <- paste(gsub("([.\\\\+*?^$(){}|\\[\\]])", "\\\\\\1", scripts), collapse = "|")
-  call_re <- sprintf("(?<![A-Za-z0-9_.-])(scripts/[A-Za-z0-9_.-]+\\.(R|sh)%s)(?![A-Za-z0-9_.-])",
+  call_re <- sprintf("(?<![A-Za-z0-9_.-])(scripts/[A-Za-z0-9_.-]+%s)(?![A-Za-z0-9_.-])",
                      if (nzchar(names_re)) paste0("|", names_re) else "")
   for (line in code) {
     hits <- gregexpr(call_re, line, perl = TRUE)[[1]]
@@ -148,8 +239,7 @@
 
 # Returns the publishers found (file:job) and every way the file breaks the lock.
 .publish_lock_audit <- function(lines, file, workflows = character(0),
-                                scripts = list.files(file.path(.repo_root, "scripts"),
-                                                     pattern = "\\.(R|sh)$")) {
+                                scripts = list.files(file.path(.repo_root, "scripts"))) {
   problems <- character(0)
   publishers <- character(0)
 
@@ -374,6 +464,101 @@ test_that("the lock audit counts any script call it cannot read as read-only as 
   unlocked <- c("quoted", "from_env", "folded", "continued", "inline_r", "no_path", "new_script",
                 "wrong_script", "cd_first", "second_call", "any_shell", "api_upload",
                 "release_action", "local_action")
+  expect_setequal(audit$publishers, paste0("fixture.yml:", unlocked))
+  expect_length(audit$problems, length(unlocked))
+  expect_false(any(grepl("job read_only\\b", audit$problems)))
+})
+
+test_that("the lock audit counts a release write however the command is spelled", {
+  # Each job below is unlocked and writes the release without going through a
+  # script: the repository flag in front of the verb, a verb on the next line,
+  # an API call whose URL or method sits in a variable, a request body that
+  # makes gh or curl POST, Octokit, and steps written as a compact sequence at
+  # the job's own indent. Every one of them is the seed-then-clobber shape the
+  # lock exists for. The read_only job does what the scans do today and more,
+  # and must still pass.
+  wf <- c(
+    "name: fixture",
+    "on: workflow_dispatch",
+    "jobs:",
+    "  repo_before_verb:",
+    "    steps:",
+    "      - run: gh release -R \"$GITHUB_REPOSITORY\" upload current out/vcs-signals-summary.db --clobber",
+    "  repo_expr_before_verb:",
+    "    steps:",
+    "      - run: gh release --repo=${{ github.repository }} delete-asset current vcs-signals-summary.db",
+    "  repo_before_release:",
+    "    steps:",
+    "      - run: gh -R \"$GITHUB_REPOSITORY\" release edit current --notes-file out/release_notes.md",
+    "  verb_continued:",
+    "    steps:",
+    "      - run: |",
+    "          gh release \\",
+    "            upload current out/vcs-signals-summary.db --clobber",
+    "  api_url_from_env:",
+    "    env:",
+    "      ASSET_URL: repos/r-observatory/vcs-signals/releases/assets/1",
+    "    steps:",
+    "      - run: gh api -X DELETE \"$ASSET_URL\"",
+    "  api_method_from_env:",
+    "    steps:",
+    "      - run: ID=$(gh api \"$RUNS_URL\" --jq '.[0].id') && gh api --method=\"$METHOD\" \"$ASSET_URL\"",
+    "  api_body:",
+    "    steps:",
+    "      - run: gh api \"$UPLOAD_URL\" --jq '.assets[] | .name' --input out/vcs-signals-summary.db",
+    "  api_folded:",
+    "    steps:",
+    "      - run: >-",
+    "          gh api \"$ASSET_URL\"",
+    "          --method DELETE",
+    "  curl_delete:",
+    "    steps:",
+    "      - run: |",
+    "          curl -fsS \\",
+    "            -X DELETE -H \"Authorization: Bearer $GH_TOKEN\" \"$ASSET_URL\"",
+    "  curl_body:",
+    "    steps:",
+    "      - run: curl -fsS --data-binary @out/vcs-signals-summary.db \"$UPLOAD_URL\"",
+    "  github_script:",
+    "    steps:",
+    "      - uses: actions/github-script@v7",
+    "        with:",
+    "          script: await github.request(process.env.ROUTE, JSON.parse(process.env.BODY))",
+    "  octokit:",
+    "    steps:",
+    "      - run: node -e 'octokit.rest.repos.uploadReleaseAsset(JSON.parse(process.argv[1]))' \"$ARGS\"",
+    "  compact_local_action:",
+    "    steps:",
+    "    - uses: actions/checkout@v7",
+    "    - uses: ./.github/actions/publish-current",
+    "  compact_release_action:",
+    "    steps:",
+    "    - uses: softprops/action-gh-release@v2",
+    "      with:",
+    "        tag_name: current",
+    "  other_language:",
+    "    steps:",
+    "      - run: python3 scripts/republish.py",
+    "  read_only:",
+    "    steps:",
+    "    - uses: actions/checkout@v7",
+    "    - run: gh release -R \"$GITHUB_REPOSITORY\" download current --pattern x.db --dir out",
+    "    - run: gh -R \"$GITHUB_REPOSITORY\" release view current",
+    "    - run: gh release --repo=${{ github.repository }} list --limit 5",
+    "    - run: |",
+    "        gh release view current --repo ${{ github.repository }} >/dev/null 2>&1 \\",
+    "          || gh release create current --repo ${{ github.repository }} \\",
+    "               --title \"vcs-signals (rolling)\" --latest",
+    "    - run: gh api repos/o/r/actions/runs --paginate --jq '.workflow_runs[] | .id'",
+    "    - run: gh api -X 'GET' search/code -f q=repo:o/r",
+    "    - run: curl -fsSL https://example.org/tool.tar.gz -o tool.tar.gz",
+    "    - run: curl -fsSL https://example.org/list.txt | tr -d '\\r' > list.txt")
+
+  audit <- .publish_lock_audit(wf, "fixture.yml")
+  unlocked <- c("repo_before_verb", "repo_expr_before_verb", "repo_before_release",
+                "verb_continued", "api_url_from_env", "api_method_from_env", "api_body",
+                "api_folded", "curl_delete", "curl_body", "github_script", "octokit",
+                "compact_local_action", "compact_release_action", "other_language")
   expect_setequal(audit$publishers, paste0("fixture.yml:", unlocked))
   expect_length(audit$problems, length(unlocked))
   expect_false(any(grepl("job read_only\\b", audit$problems)))
