@@ -220,31 +220,63 @@ test_that("a backfill merge dispatched over a Sunday merge re-seeds and keeps bo
                                params = list(old_day))$value, 7L)
 })
 
-test_that("the daily update fails on a conflict instead of retrying", {
-  # A retry would have to collect every gauge again, which is the 90 minutes that
-  # made the window wide in the first place. The run fails with the true reason.
-  rel <- .race_release()
+# The daily update's io over rel: one package on the repository the release
+# already holds, collected from the fixtures. acquired() counts collections.
+.daily_update_io <- function(rel, ...) {
   acquired <- 0L
-  io <- local_release_io(rel,
-    on_download = .after_seed(function() .run_ai_merge(rel)),
+  local_release_io(rel, ...,
     acquire = function() {
       acquired <<- acquired + 1L
       data.frame(package = "pkgA", origin = "cran", url_raw = "https://github.com/a/ok",
                  bugreports_raw = NA, stringsAsFactors = FALSE)
     },
+    acquired = function() acquired,
     graphql = function(query) {
       if (grepl("rateLimit", query)) return(list(data = list(nodes = list())))
       f <- if (grepl("followRenames", query)) "resolve_one.json"
            else if (grepl("history \\{ totalCount", query)) "commits.json" else "gauges_one.json"
       jsonlite::fromJSON(readLines(file.path("fixtures", f), warn = FALSE), simplifyVector = FALSE)
     })
+}
+
+test_that("the daily update fails on a conflict instead of retrying", {
+  # A retry would have to collect every gauge again, which is the 90 minutes that
+  # made the window wide in the first place. The run fails with the true reason.
+  rel <- .race_release()
+  io <- .daily_update_io(rel, on_download = .after_seed(function() .run_ai_merge(rel)))
   withr::local_envvar(FORCE_FULL_REBUILD = "")
 
   err <- tryCatch(suppressMessages(capture.output(.update$main(tempfile("update_out_"), io = io))),
                   error = function(e) e)
   expect_s3_class(err, "vcs_publish_conflict")
-  expect_equal(acquired, 1L)
+  expect_equal(io$acquired(), 1L)
   expect_length(io$uploaded(), 0)
+})
+
+test_that("a daily update whose digest reads blip publishes instead of blaming another publisher", {
+  # gh 2.96 and later word a failed lookup of a published release as "release not
+  # found". Here gh says so on the first try of the seed's read and of the read
+  # after the publish-time pull. Believed, the seed stopped over a release it took
+  # for empty, or the update threw away its collection on a conflict with nobody.
+  rel <- .race_release()
+  n <- 0L
+  gh <- function(command, args, stdout, stderr) {
+    n <<- n + 1L
+    if (n %in% c(1L, 3L)) {
+      writeLines("release not found", stderr)
+      return(structure(character(0), status = 1L))
+    }
+    g <- local_release_generation(rel)
+    if (nzchar(g)) strsplit(g, "\n", fixed = TRUE)[[1]] else character(0)
+  }
+  io <- .daily_update_io(rel, generation = function()
+    gh_release_generation("o/r", run = gh, sleep = function(seconds) invisible(NULL)))
+  withr::local_envvar(FORCE_FULL_REBUILD = "")
+
+  expect_no_error(suppressMessages(capture.output(.update$main(tempfile("update_out_"), io = io))))
+  expect_equal(n, 6L)
+  expect_true("manifest.json" %in% io$uploaded())
+  expect_equal(.published(rel)$ai_tools, "claude")
 })
 
 # ---- where the checks sit ----------------------------------------------------
@@ -443,6 +475,60 @@ test_that("a generation that reads as empty over a release with history stops in
   expect_identical(local_release_snapshot(rel), before)
 })
 
+test_that("a generation that lists assets is not second-guessed by release_exists()", {
+  # Both are answered by the same gh lookup, which since gh 2.96 words a failed
+  # lookup of a published release as "release not found". A FALSE right after a
+  # generation that listed assets started the run cold over a real base, and the
+  # regression gate then refused it as lost ground.
+  rel <- .race_release()
+  io <- local_release_io(rel, release_exists = function() FALSE)
+  out <- tempfile("seed_"); dir.create(out)
+  seed <- seed_working_db(io, out, file.path(out, "work.db"))
+  expect_true(seed)
+  expect_identical(attr(seed, "generation"), local_release_generation(rel))
+  wcon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "work.db"))
+  on.exit(DBI::dbDisconnect(wcon), add = TRUE)
+  expect_equal(DBI::dbGetQuery(wcon, "SELECT tool FROM vcs_ai_signals")$tool, "claude")
+})
+
+test_that("gh_release_exists: a missing release is FALSE only when gh says so every time", {
+  # gh release view goes through the same two lookups as the generation, so one
+  # failed lookup of a published release is worded "release not found" too.
+  calls <- 0L
+  slept <- numeric(0)
+  gh <- function(answers) function(command, args, stdout, stderr) {
+    calls <<- calls + 1L
+    a <- answers[[min(calls, length(answers))]]
+    if (identical(a, "ok")) return("title:\tvcs-signals (rolling)")
+    structure(a, status = 1L)
+  }
+  wait <- function(s) slept <<- c(slept, s)
+
+  expect_true(gh_release_exists("o/r", run = gh(list("release not found", "ok")),
+                                waits = c(5, 20), sleep = wait))
+  expect_equal(calls, 2L)
+  expect_length(slept, 1L)
+
+  calls <- 0L
+  slept <- numeric(0)
+  expect_false(gh_release_exists("o/r", run = gh(list("release not found")), waits = c(5, 20), sleep = wait))
+  expect_equal(calls, 3L)
+  expect_length(slept, 2L)
+
+  calls <- 0L
+  expect_true(gh_release_exists("o/r", run = gh(list("gh: Server Error (HTTP 502)", "ok")),
+                                waits = c(5, 20), sleep = wait))
+  calls <- 0L
+  expect_error(gh_release_exists("o/r", run = gh(list("gh: Bad credentials (HTTP 401)")),
+                                 waits = c(5, 20), sleep = wait), "failed ambiguously")
+  expect_equal(calls, 3L)
+
+  seen <- NULL
+  gh_release_exists("r-observatory/vcs-signals", run = function(command, args, stdout, stderr) {
+    seen <<- c(command, args); "ok" })
+  expect_equal(seen, c("gh", "release", "view", "current", "--repo", "r-observatory/vcs-signals"))
+})
+
 test_that("publish() refuses to run without the generation it was seeded from", {
   rel <- tempfile("release_"); dir.create(rel)
   io <- local_release_io(rel)
@@ -497,9 +583,10 @@ test_that("gh_release_generation: a missing release is empty and any other failu
                               "vcs-signals-summary.db\tsha256:bb", sep = "\n"))
   expect_no_match(got, "new release of gh", fixed = TRUE)
 
-  expect_identical(gh_release_generation("o/r", run = fake_gh()), "")
-  expect_identical(gh_release_generation("o/r", run = fake_gh(err = "release not found", status = 1L)), "")
   no_wait <- function(seconds) invisible(NULL)
+  expect_identical(gh_release_generation("o/r", run = fake_gh()), "")
+  expect_identical(gh_release_generation("o/r", sleep = no_wait,
+                                         run = fake_gh(err = "release not found", status = 1L)), "")
   expect_error(gh_release_generation("o/r", sleep = no_wait, run = fake_gh(
     err = "gh: Server Error (HTTP 502)", status = 1L)), "HTTP 502")
   expect_error(gh_release_generation("o/r", sleep = no_wait, run = fake_gh(
@@ -545,15 +632,35 @@ test_that("gh_release_generation reads again through a transient failure before 
                                      sleep = function(s) slept <<- c(slept, s)), "HTTP 502")
   expect_equal(calls, 3L)
 
-  # A release that is not there is an answer, not a failure, and is not asked again.
+  # gh 2.96 and later look the tag up as a published release and as a draft at
+  # once, and when both lookups fail they report "release not found". The draft
+  # lookup gives that answer for every published release, so one 502 on the
+  # published lookup arrives worded as a missing release. Taken at its word, the
+  # seed stopped over a release it read as empty and the checks in publish()
+  # raised a conflict naming every asset, with no other publisher anywhere.
   calls <- 0L
-  expect_identical(gh_release_generation("o/r", waits = c(5, 20), sleep = function(s) stop("no wait"),
-    run = function(command, args, stdout, stderr) {
-      calls <<- calls + 1L
+  slept <- numeric(0)
+  masked <- function(fails) function(command, args, stdout, stderr) {
+    calls <<- calls + 1L
+    if (calls <= fails) {
       writeLines("release not found", stderr)
-      structure(character(0), status = 1L)
-    }), "")
-  expect_equal(calls, 1L)
+      return(structure(character(0), status = 1L))
+    }
+    "manifest.json\tsha256:aa"
+  }
+  expect_identical(gh_release_generation("o/r", run = masked(1L), waits = c(5, 20),
+                                         sleep = function(s) slept <<- c(slept, s)),
+                   "manifest.json\tsha256:aa")
+  expect_equal(calls, 2L)
+  expect_length(slept, 1L)
+
+  # A release that is really not there says so every time, and only then reads as empty.
+  calls <- 0L
+  slept <- numeric(0)
+  expect_identical(gh_release_generation("o/r", run = masked(99L), waits = c(5, 20),
+                                         sleep = function(s) slept <<- c(slept, s)), "")
+  expect_equal(calls, 3L)
+  expect_length(slept, 2L)
 })
 
 test_that("every publisher's real io reads the release generation", {

@@ -102,6 +102,10 @@ acquire_bioc <- function() {
 # pull and its regression gate, so it is not taken on the generation's word alone:
 # if the recent shard downloads after all, the digests came from a different
 # release than the one downloads and uploads reach, and nothing may start cold.
+# A generation that lists assets already proves the release exists, and it is not
+# put to release_exists() again: that asks the same gh lookup, which can word a
+# transient failure as "release not found", and a FALSE believed there started the
+# run cold over a real base until the regression gate refused it as lost ground.
 seed_working_db <- function(io, out_dir, working_path) {
   generation <- .release_generation(io)
   seeded <- function(ok) invisible(structure(ok, generation = generation))
@@ -113,7 +117,6 @@ seed_working_db <- function(io, out_dir, working_path) {
            "so this run neither starts cold nor publishes", call. = FALSE)
     return(seeded(FALSE))
   }
-  if (!isTRUE(io$release_exists())) return(seeded(FALSE))
   # A download that fails because another publisher has the recent shard deleted
   # for its --clobber is a conflict, so a merge's retry seeds again once that
   # publisher is done (see .pull_or_conflict).
@@ -344,17 +347,32 @@ run_update <- function(io, out_dir, opts = list()) {
 #' a merely-transient error. So: exit 0 -> TRUE; exit non-zero AND the
 #' captured output names a genuine not-found -> FALSE; any other non-zero
 #' exit -> stop(), aborting the run rather than guessing.
-gh_release_exists <- function(repo, tag = "current") {
-  out <- suppressWarnings(system2("gh", c("release", "view", tag, "--repo", repo),
-                                  stdout = TRUE, stderr = TRUE))
-  status <- attr(out, "status")
-  status <- if (is.null(status)) 0L else as.integer(status)
-  if (identical(status, 0L)) return(TRUE)
-  text <- paste(out, collapse = "\n")
-  not_found <- grepl("release not found", text, ignore.case = TRUE) ||
-    grepl("HTTP 404", text, ignore.case = TRUE)
-  if (not_found) return(FALSE)
-  stop(sprintf("gh release view failed ambiguously, aborting to avoid clobbering history: %s", text))
+#'
+#' Since gh 2.96 a genuine not-found is not the only thing worded that way: one
+#' failed lookup of a published release is too (see gh_release_generation, which
+#' reads through the same lookup). So every failure, that one included, is asked
+#' again after each of `waits` (run and sleep injected the same way), and FALSE
+#' needs the last attempt to still say not found. Taken on one answer, it told
+#' publish()'s pull there was nothing to fetch, and the run stopped over a summary
+#' it had never tried to download.
+gh_release_exists <- function(repo, tag = "current", run = system2,
+                              waits = RELEASE_READ_RETRY_WAITS_S, sleep = Sys.sleep) {
+  last <- length(waits) + 1L
+  attempt <- 0L
+  ask <- function() {
+    attempt <<- attempt + 1L
+    out <- suppressWarnings(run("gh", c("release", "view", tag, "--repo", repo),
+                                stdout = TRUE, stderr = TRUE))
+    status <- attr(out, "status")
+    status <- if (is.null(status)) 0L else as.integer(status)
+    if (identical(status, 0L)) return(TRUE)
+    text <- paste(out, collapse = "\n")
+    not_found <- grepl("release not found", text, ignore.case = TRUE) ||
+      grepl("HTTP 404", text, ignore.case = TRUE)
+    if (not_found && attempt == last) return(FALSE)
+    stop(sprintf("gh release view failed ambiguously, aborting to avoid clobbering history: %s", text))
+  }
+  with_retry(ask, waits = waits, sleep = sleep)
 }
 
 #' The release generation of `tag` on `repo`: one "name<TAB>digest" line per asset,
@@ -378,12 +396,22 @@ gh_release_exists <- function(repo, tag = "current") {
 #' suite can answer for gh without a network.
 #'
 #' A failed read is tried again after each of `waits` (sleep injected like run),
-#' and only the last failure stops. A missing release is an answer and is not
-#' asked twice.
+#' and only the last failure stops. "release not found" is tried again as well, and
+#' reads as "" only when the last attempt still says it. gh 2.96 and later look the
+#' tag up as a published release and as a draft at once, and when both lookups fail
+#' they report the release as not found. The draft lookup gives that answer for
+#' every published release, so one 502 on the published lookup comes back in exactly
+#' those words. Believed the first time, it stopped the seed over a release it took
+#' for empty, and at a check in publish() it became a conflict naming every asset
+#' with no other publisher involved. A release that really is missing costs the
+#' waits, which only a first-ever run can pay.
 gh_release_generation <- function(repo, tag = "current", run = system2,
                                   waits = RELEASE_READ_RETRY_WAITS_S, sleep = Sys.sleep) {
   jq <- '.assets[] | [.name, (.digest // (.id + "@" + .updatedAt))] | join("\t")'
+  last <- length(waits) + 1L
+  attempt <- 0L
   read_once <- function() {
+    attempt <<- attempt + 1L
     err_file <- tempfile("gh-release-generation-")
     on.exit(unlink(err_file), add = TRUE)
     out <- suppressWarnings(run("gh", c("release", "view", tag, "--repo", repo, "--json", "assets",
@@ -393,7 +421,7 @@ gh_release_generation <- function(repo, tag = "current", run = system2,
     status <- if (is.null(status)) 0L else as.integer(status)
     err <- if (file.exists(err_file)) paste(readLines(err_file, warn = FALSE), collapse = "\n") else ""
     if (!identical(status, 0L)) {
-      if (grepl("release not found", err, fixed = TRUE)) return("")
+      if (grepl("release not found", err, fixed = TRUE) && attempt == last) return("")
       stop(sprintf("could not read the asset digests of release '%s' on %s (gh exit %s): %s",
                    tag, repo, status, err), call. = FALSE)
     }
