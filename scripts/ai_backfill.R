@@ -636,8 +636,10 @@ run_deep <- function(io, out_dir, roster_path, i, N,
 #' republish. Seeds the working DB from the recent shard (which already carries the prior
 #' vcs_ai_signals; no explicit protect_history_pull here, since vcs_ai_signals has no year
 #' component and publish()'s own internal pull handles the change-gate), then:
-#' reconcile_ai_identity carries any node_id-collision onsets onto the canonical repo_id
-#' (PK-safe, before the reduce); ai_onset_reducer merges the reconciled prior set with the
+#' reconcile_ai_identity carries a no-longer-active slug's onsets onto the canonical repo_id
+#' of its node_id and fills empty rows from an active sibling slug (PK-safe, before the
+#' reduce); drop_unanchored_confirmations discards confirmations with no row to confirm;
+#' ai_onset_reducer merges the reconciled prior set with the
 #' incoming partials by the six column rules; the working vcs_ai_signals is
 #' DELETE-and-rewritten with the fully-reduced set (never blanket-deleted and re-detected -
 #' the rows are immutable, the DELETE only follows the R-side reduce); the summary rollups
@@ -673,6 +675,13 @@ run_merge <- function(io, out_dir, parts_dir) {
     DBI::dbReadTable(pcon, "vcs_ai_signals")
   })
   incoming <- if (length(part_rows)) do.call(rbind, part_rows) else .ai_empty_signals()
+  # A confirmation whose key the prior set does not hold would otherwise be written
+  # out as a row carrying only a date, and nothing afterwards would ever fill it.
+  n_incoming <- nrow(incoming)
+  incoming <- drop_unanchored_confirmations(prior, incoming)
+  if (nrow(incoming) < n_incoming)
+    message(sprintf("ai merge: dropped %d confirmation row(s) with no prior row to confirm",
+                    n_incoming - nrow(incoming)))
 
   reduced <- ai_onset_reducer(prior, incoming)
   DBI::dbExecute(con, "DELETE FROM vcs_ai_signals")
