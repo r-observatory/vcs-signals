@@ -33,6 +33,26 @@ env:
   TZ: UTC
 jobs:
   merge:
+    # The workflow-level group above keeps this rerun off a live ai-weekly run,
+    # but ai-weekly is only one of the publishers. Every job that seeds from
+    # release "current" and later uploads whole tables back over it shares
+    # this lock: update, and the merge in weekly, ai-weekly, ai-merge-rerun,
+    # backfill and ai-backfill. weekly and ai-weekly share a cron, and their
+    # merges overlapped on 2026-08-30, 09-06 and 09-13. On the first two the
+    # AI merge seeded before the weekly merge published and uploaded after
+    # it, silently putting the weekly values in series_latest and the summary
+    # back to an earlier week. A rerun dispatched by hand can land in the
+    # middle of any of them.
+    #
+    # The lock sits on the job, not the workflow, so the scans still run side
+    # by side; a workflow-level group would run six-hour scans back to back.
+    # queue: max because the default queue keeps one pending job and cancels
+    # it when another arrives, discarding a merge that was waiting its turn.
+    # cancel-in-progress stays unset; true is refused alongside queue: max.
+    # test-publish-lock.R fails any publishing job that lacks this block.
+    concurrency:
+      group: vcs-signals-publish
+      queue: max
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:

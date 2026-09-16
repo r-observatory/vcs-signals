@@ -1,0 +1,11 @@
+# actionlint 1.7.12 predates the concurrency queue key and reports every
+# `queue: max` as unknown. GitHub documents it for job and workflow concurrency,
+# and the publishing jobs depend on it: without it a pending publisher is
+# cancelled when another arrives (see test-publish-lock.R). Six known findings on
+# every run would bury a new one, so only that exact message is ignored; any
+# other unknown key in a concurrency block is still reported. Remove this once
+# actionlint knows the key.
+paths:
+  .github/workflows/**/*.{yml,yaml}:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'

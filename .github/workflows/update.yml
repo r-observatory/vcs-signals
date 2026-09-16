@@ -66,6 +66,28 @@ jobs:
   update:
     needs: guard
     if: needs.guard.outputs.proceed == 'true'
+    # One lock for every job that seeds from release "current" and later
+    # uploads whole tables back over it: this job, and the merge in weekly,
+    # ai-weekly, ai-merge-rerun, backfill and ai-backfill. The workflow-level
+    # group above stays as it is, because the guard relies on a catch-up
+    # queueing behind the primary; it only ever kept this workflow from racing
+    # itself. weekly and ai-weekly share a cron, and their merges overlapped on
+    # 2026-08-30, 09-06 and 09-13. On the first two the AI merge seeded before
+    # the weekly merge published and uploaded after it, silently putting the
+    # weekly values in series_latest and the summary back to an earlier week.
+    # This job seeds before a collection of about ninety minutes, the widest
+    # window of any publisher, and a late cron or a dispatch can put that
+    # window over a Sunday merge. A merge may now wait that long for it.
+    #
+    # The lock sits on the job, not the workflow, so the scans still run side
+    # by side; a workflow-level group would run six-hour scans back to back.
+    # queue: max because the default queue keeps one pending job and cancels
+    # it when another arrives, discarding a publisher that was waiting its turn.
+    # cancel-in-progress stays unset; true is refused alongside queue: max.
+    # test-publish-lock.R fails any publishing job that lacks this block.
+    concurrency:
+      group: vcs-signals-publish
+      queue: max
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
