@@ -485,6 +485,65 @@ test_that("a confirmation row reduces against the prior published row: onset fro
   expect_equal(reduced$last_confirmed_date, "2026-07-16")  # advances via max()
 })
 
+test_that("a confirmation row whose key has no prior row creates nothing", {
+  # A confirmation says "still there" about a row that already exists. Given no
+  # row to advance, the reducer used to write one out of it anyway, carrying
+  # nothing but a date: no onset, no tiers, no markers.
+  prior <- data.frame(repo_id = "github.com/a/x", tool = "claude",
+                      first_seen_date = "2024-01-01", first_seen_censored = 0L,
+                      evidence_tiers = "D", markers = "CLAUDE.md", authored = 0L,
+                      authored_commits = NA_integer_, assisted_commits = NA_integer_,
+                      last_confirmed_date = "2024-01-01", stringsAsFactors = FALSE)
+  published <- rbind(prior, transform(prior, repo_id = "github.com/b/y"))
+  evidence <- data.frame(repo_id = c("github.com/a/x", "github.com/b/y"), tool = "claude",
+                         tier = "D", marker = "CLAUDE.md", agnostic = 0L,
+                         stringsAsFactors = FALSE)
+  confirm <- select_confirmation_rows(evidence, published, "2026-07-16")   # 7 columns
+  deep <- transform(prior, repo_id = "github.com/c/z", tool = "cursor",
+                    last_confirmed_date = "2026-07-16")
+
+  kept <- drop_unanchored_confirmations(prior, rbind(
+    transform(confirm, markers = NA_character_, authored_commits = NA_integer_,
+              assisted_commits = NA_integer_)[names(prior)], deep))
+  expect_setequal(paste(kept$repo_id, kept$tool),
+                  c("github.com/a/x claude", "github.com/c/z cursor"))
+  # The 7-column frame select_confirmation_rows itself returns is read the same way.
+  expect_equal(paste(drop_unanchored_confirmations(prior, confirm)$repo_id), "github.com/a/x")
+
+  reduced <- ai_onset_reducer(prior, kept)
+  expect_setequal(paste(reduced$repo_id, reduced$tool),
+                  c("github.com/a/x claude", "github.com/c/z cursor"))
+  expect_equal(reduced$last_confirmed_date[reduced$repo_id == "github.com/a/x"], "2026-07-16")
+
+  # A full row for the key arriving in the same merge is what creates it, so the
+  # confirmation beside it is not dropped.
+  both <- rbind(confirm[confirm$repo_id == "github.com/b/y", ],
+                transform(prior, repo_id = "github.com/b/y")[names(confirm)])
+  expect_equal(nrow(drop_unanchored_confirmations(prior[0, ], both)), 2L)
+  expect_equal(nrow(drop_unanchored_confirmations(prior, prior[0, ])), 0L)
+})
+
+test_that("a row is empty only when its onset, tiers and markers are all blank", {
+  # Every published row carries an onset and tiers today, most of them markers too,
+  # so a row holding just one of the three is a shape nothing has produced yet. It
+  # still holds evidence, and an empty row is the one the merge drops unconfirmed
+  # and a sibling slug overwrites. An empty string is as blank as NULL.
+  rows <- data.frame(repo_id = "github.com/a/x",
+                     tool = c("claude", "cursor", "codex", "aider", "copilot"),
+                     first_seen_date = c(NA, "", "2026-06-22T12:21:43Z", NA, NA),
+                     first_seen_censored = 0L,
+                     evidence_tiers = c(NA, "", NA, "D", NA),
+                     markers = c(NA, "", NA, NA, ".claude"),
+                     authored = 0L, authored_commits = NA_integer_, assisted_commits = NA_integer_,
+                     last_confirmed_date = "2026-09-20", stringsAsFactors = FALSE)
+  expect_identical(.ai_is_hollow(rows), c(TRUE, TRUE, FALSE, FALSE, FALSE))
+  # With no markers column, as select_confirmation_rows writes, only the other two count.
+  expect_identical(.ai_is_hollow(rows[setdiff(names(rows), "markers")]),
+                   c(TRUE, TRUE, FALSE, FALSE, TRUE))
+  expect_equal(drop_unanchored_confirmations(.ai_empty_signals(), rows)$tool,
+               c("codex", "aider", "copilot"))
+})
+
 test_that("marker_repo_path prepends .github/ only for github-located markers", {
   # github-located file marker: its real repo path lives under .github/
   expect_equal(marker_repo_path("copilot-instructions.md"), ".github/copilot-instructions.md")

@@ -279,22 +279,26 @@ update_repo_node_ids <- function(con, resolved) {
 #' rename/transfer minted a second repo_id for the same GitHub repository, orphaning the
 #' old slug's onset). For each node_id held by 2+ repos, the canonical repo_id is the
 #' active, most-recently-seen one (tiebroken by repo_id ascending for determinism); every
-#' other repo_id is stale. All involved rows are re-keyed to the canonical repo_id and
-#' folded through ai_onset_reducer, so a (canonical, tool) collision collapses by the onset
+#' member that is not active is stale (every member but the canonical one, when none is
+#' active). The stale rows are re-keyed to the canonical repo_id and folded with its own
+#' through ai_onset_reducer, so a (canonical, tool) collision collapses by the onset
 #' rules (exact dominates a later floor, min of exacts, tier union, authored OR,
 #' last_confirmed max) instead of violating the (repo_id, tool) primary key that a blind
-#' UPDATE ... SET repo_id would hit. Structural: run on every merge, before the
-#' prior-vs-incoming onset reduce. No-op when no node_id is shared.
+#' UPDATE ... SET repo_id would hit. A second active member is not stale and keeps its
+#' rows; heal_hollow_siblings then fills any of them left empty. Structural: run on
+#' every merge, before the prior-vs-incoming onset reduce. No-op when no node_id is shared.
 reconcile_ai_identity <- function(con) {
   if (!DBI::dbExistsTable(con, "vcs_ai_signals")) return(invisible(FALSE))
   dups <- DBI::dbGetQuery(con,
     "SELECT node_id FROM repos WHERE node_id IS NOT NULL GROUP BY node_id HAVING COUNT(*) > 1")
   if (nrow(dups) == 0) return(invisible(FALSE))
+  healed <- 0L
   for (nid in dups$node_id) {
     grp <- DBI::dbGetQuery(con,
       "SELECT repo_id, status, last_seen FROM repos WHERE node_id = ?", params = list(nid))
     # canonical: active before non-active, then newest last_seen, then repo_id ascending.
-    a <- ifelse(grp$status == "active", 0L, 1L)
+    active <- grp$status == "active"
+    a <- ifelse(active, 0L, 1L)
     o <- order(a, grp$last_seen, grp$repo_id, decreasing = c(FALSE, TRUE, FALSE), method = "radix")
     canonical <- grp$repo_id[o[1]]
     ids <- grp$repo_id
@@ -309,13 +313,85 @@ reconcile_ai_identity <- function(con) {
       "SELECT %s FROM vcs_ai_signals WHERE repo_id IN (%s)", cols, ph),
       params = as.list(ids))
     if (nrow(involved) == 0) next
-    involved$repo_id <- canonical
-    reduced <- ai_onset_reducer(.ai_empty_signals(), involved)
+    # Only a slug that is no longer active is a leftover name. Two slugs can both be
+    # active when each is named by a different listed package: jpstat and japanstat
+    # are one repository, and so are nhdplusTools and hydrogeofetch. Both stay on the
+    # AI roster, both are scanned and both are mapped in the summary. Folding every
+    # member deleted jpstat's rows on each merge; the weekly confirmation pass then
+    # sent rows for jpstat's published keys, which came back as rows carrying a date
+    # and nothing else. jpstat lost its summary rollup, nhdplusTools's onset and
+    # markers moved to hydrogeofetch, and it repeated every week, which is why the
+    # merge log's prior count sat two rows under the published table.
+    stale <- if (any(active)) grp$repo_id[!active] else setdiff(ids, canonical)
+    onto <- involved$repo_id %in% c(canonical, stale)
+    folded <- involved[onto, , drop = FALSE]
+    folded$repo_id <- rep(canonical, nrow(folded))
+    rows <- rbind(involved[!onto, , drop = FALSE],
+                  ai_onset_reducer(.ai_empty_signals(), folded))
+    was_hollow <- sum(.ai_is_hollow(rows))
+    rows <- heal_hollow_siblings(rows)
+    healed <- healed + (was_hollow - sum(.ai_is_hollow(rows)))
     DBI::dbExecute(con, sprintf("DELETE FROM vcs_ai_signals WHERE repo_id IN (%s)", ph),
                    params = as.list(ids))
-    DBI::dbWriteTable(con, "vcs_ai_signals", reduced, append = TRUE)
+    DBI::dbWriteTable(con, "vcs_ai_signals", rows, append = TRUE)
   }
+  if (healed > 0L)
+    message(sprintf("ai identity: filled %d empty row(s) from an active sibling slug", healed))
   invisible(TRUE)
+}
+
+#' Fill each row that carries no evidence from the rows its sibling slugs hold for the
+#' same tool. `rows` are the vcs_ai_signals rows of the members of ONE node_id, so every
+#' row describes the same GitHub repository and a sibling's evidence is this row's
+#' evidence too.
+#'
+#' The empty rows already published cannot recover by being scanned:
+#' select_incremental_repos deep-scans only (repo_id, tool) keys that are not yet
+#' published, and an empty row's key is published, so it would only ever be confirmed.
+#' Stopping the fold leaves them empty for good; this is what repairs them, and it
+#' spends no API budget.
+#'
+#' Onset, censoring, tiers, markers, authorship and both counts come from the sibling
+#' (reduced by the onset rules when two or more siblings have evidence). The filled row
+#' keeps the later of its own last_confirmed_date and the sibling's. A row whose siblings
+#' are just as empty is left alone, since there is nothing to copy and nothing may be
+#' made up.
+#'
+#' An active sibling holding NO row for a tool is not given one. /insights counts
+#' vcs_ai_signals rows and distinct repo_ids straight from the table, so a copy would
+#' count the repository a second time on the strength of this function alone. An empty
+#' row is already counted as a repository and a detection, so filling it changes neither
+#' count, nor the repositories counted per tool. The figures /insights reads from a
+#' row's values do move, because the repository then has those values under both slugs.
+#' The tier breakdown and the marker kinds take the row out of untiered and unrecorded
+#' and count it under the sibling's tiers and kinds. The dated and censored counts, the
+#' exact onsets by month and by tool, and the authored and assisted commit sums with
+#' their counts of searched repositories take the repository's onset and commits a
+#' second time. So does any pair whose slugs are each deep-scanned on their own, as
+#' hydrogeofetch was on 2026-09-13 while nhdplusTools still held a full row, and the
+#' viewer cannot count such a pair once, because no table the merger takes from the
+#' summary carries node_id. A slug without a row gets one the ordinary way, when its own
+#' cheap pass flags the tool and the deep scan dates it. Pure.
+heal_hollow_siblings <- function(rows) {
+  if (is.null(rows) || nrow(rows) < 2) return(rows)
+  hollow <- .ai_is_hollow(rows)
+  if (!any(hollow) || all(hollow)) return(rows)
+  evidence <- setdiff(names(.ai_empty_signals()), c("repo_id", "tool", "last_confirmed_date"))
+  for (tl in unique(rows$tool[hollow])) {
+    donors <- rows[rows$tool == tl & !hollow, , drop = FALSE]
+    if (nrow(donors) == 0) next
+    if (nrow(donors) > 1) {
+      donors$repo_id <- rep(donors$repo_id[1], nrow(donors))
+      donors <- .ai_reduce_group(donors)
+    }
+    for (i in which(rows$tool == tl & hollow)) {
+      for (cn in evidence) rows[[cn]][i] <- donors[[cn]][1]
+      lc <- c(rows$last_confirmed_date[i], donors$last_confirmed_date[1])
+      lc <- lc[!is.na(lc)]
+      rows$last_confirmed_date[i] <- if (length(lc)) max(lc) else NA_character_
+    }
+  }
+  rows
 }
 
 # ---- universe guard --------------------------------------------------------
