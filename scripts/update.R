@@ -90,16 +90,46 @@ acquire_bioc <- function() {
 # from one run's shards. So a missing release is still a legitimate first-run no-op,
 # but a release that exists and cannot be pulled now aborts, matching the fail-closed
 # contract gh_release_exists and protect_history_pull already follow.
+#
+# Returns TRUE or FALSE carrying attr "generation": what the release held when this
+# seed began, which the caller hands to publish() as base_generation. It is read
+# before the first download, not after. A publish landing mid-seed then shows up at
+# publish time as a conflict and the merge seeds again; read afterwards, that publish
+# would be absorbed into the base, and the stale build would go out as if current.
+# A generation of "" is a release with no assets at all (update.yml creates the
+# release before the first run uploads into it), which is a first run too, and a
+# missing recent shard is then not a failure. But "" also switches off publish()'s
+# pull and its regression gate, so it is not taken on the generation's word alone:
+# if the recent shard downloads after all, the digests came from a different
+# release than the one downloads and uploads reach, and nothing may start cold.
+# A generation that lists assets already proves the release exists, and it is not
+# put to release_exists() again: that asks the same gh lookup, which can word a
+# transient failure as "release not found", and a FALSE believed there started the
+# run cold over a real base until the regression gate refused it as lost ground.
 seed_working_db <- function(io, out_dir, working_path) {
+  generation <- .release_generation(io)
+  seeded <- function(ok) invisible(structure(ok, generation = generation))
   if (file.exists(working_path)) unlink(working_path)
-  if (!isTRUE(io$release_exists())) return(invisible(FALSE))
-  if (!isTRUE(io$download("vcs-signals-recent.db", out_dir)))
-    stop("release 'current' exists but vcs-signals-recent.db could not be downloaded; ",
-         "aborting rather than treating accumulated history as absent")
+  if (!nzchar(generation)) {
+    if (isTRUE(io$release_exists()) && isTRUE(io$download("vcs-signals-recent.db", out_dir)))
+      stop("the release generation lists no assets, yet vcs-signals-recent.db downloaded from release ",
+           "'current'; the digests describe a different release than downloads and uploads reach, ",
+           "so this run neither starts cold nor publishes", call. = FALSE)
+    return(seeded(FALSE))
+  }
+  # A download that fails because another publisher has the recent shard deleted
+  # for its --clobber is a conflict, so a merge's retry seeds again once that
+  # publisher is done (see .pull_or_conflict).
   prior_path <- file.path(out_dir, "vcs-signals-recent.db")
-  if (!file.exists(prior_path))
-    stop("vcs-signals-recent.db reported a successful download but is not on disk; ",
-         "aborting rather than treating accumulated history as absent")
+  .pull_or_conflict(io, generation, "while seeding", function() {
+    if (!isTRUE(io$download("vcs-signals-recent.db", out_dir)))
+      stop("release 'current' exists but vcs-signals-recent.db could not be downloaded; ",
+           "aborting rather than treating accumulated history as absent.",
+           lost_asset_hint("vcs-signals-recent.db"))
+    if (!file.exists(prior_path))
+      stop("vcs-signals-recent.db reported a successful download but is not on disk; ",
+           "aborting rather than treating accumulated history as absent")
+  })
 
   pcon <- DBI::dbConnect(RSQLite::SQLite(), prior_path)
   on.exit(DBI::dbDisconnect(pcon), add = TRUE)
@@ -124,7 +154,7 @@ seed_working_db <- function(io, out_dir, working_path) {
       if (nrow(df) > 0) DBI::dbWriteTable(wcon, nm, df, append = TRUE)
     }
   }
-  invisible(TRUE)
+  seeded(TRUE)
 }
 
 # ---- the five-stage orchestrator -------------------------------------------
@@ -133,9 +163,13 @@ seed_working_db <- function(io, out_dir, working_path) {
 #' io must expose: acquire() -> data.frame(package, origin, url_raw,
 #' bugreports_raw); graphql(query) -> parsed GraphQL response (list, with
 #' $data/$errors, or throws on transport error); release_exists() ->
-#' logical; download(pattern, dir) -> logical; upload(path) -> invisible.
+#' logical; generation() -> the release generation string (see
+#' gh_release_generation); download(pattern, dir) -> logical; upload(path) ->
+#' invisible.
 #' opts$force_full re-exports and re-uploads every shard regardless of the
 #' change-gate; opts$tag overrides the release tag (default "current").
+#' A publish refused because another publisher moved the release in the meantime
+#' is not retried here: see retry_on_publish_conflict for why.
 run_update <- function(io, out_dir, opts = list()) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   today <- Sys.Date()
@@ -144,7 +178,7 @@ run_update <- function(io, out_dir, opts = list()) {
   tag <- if (!is.null(opts$tag)) opts$tag else "current"
 
   working_path <- file.path(out_dir, "_working.db")
-  seed_working_db(io, out_dir, working_path)
+  seed <- seed_working_db(io, out_dir, working_path)
 
   con <- DBI::dbConnect(RSQLite::SQLite(), working_path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
@@ -175,7 +209,8 @@ run_update <- function(io, out_dir, opts = list()) {
       "graphql rate remaining (%s) below reserve (%d); skipping node-id resolution and collection this run",
       rl, POINT_RESERVE))
     return(invisible(publish(io, con, out_dir, tag, source_kind = "live",
-                              force_full = force_full, touched_years = character(0))))
+                              force_full = force_full, touched_years = character(0),
+                              base_generation = attr(seed, "generation"))))
   }
 
   # ---- Stage 2: node-id resolution + lifecycle (rename, gone) ------------
@@ -299,7 +334,7 @@ run_update <- function(io, out_dir, opts = list()) {
 
   # ---- Stage 5: publish --------------------------------------------------
   invisible(publish(io, con, out_dir, tag, source_kind = "live", force_full = force_full,
-                     touched_years = touched_years))
+                     touched_years = touched_years, base_generation = attr(seed, "generation")))
 }
 
 # ---- gh-release IO for the real run ----------------------------------------
@@ -313,17 +348,88 @@ run_update <- function(io, out_dir, opts = list()) {
 #' a merely-transient error. So: exit 0 -> TRUE; exit non-zero AND the
 #' captured output names a genuine not-found -> FALSE; any other non-zero
 #' exit -> stop(), aborting the run rather than guessing.
-gh_release_exists <- function(repo, tag = "current") {
-  out <- suppressWarnings(system2("gh", c("release", "view", tag, "--repo", repo),
-                                  stdout = TRUE, stderr = TRUE))
-  status <- attr(out, "status")
-  status <- if (is.null(status)) 0L else as.integer(status)
-  if (identical(status, 0L)) return(TRUE)
-  text <- paste(out, collapse = "\n")
-  not_found <- grepl("release not found", text, ignore.case = TRUE) ||
-    grepl("HTTP 404", text, ignore.case = TRUE)
-  if (not_found) return(FALSE)
-  stop(sprintf("gh release view failed ambiguously, aborting to avoid clobbering history: %s", text))
+#'
+#' Since gh 2.96 a genuine not-found is not the only thing worded that way: one
+#' failed lookup of a published release is too (see gh_release_generation, which
+#' reads through the same lookup). So every failure, that one included, is asked
+#' again after each of `waits` (run and sleep injected the same way), and FALSE
+#' needs the last attempt to still say not found. Taken on one answer, it told
+#' publish()'s pull there was nothing to fetch, and the run stopped over a summary
+#' it had never tried to download.
+gh_release_exists <- function(repo, tag = "current", run = system2,
+                              waits = RELEASE_READ_RETRY_WAITS_S, sleep = Sys.sleep) {
+  last <- length(waits) + 1L
+  attempt <- 0L
+  ask <- function() {
+    attempt <<- attempt + 1L
+    out <- suppressWarnings(run("gh", c("release", "view", tag, "--repo", repo),
+                                stdout = TRUE, stderr = TRUE))
+    status <- attr(out, "status")
+    status <- if (is.null(status)) 0L else as.integer(status)
+    if (identical(status, 0L)) return(TRUE)
+    text <- paste(out, collapse = "\n")
+    not_found <- grepl("release not found", text, ignore.case = TRUE) ||
+      grepl("HTTP 404", text, ignore.case = TRUE)
+    if (not_found && attempt == last) return(FALSE)
+    stop(sprintf("gh release view failed ambiguously, aborting to avoid clobbering history: %s", text))
+  }
+  with_retry(ask, waits = waits, sleep = sleep)
+}
+
+#' The release generation of `tag` on `repo`: one "name<TAB>digest" line per asset,
+#' sorted, joined by newlines. GitHub reports a sha256 digest on every asset; one
+#' without falls back to "<node id>@<updatedAt>", which --clobber also changes, since
+#' the asset is deleted and created again. "" when the release has no assets or
+#' gh reports "release not found", which is the one state with nothing to overwrite.
+#'
+#' Read through gh release view, the lookup gh release download and upload use.
+#' It finds a draft "current" as well as a published one, where GET
+#' releases/tags/<tag> answers 404 for a draft (for instance after the tag is
+#' deleted). Asked that way, a draft read as an empty release while its downloads
+#' and uploads still worked, so the merge started cold, skipped the pull and the
+#' regression gate, and published one run's rows over the draft's history.
+#'
+#' Any other failure stops, rather than returning something a caller could read
+#' as a generation: a 502 turned into "" would look like an empty release, and
+#' publish() would skip its pull and its regression gate on the strength of it.
+#' stderr goes to its own file, so a gh upgrade notice or warning never becomes
+#' part of the string and a false conflict. `run` is system2, injected so the
+#' suite can answer for gh without a network.
+#'
+#' A failed read is tried again after each of `waits` (sleep injected like run),
+#' and only the last failure stops. "release not found" is tried again as well, and
+#' reads as "" only when the last attempt still says it. gh 2.96 and later look the
+#' tag up as a published release and as a draft at once, and when both lookups fail
+#' they report the release as not found. The draft lookup gives that answer for
+#' every published release, so one 502 on the published lookup comes back in exactly
+#' those words. Believed the first time, it stopped the seed over a release it took
+#' for empty, and at a check in publish() it became a conflict naming every asset
+#' with no other publisher involved. A release that really is missing costs the
+#' waits, which only a first-ever run can pay.
+gh_release_generation <- function(repo, tag = "current", run = system2,
+                                  waits = RELEASE_READ_RETRY_WAITS_S, sleep = Sys.sleep) {
+  jq <- '.assets[] | [.name, (.digest // (.id + "@" + .updatedAt))] | join("\t")'
+  last <- length(waits) + 1L
+  attempt <- 0L
+  read_once <- function() {
+    attempt <<- attempt + 1L
+    err_file <- tempfile("gh-release-generation-")
+    on.exit(unlink(err_file), add = TRUE)
+    out <- suppressWarnings(run("gh", c("release", "view", tag, "--repo", repo, "--json", "assets",
+                                        "--jq", shQuote(jq)),
+                                stdout = TRUE, stderr = err_file))
+    status <- attr(out, "status")
+    status <- if (is.null(status)) 0L else as.integer(status)
+    err <- if (file.exists(err_file)) paste(readLines(err_file, warn = FALSE), collapse = "\n") else ""
+    if (!identical(status, 0L)) {
+      if (grepl("release not found", err, fixed = TRUE) && attempt == last) return("")
+      stop(sprintf("could not read the asset digests of release '%s' on %s (gh exit %s): %s",
+                   tag, repo, status, err), call. = FALSE)
+    }
+    lines <- out[nzchar(out)]
+    paste(sort(lines, method = "radix"), collapse = "\n")
+  }
+  with_retry(read_once, waits = waits, sleep = sleep)
 }
 
 gh_release_download <- function(repo, pattern, dir, tag = "current") {
@@ -350,15 +456,21 @@ gh_release_upload <- function(repo, path, tag = "current") {
   invisible(NULL)
 }
 
-main <- function(out_dir) {
+# io is built here unless a test passes one, so the suite can drive the same entry
+# point CI does.
+main <- function(out_dir, io = NULL) {
   token <- Sys.getenv("VCS_SIGNALS_TOKEN")
-  io <- list(
+  if (is.null(io)) io <- list(
     acquire = function() rbind(acquire_cran(), acquire_bioc()),
     graphql = default_io(token)$graphql,
     release_exists = function() gh_release_exists(RELEASE_REPO),
+    generation = function() gh_release_generation(RELEASE_REPO),
     download = function(pattern, dir) gh_release_download(RELEASE_REPO, pattern, dir),
     upload = function(path) gh_release_upload(RELEASE_REPO, path))
   force_full <- tolower(Sys.getenv("FORCE_FULL_REBUILD", "")) %in% c("true", "1", "yes")
+  # Not wrapped in retry_on_publish_conflict. A conflict fails the run with that
+  # message; update.yml's 11:30 catch-up runs the update again if the day has no
+  # successful run by then, and a conflicted catch-up gets no further attempt.
   res <- run_update(io, out_dir, list(force_full = force_full))
   cat("Changed shards:",
       if (length(res$changed_shards)) paste(res$changed_shards, collapse = ", ") else "(none)", "\n")

@@ -229,15 +229,7 @@ test_that("run_merge folds in backfill without truncating aged-out forward year-
                           metric = c("stars", "stars"), value = c(1L, 5L), stringsAsFactors = FALSE)
   export_series_shard(file.path(parts_dir, "vcs-signals-shard-0.db"), hist_rows)
 
-  io <- list(
-    release_exists = function() TRUE,
-    download = function(pattern, dir) {
-      src <- file.path(released, pattern)
-      if (!file.exists(src)) return(FALSE)
-      file.copy(src, file.path(dir, pattern), overwrite = TRUE)
-      TRUE
-    },
-    upload = function(path) invisible(NULL))
+  io <- local_release_io(released)
 
   run_merge(io, out_dir, parts_dir)
 
@@ -292,15 +284,7 @@ test_that("run_merge(purge_metrics=c(\"releases\")) deletes those rows from the 
   jsonlite::write_json(list(summary = list(years = list(as.integer(old_year)))),
                         file.path(released, "manifest.json"), auto_unbox = TRUE)
 
-  io <- list(
-    release_exists = function() TRUE,
-    download = function(pattern, dir) {
-      src <- file.path(released, pattern)
-      if (!file.exists(src)) return(FALSE)
-      file.copy(src, file.path(dir, pattern), overwrite = TRUE)
-      TRUE
-    },
-    upload = function(path) invisible(NULL))
+  io <- local_release_io(released)
 
   run_merge(io, out_dir, parts_dir, purge_metrics = c("releases"))
 

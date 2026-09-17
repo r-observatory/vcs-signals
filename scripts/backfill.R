@@ -172,7 +172,7 @@ run_fetch_shard <- function(io, out_dir, roster_path, i, N, delay = BACKFILL_DEL
 run_merge <- function(io, out_dir, parts_dir, purge_metrics = character(0)) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   working_path <- file.path(out_dir, "_backfill_working.db")
-  seed_working_db(io, out_dir, working_path)
+  seed <- seed_working_db(io, out_dir, working_path)
 
   con <- DBI::dbConnect(RSQLite::SQLite(), working_path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
@@ -189,8 +189,11 @@ run_merge <- function(io, out_dir, parts_dir, purge_metrics = character(0)) {
   # of ALL metrics (forks/issues/PRs/releases and the forward stars points) -
   # that have aged out of the 400-day recent window. publish() re-pulls these
   # same shards afterward (idempotent), so the redundant download is harmless;
-  # what matters is that this load happens before publish() re-exports.
-  protect_history_pull(io, out_dir)
+  # what matters is that this load happens before publish() re-exports. A pull
+  # that fails while another publisher is replacing assets is a conflict, which
+  # main() retries, and not lost history.
+  .pull_or_conflict(io, attr(seed, "generation"), "while pulling the published history",
+                    function() protect_history_pull(io, out_dir))
   year_shards <- list.files(out_dir, pattern = "^vcs-signals-[0-9]{4}\\.db$", full.names = TRUE)
   for (ys in year_shards) {
     ycon <- DBI::dbConnect(RSQLite::SQLite(), ys)
@@ -246,15 +249,19 @@ run_merge <- function(io, out_dir, parts_dir, purge_metrics = character(0)) {
   # purge_metrics is passed through so publish's history fold does not put back
   # the rows this run deliberately removed.
   invisible(publish(io, con, out_dir, tag = "current", source_kind = "live",
-                    touched_years = touched_years, purged_metrics = purge_metrics))
+                    touched_years = touched_years, purged_metrics = purge_metrics,
+                    base_generation = attr(seed, "generation")))
 }
 
 # ---- CLI dispatch -----------------------------------------------------------------
-main <- function(mode, out_dir) {
+# io is built here unless a test passes one, so the suite can drive the same entry
+# point CI does.
+main <- function(mode, out_dir, io = NULL) {
   token <- Sys.getenv("VCS_SIGNALS_TOKEN")
-  io <- list(
+  if (is.null(io)) io <- list(
     graphql        = default_io(token)$graphql,
     release_exists = function() gh_release_exists(RELEASE_REPO),
+    generation     = function() gh_release_generation(RELEASE_REPO),
     download       = function(pattern, dir) gh_release_download(RELEASE_REPO, pattern, dir),
     upload         = function(path) gh_release_upload(RELEASE_REPO, path))
 
@@ -274,7 +281,11 @@ main <- function(mode, out_dir) {
   } else if (mode == "merge") {
     purge <- trimws(strsplit(Sys.getenv("VCS_PURGE_METRICS", ""), ",")[[1]])
     purge <- purge[nzchar(purge)]
-    run_merge(io, out_dir, Sys.getenv("VCS_PARTS", "parts"), purge_metrics = purge)
+    # If another publisher replaced the release between this merge's seed and its
+    # publish, the merge waits for that publisher to finish, seeds again from what
+    # it left, and rebuilds.
+    retry_on_publish_conflict(io, function()
+      run_merge(io, out_dir, Sys.getenv("VCS_PARTS", "parts"), purge_metrics = purge))
   } else {
     stop("usage: backfill.R [enumerate|fetch|merge]")
   }

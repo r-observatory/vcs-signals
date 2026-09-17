@@ -121,12 +121,10 @@ test_that("publish attaches the integrity core to the uploaded manifest", {
 
   out <- tempfile("out"); dir.create(out)
   on.exit(unlink(out, recursive = TRUE), add = TRUE)
-  io <- list(
-    release_exists = function() FALSE,
-    download = function(pattern, dir) FALSE,
-    upload = function(path) invisible(NULL))
+  rel <- tempfile("rel"); dir.create(rel)
+  io <- local_release_io(rel)
 
-  publish(io, con, out, "v1", "live", force_full = TRUE)
+  publish(io, con, out, "v1", "live", force_full = TRUE, base_generation = "")
 
   manifest <- jsonlite::fromJSON(file.path(out, "manifest.json"))
   expect_equal(manifest$db_filename, "vcs-signals-summary.db")
@@ -159,10 +157,9 @@ test_that("every table the pipeline writes reaches the published summary with it
     VALUES ('B','replit','open','only the commit-author trailer remains','2026-08-01')")
 
   out <- tempfile("pub_"); dir.create(out)
-  io <- list(release_exists = function() FALSE,
-             download = function(pattern, dir) FALSE,
-             upload = function(path) invisible(NULL))
-  publish(io, con, out, "v1", "live", force_full = TRUE)
+  rel <- tempfile("rel_"); dir.create(rel)
+  io <- local_release_io(rel)
+  publish(io, con, out, "v1", "live", force_full = TRUE, base_generation = "")
 
   scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-signals-summary.db"))
   on.exit(DBI::dbDisconnect(scon), add = TRUE)
@@ -511,14 +508,8 @@ test_that("the extra tables survive a publish, a reseed, and a second publish", 
   # tables, and the regression gate then refused every publish from that point
   # on. The gate was right; the round trip was missing.
   out <- tempfile("rt_"); dir.create(out)
-  uploaded <- character(0)
-  io <- list(release_exists = function() TRUE,
-             download = function(pattern, dir) {
-               src <- file.path(out, "vcs-signals-recent.db")
-               if (!file.exists(src)) return(FALSE)
-               file.copy(src, file.path(dir, "vcs-signals-recent.db"), overwrite = TRUE)
-             },
-             upload = function(path) { uploaded <<- c(uploaded, basename(path)); invisible(NULL) })
+  rel <- tempfile("rt_rel_"); dir.create(rel)
+  io <- local_release_io(rel)
 
   con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
   ensure_repo_schema(con); ensure_series_schema(con)
@@ -527,11 +518,11 @@ test_that("the extra tables survive a publish, a reseed, and a second publish", 
     VALUES ('D','claude','v1'), ('B','codex','v1'), ('A','copilot','v1')")
   DBI::dbExecute(con, "INSERT INTO vcs_ai_silent_channels (tier, tool, status, reason, recorded_on)
     VALUES ('B','replit','open','only the author trailer remains','2026-08-01')")
-  publish(io, con, out, "v1", "live", force_full = TRUE)
+  publish(io, con, out, "v1", "live", force_full = TRUE, base_generation = "")
   DBI::dbDisconnect(con)
 
-  # Everything a later run has to work from is the recent shard.
-  recent <- file.path(out, "vcs-signals-recent.db")
+  # Everything a later run has to work from is the recent shard, as published.
+  recent <- file.path(rel, "vcs-signals-recent.db")
   expect_true(file.exists(recent))
   rc <- DBI::dbConnect(RSQLite::SQLite(), recent)
   on.exit(DBI::dbDisconnect(rc), add = TRUE)
@@ -570,15 +561,8 @@ test_that("a full rebuild from the recent window does not truncate published yea
   ensure_repo_schema(con); ensure_series_schema(con)
   DBI::dbExecute(con, "INSERT INTO signals_series VALUES ('R1','2024-12-01','stars',12)")
 
-  io <- list(
-    release_exists = function() TRUE,
-    download = function(pattern, dir) {
-      src <- file.path(remote, pattern)
-      if (!file.exists(src)) return(FALSE)
-      file.copy(src, file.path(dir, basename(pattern)), overwrite = TRUE)
-    },
-    upload = function(path) invisible(NULL))
-  publish(io, con, out, "current", "live", force_full = TRUE)
+  io <- local_release_io(remote)
+  publish(io, con, out, "current", "live", force_full = TRUE, base_generation = io$generation())
 
   yc <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-signals-2024.db"))
   on.exit(DBI::dbDisconnect(yc), add = TRUE)
@@ -589,26 +573,27 @@ test_that("a deliberately purged metric is not resurrected by the fold", {
   # Retiring a mis-named metric is the one case where the published history is
   # meant to lose rows, and only the caller knows that.
   out <- tempfile("pg_"); dir.create(out)
-  published <- file.path(out, "vcs-signals-2024.db")
-  pc <- DBI::dbConnect(RSQLite::SQLite(), published)
+  remote <- tempfile("pg_rem_"); dir.create(remote)
+  pc <- DBI::dbConnect(RSQLite::SQLite(), file.path(remote, "vcs-signals-2024.db"))
   ensure_series_schema(pc)
   DBI::dbWriteTable(pc, "signals_series", data.frame(
     repo_id = "R1", date = "2024-05-01", metric = c("stars", "typo_metric"),
     value = c(5L, 9L), stringsAsFactors = FALSE), append = TRUE)
   DBI::dbDisconnect(pc)
+  rc <- DBI::dbConnect(RSQLite::SQLite(), file.path(remote, "vcs-signals-recent.db"))
+  ensure_series_schema(rc); DBI::dbDisconnect(rc)
+  writeLines('{"summary":{"years":[2024]}}', file.path(remote, "manifest.json"))
 
   con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   ensure_repo_schema(con); ensure_series_schema(con)
   DBI::dbExecute(con, "INSERT INTO signals_series VALUES ('R1','2024-05-01','stars',5)")
 
-  io <- list(release_exists = function() TRUE,
-             download = function(pattern, dir) TRUE,
-             upload = function(path) invisible(NULL))
+  io <- local_release_io(remote)
   publish(io, con, out, "current", "live", force_full = TRUE,
-          purged_metrics = "typo_metric")
+          purged_metrics = "typo_metric", base_generation = io$generation())
 
-  yc <- DBI::dbConnect(RSQLite::SQLite(), published)
+  yc <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-signals-2024.db"))
   on.exit(DBI::dbDisconnect(yc), add = TRUE)
   got <- DBI::dbGetQuery(yc, "SELECT DISTINCT metric FROM signals_series")$metric
   expect_equal(got, "stars")
@@ -620,7 +605,6 @@ test_that("the build being replaced is kept as one generation of rollback", {
   # that visibly lost ground; this is for the one that gets past it.
   remote <- tempfile("rem_"); dir.create(remote)
   out    <- tempfile("ret_"); dir.create(out)
-  uploaded <- character(0)
 
   pc <- DBI::dbConnect(RSQLite::SQLite(), file.path(remote, "vcs-signals-summary.db"))
   ensure_repo_schema(pc); ensure_series_schema(pc)
@@ -640,16 +624,10 @@ test_that("the build being replaced is kept as one generation of rollback", {
     VALUES ('R1','claude','2024-01-01','A,D','CLAUDE.md',53),
            ('R2','codex','2025-01-01','B','B',4)")
 
-  io <- list(release_exists = function() TRUE,
-             download = function(pattern, dir) {
-               src <- file.path(remote, pattern)
-               if (!file.exists(src)) return(FALSE)
-               file.copy(src, file.path(dir, basename(pattern)), overwrite = TRUE)
-             },
-             upload = function(path) { uploaded <<- c(uploaded, basename(path)); invisible(NULL) })
-  publish(io, con, out, "current", "live")
+  io <- local_release_io(remote)
+  publish(io, con, out, "current", "live", base_generation = io$generation())
 
-  expect_true("vcs-signals-summary-prev.db" %in% uploaded)
+  expect_true("vcs-signals-summary-prev.db" %in% io$uploaded())
   # And it holds the OLD build, not a second copy of the new one.
   kept <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-signals-summary-prev.db"))
   on.exit(DBI::dbDisconnect(kept), add = TRUE)
@@ -663,16 +641,14 @@ test_that("the build being replaced is kept as one generation of rollback", {
 
 test_that("a first publish keeps no rollback copy and claims none", {
   out <- tempfile("first_"); dir.create(out)
-  uploaded <- character(0)
+  rel <- tempfile("first_rel_"); dir.create(rel)
   con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   ensure_repo_schema(con); ensure_series_schema(con)
-  io <- list(release_exists = function() FALSE,
-             download = function(pattern, dir) FALSE,
-             upload = function(path) { uploaded <<- c(uploaded, basename(path)); invisible(NULL) })
-  publish(io, con, out, "v1", "live", force_full = TRUE)
+  io <- local_release_io(rel)
+  publish(io, con, out, "v1", "live", force_full = TRUE, base_generation = "")
 
-  expect_false("vcs-signals-summary-prev.db" %in% uploaded)
+  expect_false("vcs-signals-summary-prev.db" %in% io$uploaded())
   m <- jsonlite::fromJSON(file.path(out, "manifest.json"))
   expect_null(m$summary$previous_summary)
 })
@@ -744,25 +720,14 @@ test_that("a publish and a reseed keep the extra tables, both ways round", {
     (repo_id, tool, family, version, commits, window_complete)
     VALUES ('R1','claude','Opus','4.8',12,1)")
 
-  io_pub <- list(release_exists = function() FALSE,
-                 download = function(pattern, dir) FALSE,
-                 upload = function(path) {
-                   file.copy(path, file.path(remote, basename(path)), overwrite = TRUE)
-                 })
-  publish(io_pub, con, out, "v1", "live", force_full = TRUE)
+  io <- local_release_io(remote)
+  publish(io, con, out, "v1", "live", force_full = TRUE, base_generation = "")
   DBI::dbDisconnect(con)
 
   # Now the inbound half: a later run seeds its working DB from what was published.
   work <- tempfile(fileext = ".db")
   seed_dir <- tempfile("rt_seed_"); dir.create(seed_dir)
-  io_seed <- list(release_exists = function() TRUE,
-                  download = function(pattern, dir) {
-                    src <- file.path(remote, pattern)
-                    if (!file.exists(src)) return(FALSE)
-                    file.copy(src, file.path(dir, basename(pattern)), overwrite = TRUE)
-                  },
-                  upload = function(path) invisible(NULL))
-  seed_working_db(io_seed, seed_dir, work)
+  seed_working_db(io, seed_dir, work)
 
   wc <- DBI::dbConnect(RSQLite::SQLite(), work)
   on.exit(DBI::dbDisconnect(wc), add = TRUE)

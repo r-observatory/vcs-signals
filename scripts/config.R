@@ -51,6 +51,25 @@ SUPPORTED_HOSTS <- c("github")
 # ---- GitHub forward-gauge collection + publishing ----
 GRAPHQL_ENDPOINT <- "https://api.github.com/graphql"
 RELEASE_REPO     <- "r-observatory/vcs-signals"
+# Waits, in seconds, before publish() reads the release listing again when the
+# assets it has just uploaded do not yet show the digests of the files it sent.
+# A listing served a moment behind the upload is not another publisher, and a run
+# that has already put its data out should not go red over it. A real mixture of
+# two builds is still there after the last wait, and is reported then.
+PUBLISH_CONFIRM_WAITS_S <- c(5, 15)
+# Waits, in seconds, before reading the release's asset digests again after gh
+# fails to. A publish reads them at least four times, and the release API has
+# served 502s here (the update of 2026-08-20), so one bad answer would otherwise
+# throw away a 90-minute update or fail a publish whose data is already out.
+RELEASE_READ_RETRY_WAITS_S <- c(5, 20)
+# After a publish conflict, a merge waits for the release to read the same
+# PUBLISH_SETTLE_QUIET_READS times in a row, PUBLISH_SETTLE_POLL_S seconds apart,
+# before it seeds again, giving up the wait after PUBLISH_SETTLE_MAX_READS polls.
+# A minute without a change is meant to outlast one asset's upload; ten minutes
+# is well past a whole publish's uploads, and is small beside a rebuild.
+PUBLISH_SETTLE_POLL_S      <- 20
+PUBLISH_SETTLE_QUIET_READS <- 3L
+PUBLISH_SETTLE_MAX_READS   <- 30L
 FORWARD_METRICS  <- c("stars", "forks", "watchers", "issues_open", "issues_closed",
                       "prs_open", "prs_closed", "prs_merged",
                       "releases_total", "size_kb")

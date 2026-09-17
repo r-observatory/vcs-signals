@@ -646,7 +646,7 @@ run_deep <- function(io, out_dir, roster_path, i, N,
 run_merge <- function(io, out_dir, parts_dir) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   working_path <- file.path(out_dir, "_ai_merge_working.db")
-  seed_working_db(io, out_dir, working_path)
+  seed <- seed_working_db(io, out_dir, working_path)
 
   con <- DBI::dbConnect(RSQLite::SQLite(), working_path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
@@ -656,7 +656,9 @@ run_merge <- function(io, out_dir, parts_dir) {
   # No explicit protect_history_pull here (unlike backfill.R::run_merge): vcs_ai_signals
   # has no year component, so there is no year-shard content to fold in or protect;
   # seed_working_db already carries the prior vcs_ai_signals via the recent shard, and
-  # publish()'s own force_full-gated protect_history_pull handles the change-gate pull.
+  # publish() makes its own protect_history_pull whenever the release this merge was
+  # seeded from lists any assets, which is the pull the change-gate and the regression
+  # gate compare against.
   # An explicit call here would just download the full published history twice.
   reconcile_ai_identity(con)
 
@@ -769,7 +771,7 @@ run_merge <- function(io, out_dir, parts_dir) {
   message(sprintf("ai merge: %d prior, %d incoming, %d reduced onset rows",
                   nrow(prior), nrow(incoming), nrow(reduced)))
   out <- publish(io, con, out_dir, tag = "current", source_kind = "live",
-                 touched_years = character(0))
+                 touched_years = character(0), base_generation = attr(seed, "generation"))
 
   # Raised after the data is out, so the alarm costs a red build and not a
   # week of stale dev-tooling rows.
@@ -786,13 +788,16 @@ run_merge <- function(io, out_dir, parts_dir) {
 }
 
 # ---- CLI dispatch -----------------------------------------------------------
-main <- function(mode, out_dir) {
+# io is built here unless a test passes one, so the suite can drive the same entry
+# point CI does.
+main <- function(mode, out_dir, io = NULL) {
   token <- Sys.getenv("VCS_SIGNALS_TOKEN")
-  io <- list(
+  if (is.null(io)) io <- list(
     graphql        = default_io(token)$graphql,
     search_hit     = function(owner, name, query, delay = SEARCH_DELAY_S)
                        search_earliest_commit_hit(token, owner, name, query, delay),
     release_exists = function() gh_release_exists(RELEASE_REPO),
+    generation     = function() gh_release_generation(RELEASE_REPO),
     download       = function(pattern, dir) gh_release_download(RELEASE_REPO, pattern, dir),
     upload         = function(path) gh_release_upload(RELEASE_REPO, path))
 
@@ -817,7 +822,12 @@ main <- function(mode, out_dir) {
     flagged_dir <- Sys.getenv("VCS_FLAGGED", out_dir)
     run_deep(io, out_dir, file.path(flagged_dir, "vcs-ai-flagged-roster.db"), i, N)
   } else if (mode == "merge") {
-    run_merge(io, out_dir, Sys.getenv("VCS_PARTS", "parts"))
+    # If another publisher replaced the release between this merge's seed and its
+    # publish (the weekly merge shares this Sunday cron), the merge waits for that
+    # publisher to finish, seeds again from what it left, and rebuilds. The canary's
+    # stop() comes after publish and is an ordinary error, so a run it fails is not
+    # repeated.
+    retry_on_publish_conflict(io, function() run_merge(io, out_dir, Sys.getenv("VCS_PARTS", "parts")))
   } else {
     stop("usage: ai_backfill.R [enumerate|cheap|gate|gate-incremental|deep|merge]")
   }
