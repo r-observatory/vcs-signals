@@ -43,6 +43,7 @@ test_that("summary_integrity_core reports filename, bytes, sha256, tables, compl
   # its row count, ordered by name, excluding sqlite_% internals.
   expect_equal(core$tables, list(
     pipeline_state      = 0L,
+    repo_package_links  = 0L,
     repo_packages       = 3L,
     repos               = 3L,
     series_latest       = 0L,
@@ -155,6 +156,8 @@ test_that("every table the pipeline writes reaches the published summary with it
     VALUES ('D','claude','v1')")
   DBI::dbExecute(con, "INSERT INTO vcs_ai_silent_channels (tier, tool, status, reason, recorded_on)
     VALUES ('B','replit','open','only the commit-author trailer remains','2026-08-01')")
+  DBI::dbExecute(con, "INSERT INTO repo_package_links (repo_id, package, origin, first_seen, last_seen)
+    VALUES ('github.com/o/gone','delisted','cran','2026-08-01','2026-08-21')")
 
   out <- tempfile("pub_"); dir.create(out)
   rel <- tempfile("rel_"); dir.create(rel)
@@ -168,6 +171,8 @@ test_that("every table the pipeline writes reaches the published summary with it
     expect_true(n > 0, info = paste(nm, "shipped empty"))
   }
   expect_equal(DBI::dbGetQuery(scon, "SELECT family FROM vcs_ai_models")$family, "Opus")
+  expect_equal(DBI::dbGetQuery(scon, "SELECT last_seen FROM repo_package_links")$last_seen,
+               "2026-08-21")
 })
 
 test_that("the declared list matches the tables the schema creates", {
@@ -518,6 +523,8 @@ test_that("the extra tables survive a publish, a reseed, and a second publish", 
     VALUES ('D','claude','v1'), ('B','codex','v1'), ('A','copilot','v1')")
   DBI::dbExecute(con, "INSERT INTO vcs_ai_silent_channels (tier, tool, status, reason, recorded_on)
     VALUES ('B','replit','open','only the author trailer remains','2026-08-01')")
+  DBI::dbExecute(con, "INSERT INTO repo_package_links (repo_id, package, origin, first_seen, last_seen)
+    VALUES ('github.com/o/gone','delisted','cran','2026-08-01','2026-08-21')")
   publish(io, con, out, "v1", "live", force_full = TRUE, base_generation = "")
   DBI::dbDisconnect(con)
 
@@ -530,6 +537,7 @@ test_that("the extra tables survive a publish, a reseed, and a second publish", 
     expect_true(DBI::dbExistsTable(rc, nm), info = paste(nm, "absent from the recent shard"))
   }
   expect_equal(DBI::dbGetQuery(rc, "SELECT COUNT(*) AS n FROM vcs_ai_rule_inventory")$n, 3L)
+  expect_equal(DBI::dbGetQuery(rc, "SELECT COUNT(*) AS n FROM repo_package_links")$n, 1L)
 })
 
 test_that("a full rebuild from the recent window does not truncate published years", {
@@ -719,6 +727,8 @@ test_that("a publish and a reseed keep the extra tables, both ways round", {
   DBI::dbExecute(con, "INSERT INTO vcs_ai_models
     (repo_id, tool, family, version, commits, window_complete)
     VALUES ('R1','claude','Opus','4.8',12,1)")
+  DBI::dbExecute(con, "INSERT INTO repo_package_links (repo_id, package, origin, first_seen, last_seen)
+    VALUES ('github.com/o/gone','delisted','cran','2026-08-01','2026-08-21')")
 
   io <- local_release_io(remote)
   publish(io, con, out, "v1", "live", force_full = TRUE, base_generation = "")
@@ -736,4 +746,91 @@ test_that("a publish and a reseed keep the extra tables, both ways round", {
     expect_true(n > 0, info = paste(nm, "came back empty after the round trip"))
   }
   expect_equal(DBI::dbGetQuery(wc, "SELECT COUNT(*) AS n FROM vcs_ai_rule_inventory")$n, 3L)
+  expect_equal(DBI::dbGetQuery(wc, "SELECT last_seen FROM repo_package_links")$last_seen,
+               "2026-08-21")
+})
+
+# ---------------------------------------------------------------------------
+# repo_package_links only ever accumulates, so it is held to that exactly.
+# ---------------------------------------------------------------------------
+
+.mk_links <- function(path, links) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con))
+  ensure_repo_schema(con); ensure_series_schema(con)
+  if (nrow(links) > 0) DBI::dbWriteTable(con, "repo_package_links", links, append = TRUE)
+  path
+}
+
+.links_df <- function(n, first = "2026-08-01", last = "2026-09-14") data.frame(
+  repo_id = sprintf("github.com/o/r%04d", seq_len(n)), package = sprintf("pkg%04d", seq_len(n)),
+  origin = rep("cran", n), first_seen = rep(first, n), last_seen = rep(last, n),
+  stringsAsFactors = FALSE)
+
+test_that("an ordinary day passes: new links, advancing ones and frozen ones together", {
+  was <- .links_df(1000)
+  now <- was
+  now$last_seen[1:990] <- "2026-09-15"          # still listed
+  now <- rbind(now, data.frame(repo_id = "github.com/o/new", package = "newpkg",
+                               origin = "bioc", first_seen = "2026-09-15",
+                               last_seen = "2026-09-15", stringsAsFactors = FALSE))
+  prev <- .mk_links(tempfile(fileext = ".db"), was)
+  nxt  <- .mk_links(tempfile(fileext = ".db"), now)
+  expect_equal(summary_regressions(prev, nxt), character(0))
+})
+
+test_that("a published link missing from the outgoing build is refused, even one in a thousand", {
+  # One link is the whole of what connects a delisted package to its
+  # repository's AI and dev-tooling rows. Under the proportional rule the other
+  # summary tables use, 2% of today's sixteen thousand links is more than three
+  # hundred of them, which is roughly every delisting this pipeline has seen.
+  was <- .links_df(1000)
+  prev <- .mk_links(tempfile(fileext = ".db"), was)
+  nxt  <- .mk_links(tempfile(fileext = ".db"), was[-7, ])
+  r <- summary_regressions(prev, nxt)
+  expect_match(paste(r, collapse = " "), "repo_package_links")
+  expect_match(paste(r, collapse = " "), "github.com/o/r0007")
+})
+
+test_that("a link whose first sighting moved later is refused", {
+  was <- .links_df(100)
+  now <- was; now$first_seen[3] <- "2026-08-02"
+  prev <- .mk_links(tempfile(fileext = ".db"), was)
+  nxt  <- .mk_links(tempfile(fileext = ".db"), now)
+  expect_match(paste(summary_regressions(prev, nxt), collapse = " "), "first_seen")
+})
+
+test_that("a link whose last sighting moved earlier is refused", {
+  # The shape a build seeded before a newer publish takes: every link the newer
+  # run advanced goes back to the day before.
+  was <- .links_df(100)
+  now <- was; now$last_seen <- "2026-09-13"
+  prev <- .mk_links(tempfile(fileext = ".db"), was)
+  nxt  <- .mk_links(tempfile(fileext = ".db"), now)
+  expect_match(paste(summary_regressions(prev, nxt), collapse = " "), "last_seen")
+})
+
+test_that("an outgoing link table the gate cannot read is refused", {
+  prev <- .mk_links(tempfile(fileext = ".db"), .links_df(10))
+  nxt  <- tempfile(fileext = ".db")
+  con <- DBI::dbConnect(RSQLite::SQLite(), nxt)
+  ensure_repo_schema(con); ensure_series_schema(con)
+  DBI::dbExecute(con, "DROP TABLE repo_package_links")
+  DBI::dbExecute(con, "CREATE TABLE repo_package_links (repo_id TEXT, package TEXT, origin TEXT)")
+  DBI::dbExecute(con, "INSERT INTO repo_package_links VALUES ('github.com/o/r0001','pkg0001','cran')")
+  DBI::dbDisconnect(con)
+  expect_match(paste(summary_regressions(prev, nxt), collapse = " "), "repo_package_links")
+})
+
+test_that("a first publish of the link table has nothing to be held to", {
+  # Both shapes production can hand it: the summary live today, written before
+  # the table existed, and one that carries the table with nothing in it yet.
+  nxt <- .mk_links(tempfile(fileext = ".db"), .links_df(5))
+  empty <- .mk_links(tempfile(fileext = ".db"), .links_df(0))
+  expect_equal(summary_regressions(empty, nxt), character(0))
+  absent <- .mk_links(tempfile(fileext = ".db"), .links_df(0))
+  con <- DBI::dbConnect(RSQLite::SQLite(), absent)
+  DBI::dbExecute(con, "DROP TABLE repo_package_links")
+  DBI::dbDisconnect(con)
+  expect_equal(summary_regressions(absent, nxt), character(0))
 })

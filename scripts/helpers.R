@@ -215,12 +215,211 @@ ensure_repo_schema <- function(con) {
   DBI::dbExecute(con, "CREATE INDEX IF NOT EXISTS idx_rp_package ON repo_packages(package)")
   DBI::dbExecute(con, "CREATE INDEX IF NOT EXISTS idx_repos_host ON repos(host)")
   DBI::dbExecute(con, "CREATE INDEX IF NOT EXISTS idx_repos_node_id ON repos(node_id)")
+  # Every package-to-repository link this pipeline has seen, including the ones
+  # repo_packages has since forgotten. repo_packages is rewritten from today's
+  # resolution, so the day CRAN archives a package, or a listed package's URL
+  # moves, its row is deleted, and the repository's AI and dev-tooling rows are
+  # kept with nothing left that names the package. This table keeps the link.
+  #
+  # Rows are only ever inserted or widened: first_seen may move earlier and
+  # last_seen later, and nothing deletes one. A link stops moving the day the
+  # package stops resolving to that repository, so last_seen is also the answer
+  # to "until when", to the day for what a daily run saw and to within the gap
+  # between copies for a row from the backfill (see LINKS_BACKFILL_PATH).
+  # repo_packages keeps meaning today's listed packages, which
+  # the universe guard, the rosters and the manifest counts all depend on.
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS repo_package_links (
+    repo_id TEXT NOT NULL, package TEXT NOT NULL, origin TEXT NOT NULL,
+    first_seen TEXT NOT NULL, last_seen TEXT NOT NULL,
+    PRIMARY KEY (repo_id, package, origin))")
+  DBI::dbExecute(con, "CREATE INDEX IF NOT EXISTS idx_rpl_package ON repo_package_links(package)")
   invisible(TRUE)
 }
 
-write_repo_tables <- function(con, repos_df, repo_packages_df, today) {
+#' Read and check the committed link backfill, refusing the whole file over any
+#' bad row.
+#'
+#' Every row is checked before any is returned, so a bad row anywhere stops the
+#' run and nothing from the file is applied. A reader that skipped the rows it
+#' could not use would publish a table that looks complete and is not, and the
+#' regression gate would then hold every later build to it. The error names the
+#' file line, counting the header as line 1.
+#'
+#' Fields are counted before parsing because read.csv pads a short row with empty
+#' strings and wraps a long one onto a row of its own, and both would then arrive
+#' looking like links. The count has to read the file exactly as read.csv does,
+#' so it takes no comment character, and it keeps blank lines so that its index
+#' is the file line: skipped, a blank line renumbered every line below it. NA is
+#' not a missing value here: it is a string a package could be named.
+read_links_backfill <- function(path) {
+  cols <- c("repo_id", "package", "origin", "first_seen", "last_seen")
+  refuse <- function(fmt, ...) stop(sprintf(paste0("link backfill %s: ", fmt), path, ...),
+                                    call. = FALSE)
+  if (!file.exists(path)) refuse("not found")
+  nf <- utils::count.fields(gzfile(path), sep = ",", quote = "\"", comment.char = "",
+                            blank.lines.skip = FALSE)
+  off <- which(is.na(nf) | nf != length(cols))
+  if (length(off) > 0 && identical(nf[off[1]], 0L)) refuse("line %d is blank", off[1])
+  if (length(off) > 0)
+    refuse("line %d has %s fields, not the 5 fields of %s", off[1],
+           if (is.na(nf[off[1]])) "unreadable" else nf[off[1]], paste(cols, collapse = ","))
+  df <- utils::read.csv(gzfile(path), colClasses = "character", na.strings = character(0),
+                        check.names = FALSE)
+  if (!identical(names(df), cols))
+    refuse("header is %s, expected %s", paste(names(df), collapse = ","),
+           paste(cols, collapse = ","))
+  if (nrow(df) == 0) refuse("holds no links, which is a truncated file rather than an empty history")
+
+  line <- seq_len(nrow(df)) + 1L
+  first_bad <- function(bad, what) {
+    if (any(bad)) refuse("line %d: %s", line[which(bad)[1]], what)
+  }
+  ymd <- function(x) {
+    ok <- grepl("^[0-9]{4}-[0-9]{2}-[0-9]{2}$", x)
+    ok[ok] <- !is.na(as.Date(x[ok], format = "%Y-%m-%d")) &
+      format(as.Date(x[ok], format = "%Y-%m-%d")) == x[ok]
+    ok
+  }
+  # repo_slug() lowercases, so a repo_id with a capital in it would never join
+  # the repos table it claims to name.
+  first_bad(!grepl("^[^/[:space:]]+(/[^/[:space:]]+){2,}$", df$repo_id) |
+              df$repo_id != tolower(df$repo_id),
+            "repo_id must be a lowercase host/owner/name slug as repo_slug() writes it")
+  first_bad(!nzchar(df$package) | grepl("[[:space:]]", df$package),
+            "package is empty or carries whitespace")
+  first_bad(!(df$origin %in% c("cran", "bioc")), "origin must be cran or bioc")
+  first_bad(!ymd(df$first_seen), "first_seen is not a YYYY-MM-DD date")
+  first_bad(!ymd(df$last_seen), "last_seen is not a YYYY-MM-DD date")
+  first_bad(df$first_seen > df$last_seen, "first_seen is after last_seen")
+  first_bad(duplicated(df[c("repo_id", "package", "origin")]),
+            "the same repo_id, package and origin appear more than once")
+  df
+}
+
+# Widen or insert, never narrow. The WHERE on the update leaves a row that is
+# already at least this wide untouched, so re-applying the backfill on every run
+# rewrites nothing.
+.upsert_package_links <- function(con, links) {
+  if (is.null(links) || nrow(links) == 0) return(invisible(FALSE))
+  DBI::dbExecute(con, "INSERT INTO repo_package_links
+      (repo_id, package, origin, first_seen, last_seen) VALUES (?,?,?,?,?)
+    ON CONFLICT (repo_id, package, origin) DO UPDATE SET
+      first_seen = MIN(first_seen, excluded.first_seen),
+      last_seen  = MAX(last_seen, excluded.last_seen)
+    WHERE excluded.first_seen < first_seen OR excluded.last_seen > last_seen",
+    params = list(links$repo_id, links$package, links$origin,
+                  links$first_seen, links$last_seen))
+  invisible(TRUE)
+}
+
+# The day the release first carried links, kept in pipeline_state. Code from
+# before the table carries pipeline_state through its seed and its recent shard
+# untouched while it drops the table itself, so this is what still says the
+# links existed after such a publish. Written once, by the first publish that
+# has any.
+LINKS_SINCE_KEY <- "repo_package_links_since"
+
+.mark_links_published <- function(con, today) {
+  if (!DBI::dbExistsTable(con, "repo_package_links") || !DBI::dbExistsTable(con, "pipeline_state"))
+    return(invisible(FALSE))
+  DBI::dbExecute(con, "INSERT OR IGNORE INTO pipeline_state (key, value)
+    SELECT ?, ? WHERE EXISTS (SELECT 1 FROM repo_package_links)",
+    params = list(LINKS_SINCE_KEY, today))
+  invisible(TRUE)
+}
+
+#' Put back the links a publish by older code dropped, or refuse to go on
+#' without them.
+#'
+#' An Actions run started before repo_package_links existed publishes code that
+#' does not know the table, and so does a re-run of one however much later,
+#' because a re-run runs the commit of its first attempt. The Sunday merges are
+#' scheduled for 07:00Z and publish hours later, and the weekly run of 2026-09-13
+#' was re-run on 09-15. That code seeds, embeds and exports only the tables it
+#' names, so the recent shard and the summary both go out without the table, and
+#' the regression gate on neither side can see the loss: it compares the tables
+#' present on both sides, and the published side has none. The next run then
+#' seeded an empty table, wrote the backfill and today's links into it and
+#' published that. Every link recorded since the backfill was cut that no longer
+#' resolves was gone, and every one that still did started over on that day.
+#'
+#' The previous summary is kept on the release for exactly one publish, and the
+#' first such publish moves the last summary that had the table into it, so the
+#' links are folded back from there, widen-only, as they would be from any
+#' published copy. A second publish by older code replaces that too. With no
+#' copy left the run stops, because the table published from the backfill alone
+#' would be held by the gate as the new truth from then on.
+#'
+#' Called on the working database straight after it is seeded, before anything
+#' writes to the table, which is the last point the loss can still be seen.
+restore_package_links <- function(io, con, dir) {
+  since <- tryCatch(DBI::dbGetQuery(con, "SELECT value FROM pipeline_state WHERE key = ?",
+                                    params = list(LINKS_SINCE_KEY))$value,
+                    error = function(e) character(0))
+  if (length(since) == 0) return(invisible(character(0)))
+  if (DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM repo_package_links")$n > 0)
+    return(invisible(character(0)))
+
+  dir.create(dir, showWarnings = FALSE, recursive = TRUE)
+  need <- c("repo_id", "package", "origin", "first_seen", "last_seen")
+  from <- character(0)
+  for (asset in c("vcs-signals-summary.db", "vcs-signals-summary-prev.db")) {
+    path <- file.path(dir, asset)
+    if (!isTRUE(io$download(asset, dir)) || !file.exists(path)) next
+    pc <- DBI::dbConnect(RSQLite::SQLite(), path)
+    rows <- .gate_rows(pc, "repo_package_links")
+    DBI::dbDisconnect(pc)
+    if (is.null(rows) || nrow(rows) == 0 || !all(need %in% names(rows))) next
+    .upsert_package_links(con, rows[need])
+    from <- c(from, asset)
+  }
+  if (length(from) > 0) {
+    message(sprintf(paste0("vcs-signals-recent.db carried no repo_package_links although the ",
+                           "release has published them since %s; restored %d from %s"),
+                    since[1], DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM repo_package_links")$n,
+                    paste(from, collapse = " and ")))
+    return(invisible(from))
+  }
+
+  msg <- sprintf(paste0(
+    "the release has published repo_package_links since %s, but vcs-signals-recent.db carries ",
+    "none and neither vcs-signals-summary.db nor vcs-signals-summary-prev.db has a copy to ",
+    "restore them from. Code from before the table publishes both shards without it; a re-run ",
+    "of an Actions run attempt started before the table existed runs that code, and two such ",
+    "publishes leave no copy on the release. Going on would publish the committed backfill and ",
+    "today's links as the whole history, and every link recorded since %s that is not in the ",
+    "backfill would be lost. The ai-flagged-roster artifact of a weekly AI run carries the summary ",
+    "that run started from. Set VCS_ALLOW_REGRESSION=1 on a daily update to accept the loss."),
+    since[1], since[1])
+  if (identical(Sys.getenv("VCS_ALLOW_REGRESSION"), "1")) {
+    warning(msg, call. = FALSE)
+    return(invisible(character(0)))
+  }
+  stop(msg, call. = FALSE)
+}
+
+#' `links_backfill`, when given, is a frame read_links_backfill() has already
+#' checked. It is applied in the same transaction as today's links on every run,
+#' which costs one no-op pass over the table on an ordinary day and puts the
+#' backfilled rows back on the day after something reset it.
+write_repo_tables <- function(con, repos_df, repo_packages_df, today, links_backfill = NULL) {
   ensure_repo_schema(con)
   existing <- DBI::dbGetQuery(con, "SELECT repo_id, status FROM repos")
+  # What the previous run resolved, dated by that run. repo_packages is replaced
+  # whole on every run, in the same transaction that sets each of its
+  # repositories' last_seen to the run's day, so every row still here is a link
+  # sighted on its repository's last_seen. Recording them before the DELETE
+  # below changes nothing on a day after a run that kept links, since those rows
+  # already reach that day. It is what keeps the days a run that did not keep
+  # links saw: the backfill stops at 2026-09-15, and a package that arrived
+  # after that and left before the first run with this table was otherwise in
+  # no record at all, while a package listed until then had its link end at
+  # 2026-09-15. Read before the repos upsert, which moves last_seen to today for
+  # every repository seen today, including one a package left yesterday.
+  seeded_links <- DBI::dbGetQuery(con,
+    "SELECT rp.repo_id, rp.package, rp.origin, r.last_seen AS first_seen, r.last_seen
+       FROM repo_packages rp JOIN repos r ON r.repo_id = rp.repo_id
+      WHERE r.last_seen IS NOT NULL")
   DBI::dbBegin(con)
   ok <- FALSE
   on.exit(if (!ok) tryCatch(DBI::dbRollback(con), error = function(e) NULL), add = TRUE)
@@ -253,6 +452,17 @@ write_repo_tables <- function(con, repos_df, repo_packages_df, today) {
       params = list(repo_packages_df$repo_id, repo_packages_df$package,
                     repo_packages_df$origin, repo_packages_df$resolved_from))
   }
+  # repo_packages above forgets a package the day it stops resolving; this is the
+  # half that does not. Today's links widen to today, links not seen today are
+  # left exactly as they were, and nothing here deletes.
+  .upsert_package_links(con, seeded_links)
+  if (nrow(repo_packages_df) > 0) {
+    .upsert_package_links(con, data.frame(
+      repo_id = repo_packages_df$repo_id, package = repo_packages_df$package,
+      origin = repo_packages_df$origin, first_seen = today, last_seen = today,
+      stringsAsFactors = FALSE))
+  }
+  .upsert_package_links(con, links_backfill)
   DBI::dbCommit(con); ok <- TRUE
   invisible(TRUE)
 }
@@ -1441,6 +1651,67 @@ build_release_notes <- function(summary, changed_shards, tag) {
                          sprintf("and %d more", length(named) - 3)), collapse = ", ")))
 }
 
+#' The rule for repo_package_links, which only ever widens.
+#'
+#' A row is the one record that a package resolved to a repository, and for a
+#' package CRAN has archived or whose URL has moved nothing will ever write it
+#' again. So the invariant is exact rather than proportional: every link the
+#' published table has must still be there, its first_seen no later and its
+#' last_seen no earlier. There is no ordinary churn to allow for. A delisting
+#' does not remove a row, it stops that row's last_seen, which is the whole point
+#' of the table.
+#'
+#' The row-count rule the other accumulating tables use would have been worse
+#' than none here. 2% of the 16,474 links the backfill carries is 329 rows. The
+#' published copies that survive show 80 links lost to a delisting or a moved URL
+#' between 2026-08-01 and 2026-09-15, so one build could drop four times what six
+#' weeks of that produced and still pass.
+#'
+#' A merge that seeded before a daily update published and publishes after it
+#' does not get this far: publish() finds the release moved and raises it as a
+#' conflict before the gate reads anything, and the merge seeds again. Its
+#' shape is still the one this rule is exact about. Every link the update
+#' advanced would go back to the day before, which the proportional rule lets
+#' through, so a build that reached the gate that way from any other cause is
+#' refused here and not waved on.
+.regress_package_links <- function(pc, nc) {
+  t <- "repo_package_links"
+  key <- c("repo_id", "package", "origin")
+  need <- c(key, "first_seen", "last_seen")
+  prev <- .gate_rows(pc, t); nxt <- .gate_rows(nc, t)
+  # A published summary without the table is either one from before it or one a
+  # publish by older code left, and nothing in the summary tells them apart.
+  # restore_package_links does, at the seed, from pipeline_state.
+  if (is.null(prev) || nrow(prev) == 0) return(character(0))
+  # A schema difference on the published side is not a regression. On the
+  # outgoing side it is a table the gate cannot read, and a gate that cannot
+  # read its table has not cleared it.
+  if (!all(need %in% names(prev))) return(character(0))
+  if (is.null(nxt) || !all(need %in% names(nxt)))
+    return(sprintf("%s: published without %s, so the gate cannot tell which links were kept",
+                   t, paste(setdiff(need, names(nxt)), collapse = ", ")))
+  name <- function(df) paste(df$repo_id, df$package, df$origin, sep = "/")
+  show <- function(x) paste(c(utils::head(x, 3), if (length(x) > 3)
+                                sprintf("and %d more", length(x) - 3)), collapse = ", ")
+  out <- character(0)
+  m <- match(.gate_key(prev, key), .gate_key(nxt, key))
+  gone <- is.na(m)
+  if (any(gone))
+    out <- c(out, sprintf("%s: %d link(s) the published table has are gone: %s",
+                          t, sum(gone), show(name(prev[gone, , drop = FALSE]))))
+  kept <- prev[!gone, , drop = FALSE]
+  now <- nxt[m[!gone], , drop = FALSE]
+  later <- is.na(now$first_seen) | (!is.na(kept$first_seen) & now$first_seen > kept$first_seen)
+  if (any(later))
+    out <- c(out, sprintf("%s: %d link(s) had first_seen moved later: %s",
+                          t, sum(later), show(name(kept[later, , drop = FALSE]))))
+  earlier <- is.na(now$last_seen) | (!is.na(kept$last_seen) & now$last_seen < kept$last_seen)
+  if (any(earlier))
+    out <- c(out, sprintf("%s: %d link(s) had last_seen moved earlier: %s",
+                          t, sum(earlier), show(name(kept[earlier, , drop = FALSE]))))
+  out
+}
+
 #' Refuse to publish a summary that lost ground against the one already out.
 #'
 #' The published summary is a single asset, uploaded with --clobber, so a bad
@@ -1488,6 +1759,7 @@ summary_regressions <- function(prev_path, next_path, tol = 0.02) {
       vcs_ai_silent_channels = .regress_silent_channels(pc, nc),
       vcs_ai_rule_inventory  = .regress_rule_inventory(pc, nc),
       vcs_ai_models          = .regress_ai_models(pc, nc, tol),
+      repo_package_links     = .regress_package_links(pc, nc),
       .regress_row_count(t, pc, nc, tol)))
   }
 
@@ -1818,6 +2090,8 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
   recent_path <- file.path(out_dir, recent_shard)
   recent_rows <- extract_recent_rows(con, today, RECENT_WINDOW)
   export_series_shard(recent_path, recent_rows)
+  # Before the embed, so the recent shard the next run seeds from says so.
+  .mark_links_published(con, format(today))
   .embed_recent_tables(con, recent_path)
   shard_names <- c(shard_names, recent_shard)
 
