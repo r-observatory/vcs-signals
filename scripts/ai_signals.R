@@ -15,9 +15,9 @@ if (!exists("%||%")) `%||%` <- function(a, b) if (is.null(a)) b else a
 ai_deliberate_markers <- function(markers = AI_MARKERS)
   Filter(function(m) !identical(m$class %||% "deliberate", "ambient"), markers)
 
-#' Tier-D config markers present in the repo's root tree entry names and its
+#' Config paths present in the repo's root tree entry names and its
 #' .github tree entry names (both files and dirs appear as entry names). One
-#' row per matched marker; agnostic flags the tool-agnostic AGENTS.md.
+#' row per matched path; agnostic flags AGENTS.md and .agents, which name no tool.
 classify_tree_markers <- function(root_entries, github_entries) {
   root_entries <- root_entries %||% character(0)
   github_entries <- github_entries %||% character(0)
@@ -288,15 +288,25 @@ earliest_agent_pr_date <- function(pr, cutoff = AI_PR_CUTOFF) {
   trimws(strsplit(s, ",", fixed = TRUE)[[1]])
 }
 
-#' A repo is nameable iff some NON-agnostic tool has Tier A, or >=2 distinct tiers.
+#' A repo is named when a tool other than AGENTS.md or .agents has a file seen in
+#' the repo, a pull request by its account, or a commit by or crediting it. An
+#' ignore-file line alone names nothing: RStudio 2026.04 wrote .claude into the
+#' .Rbuildignore of package projects it opened.
 meets_naming_threshold <- function(ai_rows) {
   if (is.null(ai_rows) || nrow(ai_rows) == 0) return(FALSE)
-  keep <- !as.logical(ai_rows$agnostic)
-  if (!any(keep)) return(FALSE)
-  sub <- ai_rows[keep, , drop = FALSE]
-  any(vapply(seq_len(nrow(sub)), function(i) {
-    tiers <- .ai_split_tiers(sub$evidence_tiers[i])
-    ("A" %in% tiers) || (length(unique(tiers)) >= 2)
+  col <- function(n, default) if (n %in% names(ai_rows)) ai_rows[[n]] else rep(default, nrow(ai_rows))
+  marks <- col("markers", NA_character_)
+  floor_only <- col("first_seen_censored", 0L)
+  credited <- col("assisted_commits", NA_integer_)
+  any(vapply(which(!as.logical(ai_rows$agnostic)), function(i) {
+    tiers <- .ai_split_tiers(ai_rows$evidence_tiers[i])
+    if (any(c("A", "PR") %in% tiers)) return(TRUE)
+    m <- .ai_split_tiers(marks[i])
+    if (any(!ai_is_ignore_marker(m) & !(m %in% c("A", "B", "C", "PR")))) return(TRUE)
+    # A commit search hit that failed its check keeps only a floor date and no
+    # count; it names the repo only beside another finding, as before.
+    checked <- isTRUE(floor_only[i] == 0L) || !is.na(credited[i]) || "D" %in% tiers
+    any(c("B", "C") %in% tiers) && checked
   }, logical(1)))
 }
 
@@ -876,13 +886,15 @@ build_onset_map <- function(evidence, marker_dates = list(),
              ai_latest_tool = character(), ai_latest_date = character(),
              stringsAsFactors = FALSE)
 
-#' Per-repo AI rollups for the summary. Only repos meeting the naming threshold
-#' get a row (so the summary join yields NULL, never FALSE, for the rest).
-#' agents-md is excluded from count/tools/first/latest.
+#' Per-repo AI rollups for the summary. Only named repos get a row, so the join
+#' gives NULL, never FALSE, for the rest. AGENTS.md and .agents stay out of the
+#' count, the tool list and first and latest.
 build_ai_rollups <- function(ai_signals) {
   if (is.null(ai_signals) || nrow(ai_signals) == 0) return(.ai_empty_rollups())
-  if (!"agnostic" %in% names(ai_signals))
-    ai_signals$agnostic <- ai_signals$tool == "agents-md"
+  if (!"agnostic" %in% names(ai_signals)) {
+    agnostic_tools <- unique(unlist(lapply(Filter(function(m) isTRUE(m$agnostic), AI_MARKERS), `[[`, "tool")))
+    ai_signals$agnostic <- ai_signals$tool %in% agnostic_tools
+  }
   parts <- lapply(split(ai_signals, ai_signals$repo_id), function(g) {
     if (!meets_naming_threshold(g)) return(NULL)
     ordered <- order_ai_tools(g)               # non-agnostic, chronological
