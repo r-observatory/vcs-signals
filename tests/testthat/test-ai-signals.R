@@ -89,17 +89,54 @@ test_that("detect_pr_agents does not fire on a human account sharing an agent na
   expect_equal(nrow(detect_pr_agents(c("dependabot", "github-actions", "renovate"))), 0L)
 })
 
-mk <- function(tool, date, censored = 0L, tiers, authored = 0L, agnostic = FALSE)
+mk <- function(tool, date, censored = 0L, tiers, authored = 0L, agnostic = FALSE, markers = NA_character_)
   data.frame(tool = tool, first_seen_date = date, first_seen_censored = censored,
-             evidence_tiers = tiers, authored = authored, agnostic = agnostic,
+             evidence_tiers = tiers, markers = markers, authored = authored, agnostic = agnostic,
              stringsAsFactors = FALSE)
 
-test_that("naming threshold: Tier A alone passes, lone Tier D fails, two tiers pass", {
+test_that("naming: a file, a pull request or a commit names a repo", {
+  expect_true(meets_naming_threshold(mk("claude", "2024-01-01", tiers = "D", markers = ".claude,rbuildignore:.claude")))
+  expect_true(meets_naming_threshold(mk("copilot", "2024-01-01", tiers = "D", markers = "copilot-instructions.md")))
+  expect_true(meets_naming_threshold(mk("copilot", "2024-01-01", tiers = "PR", markers = "PR")))
   expect_true(meets_naming_threshold(mk("claude", "2024-01-01", tiers = "A")))
-  expect_false(meets_naming_threshold(mk("cursor", "2024-01-01", tiers = "D")))
-  expect_true(meets_naming_threshold(mk("claude", "2024-01-01", tiers = "D,B")))
-  # agents-md alone never satisfies (agnostic, single tier)
-  expect_false(meets_naming_threshold(mk("agents-md", "2024-01-01", tiers = "D", agnostic = TRUE)))
+  expect_true(meets_naming_threshold(mk("claude", "2024-01-01", tiers = "D,B", markers = "B,rbuildignore:.claude")))
+  expect_true(meets_naming_threshold(mk("aider", "2024-01-01", tiers = "C")))
+})
+
+test_that("naming: an ignore line alone, or a row with nothing kept, names nothing", {
+  expect_false(meets_naming_threshold(mk("claude", "2024-01-01", tiers = "D", markers = "rbuildignore:.claude")))
+  expect_false(meets_naming_threshold(mk("claude", "2024-01-01", tiers = "D", markers = "gitignore:.claude,rbuildignore:.claude")))
+  expect_false(meets_naming_threshold(mk("gemini", "2024-01-01", tiers = "D")))
+  expect_false(meets_naming_threshold(mk("claude", NA_character_, tiers = NA_character_)))
+})
+
+test_that("naming: a commit search hit that failed its check does not name alone", {
+  unchecked <- mk("codex", "2026-03-25", censored = 1L, tiers = "B", markers = "B")
+  unchecked$assisted_commits <- NA_integer_
+  expect_false(meets_naming_threshold(unchecked))
+  checked <- mk("claude", "2026-03-25", censored = 0L, tiers = "B", markers = "B")
+  checked$assisted_commits <- NA_integer_
+  expect_true(meets_naming_threshold(checked))
+  counted <- unchecked
+  counted$assisted_commits <- 4L
+  expect_true(meets_naming_threshold(counted))
+  beside <- mk("claude", "2026-03-25", censored = 1L, tiers = "B,D", markers = "B,rbuildignore:.claude")
+  beside$assisted_commits <- NA_integer_
+  expect_true(meets_naming_threshold(beside))
+})
+
+test_that("naming: AGENTS.md and .agents alone name nothing", {
+  expect_false(meets_naming_threshold(mk("agents-md", "2024-01-01", tiers = "D", agnostic = TRUE, markers = "AGENTS.md")))
+  expect_false(meets_naming_threshold(mk("agents-dir", "2024-01-01", tiers = "D", agnostic = TRUE, markers = ".agents")))
+})
+
+test_that("naming: rows without a markers column fall back to the searches alone", {
+  rows <- mk("copilot", "2024-01-01", tiers = "PR")
+  rows$markers <- NULL
+  expect_true(meets_naming_threshold(rows))
+  rows <- mk("claude", "2024-01-01", tiers = "D")
+  rows$markers <- NULL
+  expect_false(meets_naming_threshold(rows))
 })
 
 test_that("order_ai_tools sorts by date then censored then tier then name, excludes agents-md", {
@@ -157,9 +194,9 @@ test_that("reducer keeps distinct tools as distinct rows", {
   expect_equal(nrow(o), 2)
 })
 
-test_that("build_ai_rollups names only threshold-met repos, excludes agents-md from counts", {
+test_that("build_ai_rollups names only named repos, leaves AGENTS.md and .agents out of counts", {
   ai <- rbind(
-    # repo A: claude Tier A (nameable) + agents-md agnostic
+    # repo A: claude commits by its account, plus AGENTS.md and a cursor commit credit
     data.frame(repo_id="github.com/a/a", tool="claude", first_seen_date="2024-06-01",
                first_seen_censored=0L, evidence_tiers="A", authored=1L,
                last_confirmed_date="2025-01-01", stringsAsFactors=FALSE),
@@ -169,19 +206,40 @@ test_that("build_ai_rollups names only threshold-met repos, excludes agents-md f
     data.frame(repo_id="github.com/a/a", tool="cursor", first_seen_date="2025-03-01",
                first_seen_censored=0L, evidence_tiers="D,B", authored=0L,
                last_confirmed_date="2025-03-01", stringsAsFactors=FALSE),
-    # repo B: lone Tier D -> below threshold, omitted
+    data.frame(repo_id="github.com/a/a", tool="agents-dir", first_seen_date="2025-06-01",
+               first_seen_censored=0L, evidence_tiers="D", authored=0L,
+               last_confirmed_date="2025-06-01", stringsAsFactors=FALSE),
+    # repo B: a config search matched but kept no path, so it names nothing
     data.frame(repo_id="github.com/b/b", tool="copilot", first_seen_date="2024-02-01",
                first_seen_censored=0L, evidence_tiers="D", authored=0L,
                last_confirmed_date="2024-02-01", stringsAsFactors=FALSE))
   out <- build_ai_rollups(ai)
-  expect_equal(out$repo_id, "github.com/a/a")            # only the nameable repo
+  expect_equal(out$repo_id, "github.com/a/a")            # only the named repo
   expect_true(out$ai_markers_detected)
   expect_equal(out$ai_first_tool, "claude")             # earliest non-agnostic
   expect_equal(out$ai_first_date, "2024-06-01")
-  expect_equal(out$ai_tool_count, 2L)                   # claude + cursor, agents-md excluded
+  expect_equal(out$ai_tool_count, 2L)                   # claude + cursor; AGENTS.md and .agents excluded
   expect_equal(out$ai_tools, "claude,cursor")
   expect_equal(out$ai_latest_tool, "cursor")
   expect_equal(out$ai_latest_date, "2025-03-01")
+})
+
+test_that("build_ai_rollups names a repo with a committed tool folder and an agent pull request", {
+  # dplyr: .claude committed and ignored, plus a Copilot pull request; one of
+  # each kind per tool, which the earlier rule left unnamed.
+  ai <- data.frame(
+    repo_id = c("github.com/tidyverse/dplyr", "github.com/tidyverse/dplyr", "github.com/c/c"),
+    tool = c("claude", "copilot", "claude"),
+    first_seen_date = c("2026-01-16T19:14:22Z", "2025-11-17T22:56:04Z", "2026-04-20T00:00:00Z"),
+    first_seen_censored = 0L,
+    evidence_tiers = c("D", "PR", "D"),
+    markers = c(".claude,.claude/skills,rbuildignore:.claude", "PR", "rbuildignore:.claude"),
+    authored = 0L, last_confirmed_date = "2026-09-13", stringsAsFactors = FALSE)
+  out <- build_ai_rollups(ai)
+  expect_equal(out$repo_id, "github.com/tidyverse/dplyr")   # repo c has an ignore line only
+  expect_equal(out$ai_tools, "copilot,claude")
+  expect_equal(out$ai_first_tool, "copilot")
+  expect_equal(out$ai_latest_tool, "claude")
 })
 
 test_that("build_ai_rollups returns a typed empty frame when nothing is nameable", {

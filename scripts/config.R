@@ -389,7 +389,7 @@ AI_AUTHOR_SUFFIXES <- list(
 # not reset onset.
 AI_MARKER_PREDECESSORS <- c(".cursor" = ".cursorrules")
 # Detection ruleset version, surfaced by the viewer methods note.
-AI_RULESET_VERSION <- "2026-07-29"
+AI_RULESET_VERSION <- "2026-09-19"
 # Evidence-tier strength for deterministic ordering (lower = stronger/earlier on ties).
 TIER_PRIORITY <- c(A = 1L, B = 2L, C = 3L, PR = 4L, D = 5L)
 
