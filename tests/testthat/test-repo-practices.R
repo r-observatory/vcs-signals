@@ -30,11 +30,20 @@ test_that("a root CONDUCT.md counts even though GitHub does not report it", {
 })
 
 test_that("a repository that moved is compared with the name GitHub returns now", {
-  repo <- list(name_with_owner = "new-owner/pkg",
-               coc_url = "https://github.com/new-owner/pkg/blob/main/CODE_OF_CONDUCT.md",
-               contributing_url = NA_character_, pr_templates = data.frame(filename = character(0), repository = character(0)))
-  r <- classify_dev_tooling(c("DESCRIPTION"), character(0), repo = repo)
+  # The roster still names the old owner; only GitHub's reply carries the name the files live under.
+  roster <- data.frame(repo_id = "github.com/old-owner/pkg", owner = "old-owner", name = "pkg",
+                       stringsAsFactors = FALSE)
+  resp <- list(data = list(r0 = list(
+    nameWithOwner = "new-owner/pkg", isFork = FALSE, parent = NULL,
+    pullRequestTemplates = list(list(filename = "pull_request_template.md",
+                                     repository = list(nameWithOwner = "new-owner/pkg"))),
+    issueTemplates = list(),
+    codeOfConduct = list(url = "https://github.com/new-owner/pkg/blob/main/CODE_OF_CONDUCT.md"),
+    rootTree = list(entries = list(list(name = "DESCRIPTION", type = "blob"))))))
+  p <- parse_tree_markers(resp, roster)[["github.com/old-owner/pkg"]]
+  r <- classify_dev_tooling(p$root_entries, p$github_entries, repo = p)
   expect_equal(r$coc_source, "repo")
+  expect_equal(r$pr_template_source, "repo")
 })
 
 test_that("the owner's own .github repository holds its files, it does not inherit them", {
