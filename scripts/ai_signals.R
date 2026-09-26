@@ -15,21 +15,46 @@ if (!exists("%||%")) `%||%` <- function(a, b) if (is.null(a)) b else a
 ai_deliberate_markers <- function(markers = AI_MARKERS)
   Filter(function(m) !identical(m$class %||% "deliberate", "ambient"), markers)
 
-#' Config paths present in the repo's root tree entry names and its
-#' .github tree entry names (both files and dirs appear as entry names). One
-#' row per matched path; agnostic flags AGENTS.md and .agents, which name no tool.
+#' Config paths present in the repo's root and .github entry names (files and folders
+#' both appear as names, subfolder entries under their prefix). One row per matched
+#' path; agnostic flags AGENTS.md and .agents, which name no tool.
 classify_tree_markers <- function(root_entries, github_entries) {
   root_entries <- root_entries %||% character(0)
   github_entries <- github_entries %||% character(0)
   rows <- lapply(ai_deliberate_markers(), function(m) {
-    present <- if (identical(m$location, "github")) m$path %in% github_entries
-               else m$path %in% root_entries
-    if (!present) return(NULL)
+    hay <- if (identical(m$location, "github")) github_entries else root_entries
+    if (!(m$path %in% hay)) return(NULL)
+    # A folder counts only when it holds the file the tool reads.
+    if (!is.null(m$requires) && !any(grepl(m$requires, hay, perl = TRUE))) return(NULL)
+    # A .gemini folder of review settings belongs to Gemini Code Assist.
+    if (identical(m$path, ".gemini") && identical(classify_gemini_dir(root_entries), "review"))
+      return(NULL)
     data.frame(tool = m$tool, tier = "D", marker = m$path,
                agnostic = isTRUE(m$agnostic), stringsAsFactors = FALSE)
   })
   rows <- Filter(Negate(is.null), rows)
   if (!length(rows)) return(.ai_empty_evidence())
+  do.call(rbind, rows)
+}
+
+#' "review" when a .gemini folder's listing is non-empty and holds only the files
+#' Gemini Code Assist reads, else "authoring". Pure.
+classify_gemini_dir <- function(root_entries) {
+  rule <- Find(function(r) identical(r$path, ".gemini"), AI_REVIEW_FILES)
+  inside <- sub("^\\.gemini/", "", grep("^\\.gemini/[^/]+$", root_entries %||% character(0), value = TRUE))
+  if (length(inside) && all(inside %in% rule$only)) "review" else "authoring"
+}
+
+#' Review tools' configuration files present at the root, one row each. Pure.
+match_review_files <- function(root_entries) {
+  root_entries <- root_entries %||% character(0)
+  rows <- lapply(AI_REVIEW_FILES, function(r) {
+    if (!(r$path %in% root_entries)) return(NULL)
+    if (!is.null(r$only) && !identical(classify_gemini_dir(root_entries), "review")) return(NULL)
+    data.frame(tool = r$tool, marker = r$path, stringsAsFactors = FALSE)
+  })
+  rows <- Filter(Negate(is.null), rows)
+  if (!length(rows)) return(data.frame(tool = character(), marker = character(), stringsAsFactors = FALSE))
   do.call(rbind, rows)
 }
 

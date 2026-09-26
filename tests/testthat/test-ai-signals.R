@@ -1015,3 +1015,61 @@ test_that("token presence is judged by the same rule that detected it", {
   expect_false(ignore_text_has_token(NA, ".claude"))
   expect_false(ignore_text_has_token("", ".claude"))
 })
+
+test_that("a .github/agents folder names Copilot only when it holds a Markdown agent file", {
+  expect_false("copilot" %in% classify_tree_markers(character(0), c("agents", "agents/README"))$tool)
+  expect_true("copilot" %in% classify_tree_markers(character(0), c("agents", "agents/x.agent.md"))$tool)
+})
+
+test_that("a .gemini folder holding only review settings is Gemini Code Assist, not Gemini", {
+  review <- c(".gemini", ".gemini/config.yaml", ".gemini/styleguide.md")
+  expect_equal(classify_gemini_dir(review), "review")
+  expect_false("gemini" %in% classify_tree_markers(review, character(0))$tool)
+  expect_equal(match_review_files(review)$tool, "gemini-code-assist")
+  expect_equal(match_review_files(review)$marker, ".gemini")
+  authoring <- c(".gemini", ".gemini/settings.json", ".gemini/styleguide.md")
+  expect_equal(classify_gemini_dir(authoring), "authoring")
+  expect_true("gemini" %in% classify_tree_markers(authoring, character(0))$tool)
+  expect_equal(nrow(match_review_files(authoring)), 0L)
+  # A folder whose listing came back empty says nothing about Code Assist.
+  expect_equal(classify_gemini_dir(".gemini"), "authoring")
+})
+
+test_that("a CodeRabbit file is a review tool and never a coding tool", {
+  root <- c(".coderabbit.yaml", "DESCRIPTION")
+  expect_equal(nrow(classify_tree_markers(root, character(0))), 0L)
+  expect_equal(match_review_files(root)$tool, "coderabbit")
+  expect_equal(match_review_files(c(".coderabbit.yml"))$marker, ".coderabbit.yml")
+  expect_false("coderabbit" %in% ai_rule_inventory()$tool)
+})
+
+test_that("each new folder or file names the tool that writes it", {
+  cases <- list(
+    list(root = ".kiro", tool = "kiro"), list(root = ".devin", tool = "devin"),
+    list(root = ".devinignore", tool = "devin"),
+    list(root = c(".posit", ".posit/assistant"), tool = "posit-assistant"),
+    list(root = c(".positai", ".positai/settings.json"), tool = "posit-assistant"),
+    list(root = c(".positai", ".positai/plans"), tool = "posit-assistant"),
+    list(root = c(".positai", ".positai/agents"), tool = "posit-assistant"),
+    list(root = "opencode.json", tool = "opencode"), list(root = ".opencode", tool = "opencode"),
+    list(root = "QWEN.md", tool = "qwen"), list(root = ".qwen", tool = "qwen"),
+    list(root = ".kilocode", tool = "kilo"), list(root = ".kilo", tool = "kilo"),
+    list(root = "WARP.md", tool = "warp"), list(root = ".jules", tool = "jules"),
+    list(root = ".openhands", tool = "openhands"), list(root = ".openhands_instructions", tool = "openhands"),
+    list(root = ".trae", tool = "trae"), list(root = ".augment", tool = "augment"),
+    list(root = "CRUSH.md", tool = "crush"), list(root = ".goosehints", tool = "goose"),
+    list(root = ".factory", tool = "factory"), list(root = ".vibe", tool = "vibe"))
+  for (cs in cases)
+    expect_true(cs$tool %in% classify_tree_markers(cs$root, character(0))$tool,
+                info = paste(cs$root, collapse = " "))
+  for (gh in c("instructions", "prompts", "chatmodes", "skills", "workflows/copilot-setup-steps.yml"))
+    expect_true("copilot" %in% classify_tree_markers(character(0), c("workflows", gh))$tool, info = gh)
+  # A bare .positai is written by the editor whatever the user does.
+  expect_equal(nrow(classify_tree_markers(".positai", character(0))), 0L)
+})
+
+test_that("the Copilot setup workflow is dated through its real path", {
+  expect_equal(marker_repo_path("workflows/copilot-setup-steps.yml"),
+               ".github/workflows/copilot-setup-steps.yml")
+  expect_equal(marker_repo_path("agents"), ".github/agents")
+})

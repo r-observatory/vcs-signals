@@ -204,7 +204,7 @@ one_repo <- data.frame(repo_id = "github.com/o/n", owner = "o", name = "n", stri
 
 test_that("every AI file rule under a subtree names a subtree the query fetches", {
   pre <- tree_subtree_prefixes()
-  for (m in AI_MARKERS) {
+  for (m in c(AI_MARKERS, AI_REVIEW_FILES)) {
     if (!grepl("/", m$path, fixed = TRUE)) next
     first <- sub("/.*$", "", m$path)
     allowed <- if (identical(m$location, "github")) pre$github else pre$root
@@ -250,11 +250,6 @@ test_that("every repository block asks for the four community fields in the orde
       expect_true(grepl("pullRequestTemplates { filename repository { nameWithOwner } }", b, fixed = TRUE))
     }
   }
-})
-
-test_that("the contents query leaves out the four subtrees only the AI rules will read", {
-  q <- build_tree_query(one_repo)
-  for (a in c("githubAgentsTree", "positTree", "positaiTree", "geminiTree")) expect_false(grepl(a, q, fixed = TRUE), info = a)
 })
 
 test_that("the contents query lists every subtree in TREE_SUBTREES", {
@@ -327,4 +322,30 @@ test_that("a field GitHub answered with null is read, and a field the reply lack
     "rbuildignore_lines", "rbuildignore_text", "workflows", "desc_text", "coc_url"))
   for (e in c("pages", "pr_templates", "funding_links", "owner_sponsorable"))
     expect_false(e %in% names(got), info = e)
+})
+
+test_that("the contents document asks for the four folders the AI file rules read", {
+  q <- build_tree_query(data.frame(owner = c("o", "p"), name = c("n", "m"), stringsAsFactors = FALSE))
+  for (path in c("HEAD:.github/agents", "HEAD:.posit", "HEAD:.positai", "HEAD:.gemini")) {
+    n <- lengths(regmatches(q, gregexpr(sprintf('expression: "%s"', path), q, fixed = TRUE)))
+    expect_equal(n, 2L, info = path)   # once per repository in the batch
+  }
+})
+
+test_that("entries of the four folders reach the classifiers under their own prefix", {
+  resp <- list(data = list(r0 = list(
+    isFork = FALSE, parent = NULL,
+    rootTree = list(entries = list(list(name = ".posit", type = "tree"),
+                                   list(name = ".positai", type = "tree"),
+                                   list(name = ".gemini", type = "tree"))),
+    githubTree = list(entries = list(list(name = "agents", type = "tree"))),
+    githubAgentsTree = list(entries = list(list(name = "reviewer.agent.md", type = "blob"))),
+    positTree = list(entries = list(list(name = "assistant", type = "tree"))),
+    positaiTree = list(entries = list(list(name = "settings.json", type = "blob"))),
+    geminiTree = list(entries = list(list(name = "styleguide.md", type = "blob"))))))
+  got <- parse_tree_markers(resp, data.frame(repo_id = "github.com/o/n", owner = "o", name = "n",
+                                             stringsAsFactors = FALSE))[[1]]
+  expect_true(all(c(".posit/assistant", ".positai/settings.json", ".gemini/styleguide.md") %in%
+                  got$root_entries))
+  expect_true("agents/reviewer.agent.md" %in% got$github_entries)
 })

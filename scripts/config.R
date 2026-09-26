@@ -116,10 +116,15 @@ CONTRIBUTOR_DELAY_S   <- 0.5 # pause between per-repo REST contributor-count loo
 # tool count / first-tool rollups and never names a package alone). .replit and
 # .deepsource.toml are deliberately absent: a bare platform-config file is
 # non-evidence, so Replit is detected only via its commit trailer below.
+# requires = a pattern one of the same location's entries must match. ignore_line = FALSE when
+# no ignore-file line counts, or the ignore files whose line counts (default TRUE, both).
 AI_MARKERS <- list(
   list(path = "CLAUDE.md",       tool = "claude",    kind = "file", location = "root",   agnostic = FALSE),
   list(path = "CLAUDE.local.md", tool = "claude",    kind = "file", location = "root",   agnostic = FALSE),
-  list(path = ".claude",         tool = "claude",    kind = "dir",  location = "root",   agnostic = FALSE),
+  # RStudio 2026.04 and later write ^\.claude$ into .Rbuildignore on their own, so only
+  # a .gitignore line counts.
+  list(path = ".claude",        tool = "claude",    kind = "dir",  location = "root",   agnostic = FALSE,
+       ignore_line = "gitignore"),
   list(path = ".mcp.json",       tool = "claude",    kind = "file", location = "root",   agnostic = FALSE),
   list(path = ".codex",          tool = "codex",     kind = "dir",  location = "root",   agnostic = FALSE),
   list(path = ".cursor",         tool = "cursor",    kind = "dir",  location = "root",   agnostic = FALSE),
@@ -161,16 +166,62 @@ AI_MARKERS <- list(
   # Google Antigravity, their agentic editor. Jules is not here: it works through pull
   # requests and is already covered by AI_PR_AGENT_LOGINS.
   list(path = ".antigravity",    tool = "antigravity", kind = "dir", location = "root",  agnostic = FALSE),
-  # Review agents. A configured reviewer is tooling adoption, and the tool is named on
-  # the surface, so a reader can tell review from authoring.
-  list(path = ".coderabbit.yaml", tool = "coderabbit", kind = "file", location = "root", agnostic = FALSE),
-  list(path = ".coderabbit.yml",  tool = "coderabbit", kind = "file", location = "root", agnostic = FALSE),
+  # Kiro, the successor to Amazon Q Developer's command-line tool.
+  list(path = ".kiro",          tool = "kiro",      kind = "dir",  location = "root",   agnostic = FALSE),
+  # Devin and Devin Desktop (Windsurf renamed) keep rules and DeepWiki settings here.
+  list(path = ".devin",         tool = "devin",     kind = "dir",  location = "root",   agnostic = FALSE),
+  list(path = ".devinignore",   tool = "devin",     kind = "file", location = "root",   agnostic = FALSE),
+  # Copilot custom agents count only when the folder holds a Markdown agent file.
+  list(path = "agents",         tool = "copilot",   kind = "dir",  location = "github", agnostic = FALSE,
+       requires = "^agents/[^/]+\\.md$"),
+  list(path = "instructions",   tool = "copilot",   kind = "dir",  location = "github", agnostic = FALSE),
+  list(path = "prompts",        tool = "copilot",   kind = "dir",  location = "github", agnostic = FALSE),
+  list(path = "chatmodes",      tool = "copilot",   kind = "dir",  location = "github", agnostic = FALSE),
+  list(path = "skills",         tool = "copilot",   kind = "dir",  location = "github", agnostic = FALSE),
+  list(path = "workflows/copilot-setup-steps.yml", tool = "copilot", kind = "file", location = "github",
+       agnostic = FALSE),
+  # RStudio 2026.06 and later write these into the ignore files once the folder exists, so
+  # only the committed path counts.
+  list(path = ".posit/assistant",       tool = "posit-assistant", kind = "dir",  location = "root",
+       agnostic = FALSE, ignore_line = FALSE),
+  list(path = ".positai/settings.json", tool = "posit-assistant", kind = "file", location = "root",
+       agnostic = FALSE, ignore_line = FALSE),
+  list(path = ".positai/plans",         tool = "posit-assistant", kind = "dir",  location = "root",
+       agnostic = FALSE, ignore_line = FALSE),
+  list(path = ".positai/agents",        tool = "posit-assistant", kind = "dir",  location = "root",
+       agnostic = FALSE, ignore_line = FALSE),
+  list(path = "opencode.json",  tool = "opencode",  kind = "file", location = "root",   agnostic = FALSE),
+  list(path = ".opencode",      tool = "opencode",  kind = "dir",  location = "root",   agnostic = FALSE),
+  list(path = "QWEN.md",        tool = "qwen",      kind = "file", location = "root",   agnostic = FALSE),
+  list(path = ".qwen",          tool = "qwen",      kind = "dir",  location = "root",   agnostic = FALSE),
+  list(path = ".kilocode",      tool = "kilo",      kind = "dir",  location = "root",   agnostic = FALSE),
+  list(path = ".kilo",          tool = "kilo",      kind = "dir",  location = "root",   agnostic = FALSE),
+  list(path = "WARP.md",        tool = "warp",      kind = "file", location = "root",   agnostic = FALSE),
+  list(path = ".jules",         tool = "jules",     kind = "dir",  location = "root",   agnostic = FALSE),
+  list(path = ".openhands",     tool = "openhands", kind = "dir",  location = "root",   agnostic = FALSE),
+  list(path = ".openhands_instructions", tool = "openhands", kind = "file", location = "root", agnostic = FALSE),
+  # Watched folders and files, found in no scanned repository on 2026-09-25.
+  list(path = ".trae",          tool = "trae",      kind = "dir",  location = "root",   agnostic = FALSE),
+  list(path = ".augment",       tool = "augment",   kind = "dir",  location = "root",   agnostic = FALSE),
+  list(path = "CRUSH.md",       tool = "crush",     kind = "file", location = "root",   agnostic = FALSE),
+  list(path = ".goosehints",    tool = "goose",     kind = "file", location = "root",   agnostic = FALSE),
+  list(path = ".factory",       tool = "factory",   kind = "dir",  location = "root",   agnostic = FALSE),
+  list(path = ".vibe",          tool = "vibe",      kind = "dir",  location = "root",   agnostic = FALSE),
   # Ambient IDE marker: the editor writes .positai regardless of AI use, so it is EXCLUDED
   # from the AI signal (ai_deliberate_markers). A marker with no class field defaults to
   # "deliberate". Recording ambient markers as a dev-tooling datum is deferred to the
   # separate dev-tooling signal.
   list(path = ".positai",        tool = "positron",  kind = "file", location = "root",   agnostic = FALSE, class = "ambient"),
   list(path = ".idx",            tool = "idx",       kind = "dir",  location = "root",   agnostic = FALSE, class = "ambient")
+)
+
+# Review tools' configuration. Kept out of AI_MARKERS so a review bot never counts as a
+# tool that wrote the package. `only`: the entries a folder may hold to count as review.
+AI_REVIEW_FILES <- list(
+  list(path = ".coderabbit.yaml", tool = "coderabbit",         location = "root"),
+  list(path = ".coderabbit.yml",  tool = "coderabbit",         location = "root"),
+  list(path = ".gemini",          tool = "gemini-code-assist", location = "root",
+       only = c("config.yaml", "styleguide.md"))
 )
 
 # ---- Development-tooling detection (data-only) ----
@@ -518,7 +569,9 @@ SEARCH_DELAY_S <- 6
 # Subtrees the contents query lists one level of, alias to path. build_tree_query and
 # parse_tree_markers both iterate this; a path under .github/ lands in github_entries.
 TREE_SUBTREES <- c(workflowsTree = ".github/workflows", claudeTree = ".claude", agentsTree = ".agents",
-                   instTree = "inst", vignettesTree = "vignettes", siteTree = "site")
+                   instTree = "inst", vignettesTree = "vignettes", siteTree = "site",
+                   githubAgentsTree = ".github/agents", positTree = ".posit",
+                   positaiTree = ".positai", geminiTree = ".gemini")
 # The contents query canary: one floor per set, met when any one candidate meets it.
 TREE_QUERY_CANARY <- list(
   own_community = c("tidyverse/forcats", "tidyverse/dplyr", "r-lib/usethis", "easystats/insight"),
@@ -593,12 +646,18 @@ A,devin,genuine,"No repository has a commit by Devin's account (devin-ai-integra
 A,openhands,open,"The account we look for is right (openhands-agent, openhands@all-hands.dev), but the search runs only where a pull request opened by OpenHands's account was found, and none has been. One commit by that account exists, in kuzuR, which this page counts only through a commit crediting OpenHands. This is settled once commits by the account are counted in every repository.",2026-09-25
 B,replit,genuine,"Searched on 2026-07-31 in the 1,964 repositories found by then, with no match. Other checks agree: no repository has a .replit, replit.nix or replit.md file, no default branch has a commit by Replit Agent's account (agent@replit.com), and the newest 100 commits of 600 sampled repositories have no Replit-Commit-Author line.",2026-09-25
 B,windsurf,genuine,"Searches for commits crediting Windsurf began on 2026-08-02 and no full search of every repository has finished since, so every public commit crediting Windsurf was listed instead: 963 naming Windsurf, 552 naming its bot account (windsurf-bot) and 76 at codeium.com. None is in a repository we scan. Windsurf became Devin Desktop on 2026-06-02 and now keeps its rules in .devin/rules.",2026-09-25
-D,amazonq,genuine,"No repository has an .amazonq folder, checked across 15,875. Amazon Q itself is present in one repository: its account opened a pull request in ss3sim, merged in May 2025, and made 2 commits there, which this page does not count yet. Its command-line tool has been Kiro since November 2025. One repository has a .kiro folder and 5 more name .kiro in an ignore file.",2026-09-25
+D,amazonq,genuine,"No repository has an .amazonq folder, checked across 15,875. Amazon Q is found another way: its account opened a pull request in ss3sim, merged in May 2025, and made 2 commits there. Its command-line tool has been Kiro since November 2025, which this page lists as its own tool.",2026-09-25
 D,grok,genuine,"No GROK.md, .grok or .xai in any repository, checked across 15,875. xAI's Grok Build reads AGENTS.md, CLAUDE.md and .grok/rules rather than GROK.md, so a repository using it may show only as AGENTS.md or CLAUDE.md.",2026-09-25
 D,junie,genuine,"No .junie folder in any repository, no commit by Junie's account (junie@jetbrains.com) on any default branch, and no pull request by it among each repository's newest 50, checked across 15,875. Junie now reads AGENTS.md first, so a repository using it may show only as AGENTS.md.",2026-09-25
 D,roo,genuine,"No .roo, .roomodes, .roorules or .rooignore in any repository, checked across 15,875, and none of the 218 public commits by Roo's cloud agent account (roomote[bot]) is in a repository we scan. The Roo Code extension was shut down on 2026-05-15, so this will not change.",2026-09-25
 PR,cursor,open,"No pull request among each repository's newest 50 was opened by Cursor's app account, checked across 161,444 pull requests. Cursor's cloud agent opens them under the maintainer's own account instead, with a note at the top of the description and a branch named cursor/ plus the task and four hexadecimal characters. 18 repositories have one among their newest 50 pull requests, 2 of them from an outside contributor. Separately, 44 repositories have a commit crediting Cursor among their newest 50 commits since May 2025, but commit messages are searched only where a file, a line in an ignore file or a pull request by a tool's account was already found, so 27 of them show no Cursor use here. This is settled once pull request descriptions and every repository's recent commits are read.",2026-09-25
 PR,openhands,genuine,"No pull request among each repository's newest 50 was opened by OpenHands's account (openhands-agent), checked across 161,444 pull requests.",2026-09-25
+D,trae,genuine,"No .trae folder in any repository, checked across 15,875 on 2026-09-25. The files at the top of every repository are read each week.",2026-09-25
+D,augment,genuine,"No .augment folder in any repository, checked across 15,875 on 2026-09-25. The files at the top of every repository are read each week.",2026-09-25
+D,crush,genuine,"No CRUSH.md file in any repository, checked across 15,875 on 2026-09-25. The files at the top of every repository are read each week.",2026-09-25
+D,goose,genuine,"No .goosehints file in any repository, checked across 15,875 on 2026-09-25. The files at the top of every repository are read each week.",2026-09-25
+D,factory,genuine,"No .factory folder in any repository, checked across 15,875 on 2026-09-25. The files at the top of every repository are read each week.",2026-09-25
+D,vibe,genuine,"No .vibe folder in any repository, checked across 15,875 on 2026-09-25. The files at the top of every repository are read each week.",2026-09-25
 )"), stringsAsFactors = FALSE)
 
 # Tables the summary shard carries beyond the five it takes as named arguments.
