@@ -695,6 +695,7 @@ ensure_series_schema <- function(con) {
     authored INTEGER NOT NULL DEFAULT 0,
     authored_commits INTEGER, assisted_commits INTEGER,
     last_confirmed_date TEXT,
+    authored_measured_on TEXT, assisted_measured_on TEXT,
     PRIMARY KEY (repo_id, tool))")
   # A database written before markers existed keeps its rows; the column arrives empty
   # and fills on the next scan. Dropping and rebuilding would discard onset history.
@@ -710,6 +711,11 @@ ensure_series_schema <- function(con) {
   for (col in c("authored_commits", "assisted_commits")) {
     if (length(have) && !(col %in% have))
       DBI::dbExecute(con, sprintf("ALTER TABLE vcs_ai_signals ADD COLUMN %s INTEGER", col))
+  }
+  # The day each derived count was measured, so a later measurement can replace a larger old one.
+  for (col in c("authored_measured_on", "assisted_measured_on")) {
+    if (length(have) && !(col %in% have))
+      DBI::dbExecute(con, sprintf("ALTER TABLE vcs_ai_signals ADD COLUMN %s TEXT", col))
   }
   # Who owns each active GitHub repository now, as the daily gauge query saw it.
   # Keyed by the frozen repo_id; readers count a repository once by node_id.
@@ -774,7 +780,64 @@ ensure_series_schema <- function(con) {
     commits INTEGER, first_seen TEXT, last_seen TEXT,
     window_complete INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (repo_id, tool, provider, family, version, context_window))")
+  # Weekly read state per repository. Producer state: the next run reads it, no page does.
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_ai_repo_reads (
+    repo_id TEXT PRIMARY KEY,
+    commits_read_on TEXT, commits_read_through TEXT, commits_ruleset TEXT,
+    commits_read INTEGER, commits_window_complete INTEGER, commits_history_complete INTEGER,
+    prs_read_on TEXT, prs_newest_created_at TEXT, prs_walk_complete INTEGER,
+    prs_walk_started_on TEXT, prs_walk_cursor TEXT,
+    accounts_counted_on TEXT,
+    last_failed_on TEXT, last_failure TEXT) WITHOUT ROWID")
+  # Commits by each tool's accounts: one GraphQL count over its addresses, plus one row
+  # per address only REST can count. The sets are disjoint, so a tool's total is their sum.
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_ai_account_counts (
+    repo_id TEXT NOT NULL, tool TEXT NOT NULL, identity_set TEXT NOT NULL,
+    commits INTEGER NOT NULL, newest_commit_date TEXT, measured_on TEXT NOT NULL,
+    PRIMARY KEY (repo_id, tool, identity_set)) WITHOUT ROWID")
+  # The latest answer to every search asked, and every rule a whole-history read matched.
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_ai_search_log (
+    repo_id TEXT NOT NULL, rule_key TEXT NOT NULL, rule_rev INTEGER NOT NULL,
+    ruleset_version TEXT NOT NULL, asked_on TEXT NOT NULL,
+    outcome TEXT NOT NULL CHECK (outcome IN ('hit','none','refused')),
+    total_count INTEGER, verified INTEGER, incomplete INTEGER, first_hit_on TEXT,
+    source TEXT NOT NULL CHECK (source IN ('search','read')),
+    PRIMARY KEY (repo_id, rule_key)) WITHOUT ROWID")
+  # How far each commit search has reached, rolled up from the log for the page.
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_ai_search_coverage (
+    rule_key TEXT PRIMARY KEY, tool TEXT NOT NULL, channel TEXT NOT NULL,
+    rule_rev INTEGER NOT NULL, repos_asked INTEGER NOT NULL, repos_hit INTEGER NOT NULL,
+    repos_refused INTEGER NOT NULL, repos_read_whole INTEGER NOT NULL,
+    last_asked_on TEXT) WITHOUT ROWID")
+  # Review tools, kept apart from the tools that wrote the package.
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_ai_review_signals (
+    repo_id TEXT NOT NULL, tool TEXT NOT NULL, first_seen_date TEXT,
+    first_seen_censored INTEGER NOT NULL DEFAULT 0, evidence_tiers TEXT,
+    markers TEXT, assisted_commits INTEGER, assisted_measured_on TEXT,
+    last_confirmed_date TEXT,
+    PRIMARY KEY (repo_id, tool)) WITHOUT ROWID")
+  # Pull requests a tool wrote or opened for someone outside the project, one row each.
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_ai_outside_prs (
+    repo_id TEXT NOT NULL, pr_number INTEGER NOT NULL, tool TEXT NOT NULL,
+    found_via TEXT NOT NULL, created_at TEXT NOT NULL,
+    from_fork INTEGER NOT NULL, author_association TEXT NOT NULL,
+    last_confirmed_date TEXT NOT NULL,
+    PRIMARY KEY (repo_id, pr_number, tool)) WITHOUT ROWID")
+  # The day each ruleset was first published, and the page note it carries.
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_ai_ruleset_history (
+    ruleset_version TEXT PRIMARY KEY, first_published_on TEXT NOT NULL, change_key TEXT)
+    WITHOUT ROWID")
   invisible(TRUE)
+}
+
+#' Date the first publish of a ruleset, once. `keys` names the rulesets that carry a
+#' page note; any other version gets a NULL change_key.
+record_ruleset_history <- function(con, today, version, keys) {
+  key <- if (version %in% names(keys)) unname(keys[[version]]) else NA_character_
+  DBI::dbExecute(con, "INSERT OR IGNORE INTO vcs_ai_ruleset_history
+    (ruleset_version, first_published_on, change_key) VALUES (?, ?, ?)",
+    params = list(version, today, key))
+  invisible(NULL)
 }
 
 #' Rewrite vcs_repo_owner from today's gauge snapshot in one transaction. A row the

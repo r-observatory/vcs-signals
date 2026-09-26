@@ -48,8 +48,15 @@ test_that("summary_integrity_core reports filename, bytes, sha256, tables, compl
     repos               = 3L,
     series_latest       = 0L,
     signals_series      = 0L,
+    vcs_ai_account_counts = 0L,
     vcs_ai_models       = 0L,
+    vcs_ai_outside_prs = 0L,
+    vcs_ai_repo_reads = 0L,
+    vcs_ai_review_signals = 0L,
     vcs_ai_rule_inventory = 0L,
+    vcs_ai_ruleset_history = 0L,
+    vcs_ai_search_coverage = 0L,
+    vcs_ai_search_log = 0L,
     vcs_ai_signals      = 0L,
     vcs_ai_silent_channels = 0L,
     vcs_dev_tooling     = 0L,
@@ -140,6 +147,25 @@ test_that("publish attaches the integrity core to the uploaded manifest", {
   expect_equal(manifest$db_sha256, file_sha256(file.path(out, "vcs-signals-summary.db")))
 })
 
+# One row in each table the weekly AI read adds, so the two round-trip tests
+# below fail if any of them is left out of the export or the seed.
+.mk_ai_state_rows <- function(con) {
+  DBI::dbExecute(con, "INSERT INTO vcs_ai_repo_reads (repo_id, commits_read_on, commits_ruleset)
+    VALUES ('github.com/o/r', '2026-10-04', '2026-10-04')")
+  DBI::dbExecute(con, "INSERT INTO vcs_ai_account_counts VALUES
+    ('github.com/o/r', 'claude', 'graphql', 3, '2026-10-01T10:00:00Z', '2026-10-04')")
+  DBI::dbExecute(con, "INSERT INTO vcs_ai_search_log VALUES
+    ('github.com/o/r', 'msg.claude.coauthor', 1, '2026-10-04', '2026-10-05', 'hit', 3, 1, 0, '2026-01-02', 'search')")
+  DBI::dbExecute(con, "INSERT INTO vcs_ai_search_coverage VALUES
+    ('msg.claude.coauthor', 'claude', 'commit-credit', 1, 1, 1, 0, 0, '2026-10-05')")
+  DBI::dbExecute(con, "INSERT INTO vcs_ai_review_signals
+    (repo_id, tool, first_seen_date, first_seen_censored, evidence_tiers, markers, last_confirmed_date)
+    VALUES ('github.com/o/r', 'coderabbit', '2026-10-04T23:59:59Z', 1, 'D', '.coderabbit.yaml', '2026-10-04')")
+  DBI::dbExecute(con, "INSERT INTO vcs_ai_outside_prs VALUES
+    ('github.com/o/r', 927, 'cursor', 'pr.cursor.agent-branch', '2026-08-28T09:43:30Z', 1, 'NONE', '2026-10-04')")
+  DBI::dbExecute(con, "INSERT INTO vcs_ai_ruleset_history VALUES ('2026-10-04', '2026-10-06', 'ungated-weekly-read')")
+}
+
 test_that("every table the pipeline writes reaches the published summary with its rows", {
   # Three tables shipped as empty tables in the published database: created by
   # the schema step, never filled by the export step, because the export named
@@ -160,6 +186,7 @@ test_that("every table the pipeline writes reaches the published summary with it
     VALUES ('B','replit','open','only the commit-author trailer remains','2026-08-01')")
   DBI::dbExecute(con, "INSERT INTO repo_package_links (repo_id, package, origin, first_seen, last_seen)
     VALUES ('github.com/o/gone','delisted','cran','2026-08-01','2026-08-21')")
+  .mk_ai_state_rows(con)
   DBI::dbExecute(con, "INSERT INTO vcs_dev_tooling_rules (col, source, rule, ruleset_version)
     VALUES ('has_litedown','tree','_litedown.yml|site/_litedown.yml at root','v3 (2026-09-27)')")
   DBI::dbExecute(con, "INSERT INTO vcs_repo_owner (repo_id, node_id, owner_login_current, owner_type,
@@ -767,6 +794,7 @@ test_that("a publish and a reseed keep the extra tables, both ways round", {
     VALUES ('R1','claude','Opus','4.8',12,1)")
   DBI::dbExecute(con, "INSERT INTO repo_package_links (repo_id, package, origin, first_seen, last_seen)
     VALUES ('github.com/o/gone','delisted','cran','2026-08-01','2026-08-21')")
+  .mk_ai_state_rows(con)
   DBI::dbExecute(con, "INSERT INTO vcs_dev_tooling_rules (col, source, rule, ruleset_version)
     VALUES ('has_litedown','tree','_litedown.yml|site/_litedown.yml at root','v3 (2026-09-27)')")
   DBI::dbExecute(con, "INSERT INTO vcs_repo_owner (repo_id, node_id, owner_login_current, owner_type,

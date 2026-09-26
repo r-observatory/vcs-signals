@@ -343,6 +343,12 @@ order_ai_tools <- function(ai_rows) {
   max(x, na.rm = TRUE)
 }
 
+# The latest of a date column, NA when no row carries one.
+.ai_latest_chr <- function(x) {
+  x <- x[!is.na(x)]
+  if (length(x)) max(x) else NA_character_
+}
+
 .ai_reduce_group <- function(g) {
   dates <- g$first_seen_date; cens <- as.integer(g$first_seen_censored)
   ok <- !is.na(dates)
@@ -391,6 +397,8 @@ order_ai_tools <- function(ai_rows) {
              authored_commits = .ai_max_count(g$authored_commits),
              assisted_commits = .ai_max_count(g$assisted_commits),
              last_confirmed_date = if (length(lc)) max(lc) else NA_character_,
+             authored_measured_on = .ai_latest_chr(g$authored_measured_on),
+             assisted_measured_on = .ai_latest_chr(g$assisted_measured_on),
              stringsAsFactors = FALSE)
 }
 
@@ -680,13 +688,24 @@ build_ai_model_rows <- function(repo_id, tool, items, window_complete = TRUE) {
              authored = integer(),
              authored_commits = integer(), assisted_commits = integer(),
              last_confirmed_date = character(),
+             authored_measured_on = character(), assisted_measured_on = character(),
              stringsAsFactors = FALSE)
+
+#' Any signals frame on the full column set, a missing column as NA of its type.
+#' Shards written by older code carry fewer columns and must still fold. Pure.
+.ai_align_signals <- function(df) {
+  proto <- .ai_empty_signals()
+  if (is.null(df)) return(proto)
+  for (cn in setdiff(names(proto), names(df)))
+    df[[cn]] <- if (nrow(df)) rep(proto[[cn]][NA_integer_], nrow(df)) else proto[[cn]]
+  df[, names(proto), drop = FALSE]
+}
 
 #' Merge prior + incoming vcs_ai_signals rows per (repo_id, tool) by the six
 #' column rules. Read-modify-write: callers write the returned set wholesale.
 ai_onset_reducer <- function(prior_rows, incoming_rows) {
-  all_rows <- rbind(prior_rows, incoming_rows)
-  if (is.null(all_rows) || nrow(all_rows) == 0) return(.ai_empty_signals())
+  all_rows <- rbind(.ai_align_signals(prior_rows), .ai_align_signals(incoming_rows))
+  if (nrow(all_rows) == 0) return(.ai_empty_signals())
   key <- paste(all_rows$repo_id, all_rows$tool, sep = "\r")
   parts <- lapply(split(all_rows, key), .ai_reduce_group)
   do.call(rbind, parts)
@@ -836,6 +855,7 @@ build_ai_detail <- function(repo_id, raw_evidence, onsets, last_confirmed) {
     authored_commits = as.integer(ev$authored_commits),
     assisted_commits = as.integer(ev$assisted_commits),
     last_confirmed_date = last_confirmed,
+    authored_measured_on = NA_character_, assisted_measured_on = NA_character_,
     stringsAsFactors = FALSE)
   ai_onset_reducer(.ai_empty_signals(), candidates)
 }

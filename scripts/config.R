@@ -615,7 +615,11 @@ PR,openhands,genuine,"No pull request among each repository's newest 50 was open
 # vcs_repo_owner stays the last entry; tables added later go before it.
 SUMMARY_EXTRA_TABLES <- c("vcs_ai_models", "vcs_ai_rule_inventory",
                           "vcs_ai_silent_channels", "repo_package_links",
-                          "vcs_dev_tooling_rules", "vcs_repo_owner")
+                          "vcs_dev_tooling_rules",
+                          "vcs_ai_repo_reads", "vcs_ai_account_counts", "vcs_ai_search_log",
+                          "vcs_ai_search_coverage", "vcs_ai_review_signals",
+                          "vcs_ai_outside_prs", "vcs_ai_ruleset_history",
+                          "vcs_repo_owner")
 
 # Package-to-repository links this pipeline published before it kept them. Built
 # from every surviving copy of what it published: the vcs_signals_summary in a

@@ -35,7 +35,9 @@ setwd(.aiim_wd)
 }
 
 .full_row <- function(repo, tool, date, tiers, markers, assisted, last)
-  sprintf("INSERT INTO vcs_ai_signals VALUES ('%s','%s','%s',0,'%s','%s',0,%s,%s,'%s')",
+  sprintf("INSERT INTO vcs_ai_signals (repo_id, tool, first_seen_date, first_seen_censored,
+             evidence_tiers, markers, authored, authored_commits, assisted_commits, last_confirmed_date)
+           VALUES ('%s','%s','%s',0,'%s','%s',0,%s,%s,'%s')",
           repo, tool, date, tiers, markers,
           if (tool == "agents-md") "NULL" else "0", assisted, last)
 .hollow_row <- function(repo, tool, last)
