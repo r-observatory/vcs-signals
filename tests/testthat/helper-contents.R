@@ -70,3 +70,13 @@ with_contents_canary <- function(graphql, canary = contents_canary_ok) function(
   keys <- sprintf('owner: "%s", name: "%s"', sub("/.*$", "", s), sub("^[^/]*/", "", s))
   if (all(vapply(keys, grepl, logical(1), x = query, fixed = TRUE))) canary() else graphql(query)
 }
+
+# The seven repositories of fixtures/contents-2026-09.json, parsed and classified, by repo_id.
+classified_fixture <- function() {
+  raw <- jsonlite::fromJSON(test_path("fixtures", "contents-2026-09.json"), simplifyVector = FALSE)
+  repos <- data.frame(repo_id = vapply(raw$repos, function(r) r$repo_id, ""),
+                      owner = vapply(raw$repos, function(r) r$owner, ""),
+                      name = vapply(raw$repos, function(r) r$name, ""), stringsAsFactors = FALSE)
+  parsed <- parse_tree_markers(list(data = raw$data), repos)
+  lapply(parsed, function(p) classify_dev_tooling(p$root_entries, p$github_entries, repo = p))
+}

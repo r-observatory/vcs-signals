@@ -289,7 +289,19 @@ DEV_TOOLING_DERIVED <- list(
        rule = "any of ci_github_actions to ci_drone is 1"),
   list(col = "package_at_root", type = "INTEGER", source = "derived", rule = "DESCRIPTION at root"),
   list(col = "ci_travis_only", type = "INTEGER", source = "derived",
-       rule = "ci_travis is 1 and every other CI configuration column is 0"))
+       rule = "ci_travis is 1 and every other CI configuration column is 0"),
+  list(col = "has_code_of_conduct", type = "INTEGER", source = "derived",
+       rule = "1 when coc_source is repo or account_default, 0 when none"),
+  list(col = "coc_source", type = "TEXT", source = "derived", paths = COC_TREE_PATHS,
+       rule = "from GitHub's code of conduct url: repo inside the repository, account_default in the owner's .github repository, none when GitHub returns none"),
+  list(col = "has_contributing", type = "INTEGER", source = "derived",
+       rule = "1 when contributing_source is repo or account_default, 0 when none"),
+  list(col = "contributing_source", type = "TEXT", source = "derived", paths = CONTRIBUTING_TREE_PATHS,
+       rule = "from GitHub's contributing guide url: repo inside the repository, account_default in the owner's .github repository, none when GitHub returns none"),
+  list(col = "has_pr_template", type = "INTEGER", source = "derived",
+       rule = "1 when pr_template_source is repo or account_default, 0 when none"),
+  list(col = "pr_template_source", type = "TEXT", source = "derived", paths = PR_TEMPLATE_TREE_PATHS,
+       rule = "from GitHub's pull request templates: repo when one belongs to the repository, account_default when one belongs to the owner's .github repository, none when there are none"))
 # v1 first scan 2026-07-18 (d115e2d), v2 00312fe, b903376, f861918 (2026-07-29 to 08-02), v3 this change.
 DEV_TOOLING_RULESET_VERSION <- "v3 (2026-09-26)"
 
