@@ -563,11 +563,8 @@ fetch_responsiveness <- function(io, repos, today) {
 # build_responsiveness_query / parse_responsiveness above. The two impure
 # transports at the end (marked) are not unit-tested, like fetch_contributor_count.
 
-#' One aliased multi-repo query returning, per repo: the root-tree entry names
-#' (expression "HEAD:"), the .github-tree entry names ("HEAD:.github"), isFork,
-#' and parent.nameWithOwner. object() is null when a tree is absent (empty repo,
-#' no .github), so the parser guards it. Alias r<idx> (0-based) maps back to
-#' repo_id by row order. The entry-name vectors feed classify_tree_markers.
+#' One aliased multi-repo query; alias r<idx> (0-based) maps back to repo_id by row order.
+#' Asks for tree listings, community files, Pages, workflow text, DESCRIPTION and the ignore files.
 build_tree_query <- function(repos) {
   # workflowsTree also carries each file's text, for the workflow rules.
   subtree <- function(alias, path) {

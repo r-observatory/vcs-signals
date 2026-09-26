@@ -302,3 +302,19 @@ test_that("a missing workflows directory is NULL, which says the directory is ab
   expect_true("workflows" %in% names(got))
   expect_null(got$workflows)
 })
+
+test_that("a field GitHub answered with null is read, and a field the reply lacks is not", {
+  # Parsed as gh_graphql parses a reply, where a null field stays as a named NULL element.
+  resp <- jsonlite::fromJSON('{"data": {"r0": {"isFork": false, "parent": null,
+    "rootTree": {"entries": [{"name": "DESCRIPTION", "type": "blob"}]},
+    "workflowsTree": null, "descBlob": null, "codeOfConduct": null}}}', simplifyVector = FALSE)
+  got <- parse_tree_markers(resp, one_repo)[[1]]
+  expect_true("workflows" %in% names(got))
+  expect_null(got$workflows)
+  expect_identical(got$desc_text, NA_character_)
+  expect_identical(got$coc_url, NA_character_)
+  expect_setequal(names(got), c("root_entries", "github_entries", "is_fork", "parent", "gitignore_lines",
+    "rbuildignore_lines", "rbuildignore_text", "workflows", "desc_text", "coc_url"))
+  for (e in c("pages", "pr_templates", "funding_links", "owner_sponsorable"))
+    expect_false(e %in% names(got), info = e)
+})

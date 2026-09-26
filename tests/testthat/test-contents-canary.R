@@ -135,3 +135,15 @@ test_that("the canary runs alone from the command line", {
   expect_message(main("canary", tempfile(), io = io), "passed")
   expect_true(hit)
 })
+
+test_that("the enumerate tests still answer the canary after a candidate is replaced", {
+  old <- TREE_QUERY_CANARY
+  swapped <- old; swapped$own_community[1] <- "tidyverse/tibble"
+  assign("TREE_QUERY_CANARY", swapped, envir = globalenv())
+  withr::defer(assign("TREE_QUERY_CANARY", old, envir = globalenv()))
+  hit <- FALSE
+  e <- enumerate_with(function() { hit <<- TRUE; contents_canary_ok() })
+  expect_no_error(e$run())
+  expect_true(hit)
+  expect_true(file.exists(file.path(e$out, "vcs-ai-roster.db")))
+})

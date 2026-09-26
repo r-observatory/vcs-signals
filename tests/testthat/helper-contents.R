@@ -65,5 +65,8 @@ contents_canary_ok <- function() {
 
 # Wraps a fake graphql so the enumerate step's canary query gets a passing answer.
 with_contents_canary <- function(graphql, canary = contents_canary_ok) function(query) {
-  if (grepl('owner: "tidyverse", name: "forcats"', query, fixed = TRUE)) canary() else graphql(query)
+  # Built from the constant at call time, so replacing a candidate keeps the query recognised.
+  s <- unlist(TREE_QUERY_CANARY, use.names = FALSE)
+  keys <- sprintf('owner: "%s", name: "%s"', sub("/.*$", "", s), sub("^[^/]*/", "", s))
+  if (all(vapply(keys, grepl, logical(1), x = query, fixed = TRUE))) canary() else graphql(query)
 }
