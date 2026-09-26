@@ -21,7 +21,9 @@ VIEWS_RETRY_WAITS_S <- c(5, 15, 30, 60, 120, 300, 600)
 KNOWN_FORGES <- c(
   "github.com" = "github", "gitlab.com" = "gitlab", "codeberg.org" = "codeberg",
   "bitbucket.org" = "bitbucket", "git.sr.ht" = "sourcehut", "sr.ht" = "sourcehut",
-  "r-forge.r-project.org" = "rforge"
+  "r-forge.r-project.org" = "rforge",
+  # INRAE's GitLab; no forge token in its name, so it needs naming here.
+  "forgemia.inra.fr" = "gitlab"
 )
 
 # Non-repo domains: return NULL even with an owner/name-shaped path (DOIs, preprints, docs, publishers).
@@ -178,8 +180,8 @@ AI_MARKERS <- list(
 # *.Rproj case. Detection is existence-of-entry-name only; nothing reads file contents. The
 # classifier (classify_dev_tooling), the DDL (dev_tooling_create_sql), and the empty helper
 # (.devtool_empty) are all derived from these col names, so the column set cannot drift.
-# readme_source (TEXT enum) and has_ci (the OR of the ci_* systems) are COMPUTED additions,
-# not entries here. repo_id / last_scanned are stamped by the cheap pass, not by the classifier.
+# readme_source (TEXT enum) and has_ci (the OR of the ci_* systems) are declared in
+# DEV_TOOLING_DERIVED. repo_id, last_scanned and ruleset_version are stamped by the cheap pass.
 DEV_TOOLING_MARKERS <- list(
   # CI / CD: one distinct system per column; has_ci is the producer-computed OR of these.
   list(col = "ci_github_actions", paths = c("workflows"),          location = "github"),
@@ -198,6 +200,7 @@ DEV_TOOLING_MARKERS <- list(
   # Lint / format / editor.
   list(col = "has_lintr",         paths = c(".lintr"),          location = "root"),
   list(col = "has_air",           paths = c("air.toml", ".air.toml"), location = "root"),
+  list(col = "has_jarl",          paths = c("jarl.toml"),       location = "root"),
   list(col = "has_editorconfig",  paths = c(".editorconfig"),   location = "root"),
   list(col = "has_vscode",        paths = c(".vscode"),         location = "root"),
   list(col = "has_rproj",         paths = c(".Rproj"),          location = "root", match = "suffix"),
@@ -208,6 +211,7 @@ DEV_TOOLING_MARKERS <- list(
   # Reproducibility / dev-env.
   list(col = "has_renv",          paths = c("renv.lock", "renv"),               location = "root"),
   list(col = "has_data_raw",      paths = c("data-raw"),                        location = "root"),
+  list(col = "has_tests_dir",     paths = c("tests"),                           location = "root"),
   list(col = "has_makefile",      paths = c("Makefile"),                        location = "root"),
   list(col = "has_dockerfile",    paths = c("Dockerfile"),                      location = "root"),
   list(col = "has_devcontainer",  paths = c(".devcontainer"),                   location = "root"),
@@ -224,10 +228,11 @@ DEV_TOOLING_MARKERS <- list(
   # Docs source (repo-only). readme_source is computed; has_quarto is a flag.
   list(col = "has_quarto",        paths = c("_quarto.yml"),      location = "root"),
   # pkgdown is the most common documentation site in the ecosystem and was the
-  # conspicuous absence here: _quarto.yml was detectable and this was not. Three
-  # shapes, because maintainers use all three: the config at the root under
-  # either extension, and a pkgdown/ directory holding templates or extra pages.
-  list(col = "has_pkgdown",       paths = c("_pkgdown.yml", "_pkgdown.yaml", "pkgdown"),
+  # conspicuous absence here: _quarto.yml was detectable and this was not. Its
+  # config sits at the root or in inst/ under either extension, or in a pkgdown/
+  # directory, which also holds templates or extra pages.
+  list(col = "has_pkgdown",       paths = c("_pkgdown.yml", "_pkgdown.yaml", "pkgdown",
+                                            "inst/_pkgdown.yml", "inst/_pkgdown.yaml"),
                                                                  location = "root"),
   # altdoc keeps its config in altdoc/ at the root, whatever backend it drives
   # (altdoc/mkdocs.yml, altdoc/quarto_website.yml, altdoc/docsify.html). Note
@@ -237,8 +242,8 @@ DEV_TOOLING_MARKERS <- list(
   # litedown's config is NOT a root file. Every observed instance sits under
   # site/ or docs/, so a root-only rule would report litedown as unused
   # everywhere. The site subtree is fetched for exactly this.
-  list(col = "has_litedown",      paths = c("_litedown.yml", "site/_litedown.yml",
-                                            "docs/_litedown.yml"), location = "root"),
+  # docs/ is not listed (it holds built output), so a docs/ path could never match.
+  list(col = "has_litedown",      paths = c("_litedown.yml", "site/_litedown.yml"), location = "root"),
 
   # Documentation written for language models to read. This is the package describing
   # itself TO a model, not evidence a model worked on it, so it is a practice and never
@@ -255,8 +260,8 @@ DEV_TOOLING_MARKERS <- list(
   list(col = "has_zenodo",           paths = c(".zenodo.json"),      location = "root"),
   list(col = "has_all_contributors", paths = c(".all-contributorsrc"),location = "root"),
   # Governance / community.
-  list(col = "has_issue_template", paths = c("ISSUE_TEMPLATE", "ISSUE_TEMPLATE.md"), location = "github"),
-  list(col = "has_pr_template",    paths = c("PULL_REQUEST_TEMPLATE.md"),           location = "github"),
+  list(col = "has_issue_template", paths = c("ISSUE_TEMPLATE", "ISSUE_TEMPLATE.md", "issue_template.md"),
+                                                                                 location = "both"),
   list(col = "has_funding",        paths = c("FUNDING.yml"),                        location = "github"),
   list(col = "has_security",       paths = c("SECURITY.md"),                        location = "both"),
   list(col = "has_codeowners",     paths = c("CODEOWNERS"),                         location = "both"),
@@ -267,6 +272,114 @@ DEV_TOOLING_MARKERS <- list(
   list(col = "has_gitmodules",     paths = c(".gitmodules"),            location = "root"),
   list(col = "has_blame_ignore",   paths = c(".git-blame-ignore-revs"), location = "root")
 )
+
+# Community files, checked at the root and in .github. The same lists as rpkg-analyzer's git input.
+COC_TREE_PATHS <- c("CODE_OF_CONDUCT.md", "CODE_OF_CONDUCT", "CODE_OF_CONDUCT.Rmd", "CODE_OF_CONDUCT.rst",
+                    "code_of_conduct.md", "Code_of_conduct.md", "CODE-OF-CONDUCT.md", "CONDUCT.md")
+CONTRIBUTING_TREE_PATHS <- c("CONTRIBUTING.md", "CONTRIBUTING", "CONTRIBUTING.Rmd", "CONTRIBUTING.rst",
+                             "contributing.md", "Contributing.md", "CONTRIBUTING.MD")
+PR_TEMPLATE_TREE_PATHS <- c("pull_request_template.md", "PULL_REQUEST_TEMPLATE.md", "PULL_REQUEST_TEMPLATE")
+# pkgdown 2.2.0's config paths the scan can list; the pkgdown/ directory stands for the other two.
+PKGDOWN_CONFIG_TREE_PATHS <- c("_pkgdown.yml", "_pkgdown.yaml", "inst/_pkgdown.yml", "inst/_pkgdown.yaml")
+
+# Release items rbuildignore_excluded reports, in output order. The analyzer's build_ignored
+# uses the same names, so the viewer reads both with one lookup.
+RBUILDIGNORE_ITEMS <- c("README.md", "README.Rmd", "README.qmd", "NEWS.md", "NEWS", "tests", "vignettes",
+                        "vignettes/articles", "_pkgdown.yml", "pkgdown", "docs", "CODE_OF_CONDUCT.md",
+                        "CONTRIBUTING.md", "data-raw", ".github")
+# A vignette source one level under vignettes/, as the scan sees names only.
+VIGNETTE_SOURCE_PATTERN <- "\\.(Rmd|Rnw|qmd|Rtex|Rhtml|asis)$"
+# rbuildignore_text keeps a .Rbuildignore up to this many bytes (the largest in the sweep is 10,739).
+RBUILDIGNORE_TEXT_MAX_BYTES <- 65536L
+
+# GitHub Actions workflow rules, matched on the text of each .yml or .yaml file in
+# .github/workflows. Case-sensitive, as measured, unless the pattern says (?i).
+WORKFLOW_TEXT_RULES <- list(
+  rcmdcheck      = "check-r-package|rcmdcheck|R CMD check|devtools::check|BiocCheck|rworkflows",
+  rcmdcheck_name = "(?i)r-?cmd-?check|^check|cran-check|bioc|rworkflows",
+  platforms      = "(?i)\\b(ubuntu|macos|windows)-(latest|[0-9])",
+  r_devel        = "r(-version)?:\\s*['\"]?devel",
+  coverage       = "covr::|codecov|test-coverage|coveralls",
+  site_deploy    = paste0("build_site_github_pages|pkgdown::deploy|github-pages-deploy-action|",
+                          "actions/deploy-pages|peaceiris/actions-gh-pages|altdoc::render|",
+                          "quarto publish|quarto-actions/publish"),
+  lint           = "lintr::|lint_package|jarl|air format|styler::",
+  lint_skip      = "issue_comment")
+
+# Every vcs_dev_tooling column not in DEV_TOOLING_MARKERS: its SQLite type, where the value
+# comes from (tree, graphql, workflow_text or derived) and the rule vcs_dev_tooling_rules publishes.
+DEV_TOOLING_DERIVED <- list(
+  list(col = "readme_source", type = "TEXT", source = "tree",
+       rule = "README.qmd, else README.Rmd, else README.md at root, else none"),
+  list(col = "has_ci", type = "INTEGER", source = "derived",
+       rule = "any of ci_github_actions to ci_drone is 1"),
+  list(col = "package_at_root", type = "INTEGER", source = "derived", rule = "DESCRIPTION at root"),
+  list(col = "ci_travis_only", type = "INTEGER", source = "derived",
+       rule = "ci_travis is 1 and every other CI configuration column is 0"),
+  list(col = "has_code_of_conduct", type = "INTEGER", source = "derived",
+       rule = "1 when coc_source is repo or account_default, 0 when none"),
+  list(col = "coc_source", type = "TEXT", source = "derived", paths = COC_TREE_PATHS,
+       rule = "from GitHub's code of conduct url: repo inside the repository, account_default in the owner's .github repository, none when GitHub returns none"),
+  list(col = "has_contributing", type = "INTEGER", source = "derived",
+       rule = "1 when contributing_source is repo or account_default, 0 when none"),
+  list(col = "contributing_source", type = "TEXT", source = "derived", paths = CONTRIBUTING_TREE_PATHS,
+       rule = "from GitHub's contributing guide url: repo inside the repository, account_default in the owner's .github repository, none when GitHub returns none"),
+  list(col = "has_pr_template", type = "INTEGER", source = "derived",
+       rule = "1 when pr_template_source is repo or account_default, 0 when none"),
+  list(col = "pr_template_source", type = "TEXT", source = "derived", paths = PR_TEMPLATE_TREE_PATHS,
+       rule = "from GitHub's pull request templates: repo when one belongs to the repository, account_default when one belongs to the owner's .github repository, none when there are none"),
+  list(col = "rbuildignore_excluded", type = "TEXT", source = "derived",
+       rule = "items present in the repository that .Rbuildignore leaves out of the release, read as R CMD build reads it"),
+  list(col = "rbuildignore_text", type = "TEXT", source = "graphql",
+       rule = ".Rbuildignore text up to 65536 bytes"),
+  list(col = "ci_workflow_files", type = "TEXT", source = "workflow_text",
+       rule = ".yml and .yaml file names in .github/workflows, in listing order"),
+  list(col = "ci_rcmdcheck", type = "INTEGER", source = "workflow_text",
+       rule = paste("a workflow text matches", WORKFLOW_TEXT_RULES$rcmdcheck,
+                    "or a workflow GitHub returns no text for is named", WORKFLOW_TEXT_RULES$rcmdcheck_name)),
+  list(col = "ci_platforms", type = "TEXT", source = "workflow_text",
+       rule = paste("linux, macos and windows as named by", WORKFLOW_TEXT_RULES$platforms,
+                    "in the R CMD check workflows")),
+  list(col = "ci_r_devel", type = "INTEGER", source = "workflow_text",
+       rule = paste("an R CMD check workflow matches", WORKFLOW_TEXT_RULES$r_devel)),
+  list(col = "ci_coverage", type = "INTEGER", source = "workflow_text",
+       rule = paste("a workflow text matches", WORKFLOW_TEXT_RULES$coverage)),
+  list(col = "ci_site_deploy", type = "INTEGER", source = "workflow_text",
+       rule = paste("a workflow text matches", WORKFLOW_TEXT_RULES$site_deploy)),
+  list(col = "ci_lint", type = "INTEGER", source = "workflow_text",
+       rule = paste("a workflow text without", WORKFLOW_TEXT_RULES$lint_skip, "matches", WORKFLOW_TEXT_RULES$lint)),
+  list(col = "has_pages", type = "INTEGER", source = "graphql",
+       rule = "a github-pages environment or deployment"),
+  list(col = "pages_last_deploy", type = "TEXT", source = "graphql",
+       rule = "createdAt of the newest github-pages deployment"),
+  list(col = "pages_url", type = "TEXT", source = "derived",
+       rule = "the deployment's http(s) url when its host does not end in .github.io, else built from the repository's current name"),
+  list(col = "site_generator", type = "TEXT", source = "derived",
+       rule = "pkgdown when a built pkgdown.yml is found, else altdoc, litedown, pkgdown or quarto from their config, else unknown"),
+  list(col = "site_pkgdown_source", type = "TEXT", source = "graphql",
+       rule = "gh-pages when gh-pages:pkgdown.yml exists, else docs when HEAD:docs/pkgdown.yml exists"),
+  list(col = "site_pkgdown_version", type = "TEXT", source = "graphql",
+       rule = "the pkgdown: line of the built pkgdown.yml"),
+  list(col = "site_pkgdown_last_built", type = "TEXT", source = "graphql",
+       rule = "the last_built: line of the built pkgdown.yml, as written"),
+  list(col = "site_url", type = "TEXT", source = "graphql",
+       rule = "the reference url in the urls block of the built pkgdown.yml, else the article url, without its last path segment"),
+  list(col = "repo_desc_package", type = "TEXT", source = "graphql", rule = "Package in HEAD:DESCRIPTION"),
+  list(col = "repo_desc_version", type = "TEXT", source = "graphql", rule = "Version in HEAD:DESCRIPTION"),
+  list(col = "cran_version_at_scan", type = "TEXT", source = "derived",
+       rule = "the CRAN version of repo_desc_package when that name is one of the repository's CRAN packages"),
+  list(col = "repo_version_vs_cran", type = "TEXT", source = "derived",
+       rule = "ahead, equal or behind: compareVersion(repo_desc_version, cran_version_at_scan)"),
+  list(col = "funding_links", type = "TEXT", source = "graphql", rule = "fundingLinks as platform and url pairs"),
+  list(col = "owner_sponsorable", type = "INTEGER", source = "graphql", rule = "the owner has a GitHub Sponsors listing"),
+  list(col = "is_fork", type = "INTEGER", source = "graphql", rule = "isFork"),
+  list(col = "parent_name_with_owner", type = "TEXT", source = "graphql", rule = "parent nameWithOwner"),
+  list(col = "has_issues_enabled", type = "INTEGER", source = "graphql", rule = "hasIssuesEnabled"),
+  list(col = "homepage_url", type = "TEXT", source = "graphql", rule = "homepageUrl, trimmed, when not empty"),
+  list(col = "has_discussions", type = "INTEGER", source = "graphql", rule = "hasDiscussionsEnabled"),
+  list(col = "discussions_total", type = "INTEGER", source = "graphql", rule = "discussions totalCount"))
+# v1 first scan 2026-07-18 (d115e2d), v2 00312fe, b903376, f861918 (2026-07-29 to 08-02), v3 this change.
+DEV_TOOLING_RULESET_VERSION <- "v3 (2026-09-26)"
 
 # Tier A bot identities: exact, case-normalized email/login match only.
 AI_BOT_ALLOWLIST <- c(
@@ -401,6 +514,14 @@ TIER_PRIORITY <- c(A = 1L, B = 2L, C = 3L, PR = 4L, D = 5L)
 # issued about 12,000 searches, was refused by almost all of them, and recorded the
 # refusals as "no trailer found". Pace for the limit that actually exists.
 SEARCH_DELAY_S <- 6
+# Subtrees the contents query lists one level of, alias to path. build_tree_query and
+# parse_tree_markers both iterate this; a path under .github/ lands in github_entries.
+TREE_SUBTREES <- c(workflowsTree = ".github/workflows", claudeTree = ".claude", agentsTree = ".agents",
+                   instTree = "inst", vignettesTree = "vignettes", siteTree = "site")
+# The contents query canary: one floor per set, met when any one candidate meets it.
+TREE_QUERY_CANARY <- list(
+  own_community = c("tidyverse/forcats", "tidyverse/dplyr", "r-lib/usethis", "easystats/insight"),
+  inherited_pr_template = c("epiverse-trace/linelist", "epiverse-trace/epiparameter", "ecmwf/eccodes"))
 # Repos per aliased tree-marker / PR-login query in the cheap pass. Both queries are
 # execution-heavy server-side (a tree fetch plus 50 PR nodes per alias), so this is
 # kept small like COMMIT_HISTORY_BATCH rather than the 20-40 a cheap connection page
@@ -417,6 +538,15 @@ AI_PR_CUTOFF <- "2023-01-01"
 # run_cheap and run_deep both check graphql_rate_remaining(io) against this reserve
 # before spending down the shared token, pausing rather than faulting when it is low.
 AI_POINT_RESERVE <- 1500L
+# A repository that still fails alone after halving is read once more after this wait.
+AI_BATCH_RETRY_WAIT_S <- 30
+# Consecutive identical single-repository failures that end one document's reads in a shard.
+AI_BREAKER_LIMIT <- 20L
+# A cheap shard stops when its contents failures reach both the count and the share of repositories it attempted.
+TREE_DROP_MIN <- 5L
+TREE_DROP_MAX_SHARE <- 0.05
+# The merge publishes, then fails the run, when distinct failed repositories exceed this share of the roster.
+AI_SCAN_FAILURE_MAX_SHARE <- 0.02
 
 # Channels known to be silent, each with the evidence someone gathered and the
 # date they gathered it. The canary reports every (tier, tool) that has a rule
@@ -475,7 +605,7 @@ A,openhands,open,"tier A iterates cheap-pass evidence, which openhands can only 
 # anywhere of which repository the package was. A path that dropped it would
 # lose those links for good, because nothing resolves a delisted package again.
 SUMMARY_EXTRA_TABLES <- c("vcs_ai_models", "vcs_ai_rule_inventory",
-                          "vcs_ai_silent_channels", "repo_package_links")
+                          "vcs_ai_silent_channels", "repo_package_links", "vcs_dev_tooling_rules")
 
 # Package-to-repository links this pipeline published before it kept them. Built
 # from every surviving copy of what it published: the vcs_signals_summary in a

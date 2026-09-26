@@ -20,13 +20,14 @@ if (!exists("ensure_series_schema")) source("scripts/helpers.R")
 if (!exists("build_tree_query"))     source("scripts/github.R")
 if (!exists("gh_release_exists"))    source("scripts/update.R")   # default_io, gh_release_*, seed_working_db
 if (!exists("build_ai_detail"))      source("scripts/ai_signals.R")
+if (!exists("url_points_into"))      source("scripts/dev_tooling.R")
 if (!exists("write_roster"))         source("scripts/backfill.R") # shard_rows via helpers, roster idiom
 suppressPackageStartupMessages({ library(DBI); library(RSQLite) })
 
 AI_ROSTER_TABLE <- "roster"
 
 # ---- roster IO --------------------------------------------------------------
-write_ai_roster <- function(path, roster_df) {
+write_ai_roster <- function(path, roster_df, roster_cran = NULL) {
   if (file.exists(path)) unlink(path)
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
@@ -37,6 +38,11 @@ write_ai_roster <- function(path, roster_df) {
   if (nrow(roster_df) > 0)
     DBI::dbWriteTable(con, AI_ROSTER_TABLE,
                       roster_df[c("repo_id", "owner", "name", "node_id", "done")], append = TRUE)
+  # Rebuilt every week from one CRAN read, so no week depends on an earlier copy.
+  DBI::dbExecute(con, "CREATE TABLE roster_cran (repo_id TEXT NOT NULL, package TEXT NOT NULL,
+    cran_version TEXT NOT NULL, PRIMARY KEY (repo_id, package))")
+  if (!is.null(roster_cran) && nrow(roster_cran) > 0)
+    DBI::dbWriteTable(con, "roster_cran", roster_cran[c("repo_id", "package", "cran_version")], append = TRUE)
   DBI::dbExecute(con, "VACUUM")
   invisible(path)
 }
@@ -45,6 +51,86 @@ load_ai_roster <- function(path) {
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   DBI::dbReadTable(con, AI_ROSTER_TABLE)
+}
+
+load_roster_cran <- function(path) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  if (DBI::dbExistsTable(con, "roster_cran")) DBI::dbReadTable(con, "roster_cran")
+  else data.frame(repo_id = character(0), package = character(0), cran_version = character(0),
+                  stringsAsFactors = FALSE)
+}
+
+#' Each roster repository's CRAN packages with today's CRAN version. A failed CRAN read is
+#' logged and gives no rows, which only leaves the version comparison empty this week.
+build_roster_cran <- function(io, repo_packages, roster_ids) {
+  empty <- data.frame(repo_id = character(0), package = character(0), cran_version = character(0),
+                      stringsAsFactors = FALSE)
+  cran <- tryCatch(io$cran_packages(), error = function(e) {
+    message("ai enumerate: the CRAN package list could not be read (", conditionMessage(e),
+            "), so versions are not compared this week")
+    NULL })
+  if (is.null(cran) || !nrow(cran)) return(empty)
+  rp <- repo_packages[repo_packages$repo_id %in% roster_ids, c("repo_id", "package"), drop = FALSE]
+  out <- merge(rp, data.frame(package = cran$Package, cran_version = cran$Version, stringsAsFactors = FALSE),
+               by = "package")
+  out <- out[!duplicated(out[c("repo_id", "package")]), c("repo_id", "package", "cran_version"), drop = FALSE]
+  if (nrow(out)) out else empty
+}
+
+# ---- contents query canary ---------------------------------------------------
+.canary_repos <- function(slugs)
+  data.frame(repo_id = paste0("github.com/", tolower(slugs)), owner = sub("/.*$", "", slugs),
+             name = sub("^[^/]*/", "", slugs), stringsAsFactors = FALSE)
+
+#' One contents document over every TREE_QUERY_CANARY repository, since the community-field
+#' fault shows only on multi-repository batches. Stops the run when a floor has no candidate.
+tree_query_canary <- function(io) {
+  own <- TREE_QUERY_CANARY$own_community
+  inherit <- TREE_QUERY_CANARY$inherited_pr_template
+  slugs <- c(own, inherit)
+  repos <- .canary_repos(slugs)
+  fail <- function(what, values) stop(sprintf(paste0(
+    "contents query canary: %s. %s. Run Rscript scripts/ai_backfill.R canary with a token and ",
+    "read each candidate's value. If GitHub changed, fix the query or the parser before the next ",
+    "pass. If the candidates changed their own files, replace them in TREE_QUERY_CANARY with ",
+    "repositories that meet the floor today and re-run the enumerate job."), what, values),
+    call. = FALSE)
+  ask <- function() tryCatch(io$graphql(build_tree_query(repos)), error = function(e) list(.err = conditionMessage(e)))
+  res <- ask()
+  # Only a request that threw (a 502 or a timeout) is read again. A reply GitHub answered is
+  # final, so the field-order fault stops the pass on its first reply.
+  if (!is.null(res$.err)) {
+    (if (is.function(io$sleep)) io$sleep else Sys.sleep)(AI_BATCH_RETRY_WAIT_S)
+    res <- ask()
+  }
+  if (!is.null(res$.err)) fail("the query did not return", res$.err)
+  if (is.null(res$data)) fail("GitHub returned no data", .fetch_first_error(res))
+  if (length(res$errors) && !errors_are_alias_not_found(res$errors))
+    fail("GitHub rejected the query", .fetch_first_error(res))
+  if (all(vapply(sprintf("r%d", seq_along(slugs) - 1L), function(a) is.null(res$data[[a]]), logical(1))))
+    fail("every candidate came back empty", paste(slugs, collapse = ", "))
+  parsed <- parse_tree_markers(res, repos)
+  el <- function(s) parsed[[paste0("github.com/", tolower(s))]]
+  slug_of <- function(s) { nwo <- el(s)$name_with_owner %||% NA_character_; if (is.na(nwo)) s else nwo }
+  own_ok <- vapply(own, function(s) url_points_into(el(s)$coc_url %||% NA_character_, slug_of(s)) &&
+                     url_points_into(el(s)$contributing_url %||% NA_character_, slug_of(s)), logical(1))
+  inherit_ok <- vapply(inherit, function(s) {
+    held <- tolower(el(s)$pr_templates$repository %||% character(0))
+    any(held == tolower(paste0(sub("/.*$", "", slug_of(s)), "/.github")), na.rm = TRUE)
+  }, logical(1))
+  shown <- function(x) if (is.null(x) || !length(x) || all(is.na(x))) "none" else paste(x, collapse = " ")
+  if (!any(own_ok))
+    fail("no own_community candidate returned a code of conduct and a contributing guide from its own repository",
+         paste(vapply(own, function(s) sprintf("%s code of conduct %s, contributing guide %s", s,
+                 shown(el(s)$coc_url), shown(el(s)$contributing_url)), character(1)), collapse = " | "))
+  if (!any(inherit_ok))
+    fail("no inherited_pr_template candidate reported its owner's .github pull request template",
+         paste(vapply(inherit, function(s) sprintf("%s template from %s", s,
+                 shown(el(s)$pr_templates$repository)), character(1)), collapse = " | "))
+  message(sprintf("contents query canary: passed, own_community %d of %d, inherited_pr_template %d of %d",
+                  sum(own_ok), length(own), sum(inherit_ok), length(inherit)))
+  invisible(TRUE)
 }
 
 # ---- enumerate --------------------------------------------------------------
@@ -62,6 +148,8 @@ load_ai_roster <- function(path) {
 #' so the squatter is never scanned under this row's repo_id. Same download as
 #' backfill.R's enumerate.
 run_enumerate_ai <- function(io, out_dir) {
+  # Before any read: a broken contents query stops the pass here, not twelve shards later.
+  tree_query_canary(io)
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   if (!isTRUE(io$download("vcs-signals-summary.db", out_dir)))
     stop("could not download vcs-signals-summary.db from the published release; nothing to enumerate")
@@ -110,8 +198,11 @@ run_enumerate_ai <- function(io, out_dir) {
   }
   if (length(drop_idx) > 0) roster <- roster[-drop_idx, , drop = FALSE]
 
-  message(sprintf("ai enumerate: %d active github repos", nrow(roster)))
-  write_ai_roster(file.path(out_dir, "vcs-ai-roster.db"), roster)
+  rp <- DBI::dbGetQuery(con, "SELECT repo_id, package FROM repo_packages WHERE origin = 'cran'")
+  roster_cran <- build_roster_cran(io, rp, roster$repo_id)
+  message(sprintf("ai enumerate: %d active github repos, %d CRAN package versions to compare",
+                  nrow(roster), nrow(roster_cran)))
+  write_ai_roster(file.path(out_dir, "vcs-ai-roster.db"), roster, roster_cran)
 }
 
 # ---- flagged partial IO -----------------------------------------------------
@@ -150,7 +241,8 @@ read_flagged <- function(path) {
 # A stateless presence snapshot, written as a SEPARATE shard from the AI flagged/evidence
 # partials (those are scoped to the AI-flagged subset by the downstream gate/deep pipeline).
 .devtool_empty_shard <- function() {
-  out <- data.frame(repo_id = character(0), last_scanned = character(0), stringsAsFactors = FALSE)
+  out <- data.frame(repo_id = character(0), last_scanned = character(0), ruleset_version = character(0),
+                    stringsAsFactors = FALSE)
   cbind(out, .devtool_empty())
 }
 
@@ -170,7 +262,7 @@ read_flagged <- function(path) {
 bind_dev_tooling <- function(prior, incoming) {
   if (is.null(prior) || !nrow(prior)) return(incoming)
   if (is.null(incoming) || !nrow(incoming)) return(prior)
-  want <- c("repo_id", "last_scanned", dev_tooling_columns())
+  want <- c("repo_id", "last_scanned", "ruleset_version", dev_tooling_columns())
   cols <- c(want, setdiff(c(names(prior), names(incoming)), want))
   fill <- function(d) {
     for (cn in setdiff(cols, names(d))) d[[cn]] <- NA
@@ -179,13 +271,17 @@ bind_dev_tooling <- function(prior, incoming) {
   rbind(fill(prior), fill(incoming))
 }
 
-write_dev_tooling_partial <- function(path, dev_df) {
+write_dev_tooling_partial <- function(path, dev_df, failures = NULL) {
   if (file.exists(path)) unlink(path)
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   DBI::dbExecute(con, "PRAGMA journal_mode=DELETE")
   DBI::dbExecute(con, dev_tooling_create_sql())
   if (nrow(dev_df) > 0) DBI::dbWriteTable(con, "vcs_dev_tooling", dev_df, append = TRUE)
+  # Rides the dev-tooling partial because every merge job already downloads it.
+  DBI::dbExecute(con, "CREATE TABLE failures (repo_id TEXT NOT NULL, query TEXT NOT NULL,
+    error TEXT, failed_at TEXT)")
+  if (!is.null(failures) && nrow(failures) > 0) DBI::dbWriteTable(con, "failures", failures, append = TRUE)
   DBI::dbExecute(con, "VACUUM")
   invisible(path)
 }
@@ -197,25 +293,50 @@ read_dev_tooling <- function(path) {
   else .devtool_empty_shard()
 }
 
+read_scan_failures <- function(path) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  if (DBI::dbExistsTable(con, "failures")) DBI::dbReadTable(con, "failures") else .fetch_failed_frame()
+}
+
+#' The merge's stop message when distinct failed repositories exceed the roster share, else NULL.
+scan_failure_stop_message <- function(fails, roster_n) {
+  n <- length(unique(fails$repo_id))
+  denom <- if (is.na(roster_n) || roster_n < 1L) 1L else as.integer(roster_n)
+  if (n == 0L || n <= AI_SCAN_FAILURE_MAX_SHARE * denom) return(NULL)
+  sprintf(paste0("ai merge: %d of %d roster repositories failed a read this week, above the %s%% ",
+                 "the merge accepts. First: %s. First message: %s"),
+          n, denom, format(100 * AI_SCAN_FAILURE_MAX_SHARE),
+          paste(utils::head(unique(fails$repo_id), 5L), collapse = ", "), fails$error[1])
+}
+
+#' TRUE when a shard's contents failures say the query itself is broken.
+contents_shard_stops <- function(n_failed, attempted)
+  n_failed >= TREE_DROP_MIN && n_failed >= TREE_DROP_MAX_SHARE * attempted
+
 # ---- cheap pass -------------------------------------------------------------
 #' Cheap Tier-D marker + PR-agent pass over one even mod-N shard of the roster. Batches
 #' TIER_D_BATCH repos through fetch_tree_markers + fetch_pr_agents, assembles evidence,
 #' and writes only the flagged repos (repo_has_ai_signal) to a two-table partial. A repo
-#' whose whole cheap batch faulted is absent from both fetch results and is skipped
-#' (deferred, retried next run), never written as clean. Before each batch, a
+#' whose contents read fails is listed in the dev-tooling partial's failures table, gets
+#' no dev-tooling row, and enough of them stop the shard. Before each batch, a
 #' graphql_rate_remaining(io) preflight (mirrors update.R:130-137) pauses the shard when
 #' the budget is below AI_POINT_RESERVE, so an exhausted token stops the pass cleanly
-#' instead of faulting batches into silent single-repo drops; the unscanned tail of this
+#' instead of reporting the rest of the shard as failed; the unscanned tail of this
 #' shard is picked up by the next workflow_dispatch (enumerate + cheap re-run
 #' deterministically over the same shard). fetch_tree_markers/fetch_pr_agents already
 #' pace themselves with BATCH_DELAY_S, so this loop does not sleep again per batch.
 run_cheap <- function(io, out_dir, roster_path, i, N, batch_size = TIER_D_BATCH) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   roster <- load_ai_roster(roster_path)
+  cran_links <- load_roster_cran(roster_path)
   mine <- roster[shard_rows(nrow(roster), i, N), , drop = FALSE]
   message(sprintf("ai cheap shard %d/%d: %d of %d repos", i, N, nrow(mine), nrow(roster)))
 
   flagged <- list(); evrows <- list(); dev_rows <- list(); scanned <- 0L
+  failed <- list(); bad_rbi_lines <- 0L
+  # One breaker for the whole shard, so a fault repeated across chunks still trips it.
+  contents_breaker <- new_fetch_breaker()
   today <- format(Sys.Date())
   for (idx in unname(chunk(seq_len(nrow(mine)), batch_size))) {
     rl <- graphql_rate_remaining(io)
@@ -226,21 +347,28 @@ run_cheap <- function(io, out_dir, roster_path, i, N, batch_size = TIER_D_BATCH)
       break
     }
     repos <- mine[idx, , drop = FALSE]
-    trees <- tryCatch(fetch_tree_markers(io, repos, batch_size), error = function(e) NULL)
+    fetched <- tryCatch(fetch_tree_markers(io, repos, batch_size, breaker = contents_breaker),
+      error = function(e) list(results = list(), failed = .fetch_failed_frame(
+        repos$repo_id, "contents", substr(conditionMessage(e), 1L, 200L), .utc_now())))
+    failed[[length(failed) + 1L]] <- fetched$failed
+    trees <- fetched$results
     prs   <- tryCatch(fetch_pr_agents(io, repos, batch_size), error = function(e) NULL)
     for (r in seq_len(nrow(repos))) {
       rid <- repos$repo_id[r]
-      tree <- if (is.null(trees)) NULL else trees[[rid]]
+      tree <- trees[[rid]]
       pr   <- if (is.null(prs)) NULL else prs[[rid]]
-      # Dev-tooling snapshot for EVERY successfully-fetched repo, before the AI-only gate below.
-      # Honest-NA: a repo whose tree channel errored (trees NULL) or whose alias came back null
-      # (parse_tree_markers degrades a gone/private repo to empty entries with is_fork = NA) is
-      # NOT assessed and gets no row - it is deferred, never written as clean all-zeros.
+      # A failed or gone repository gets no row, so its prior row and last_scanned stand.
       if (!is.null(tree) && !is.na(tree$is_fork)) {
-        dv <- classify_dev_tooling(tree$root_entries, tree$github_entries)
+        dv <- classify_dev_tooling(tree$root_entries, tree$github_entries, repo = tree)
+        bad_rbi_lines <- bad_rbi_lines + attr(dv, "rbuildignore_bad_lines")
+        cmp <- compare_repo_version(dv$repo_desc_package, dv$repo_desc_version,
+                                    cran_links[cran_links$repo_id == rid, c("package", "cran_version")])
+        dv$cran_version_at_scan <- cmp$cran_version_at_scan
+        dv$repo_version_vs_cran <- cmp$repo_version_vs_cran
         dv$repo_id <- rid
         dv$last_scanned <- today
-        dev_rows[[length(dev_rows) + 1L]] <- dv[c("repo_id", "last_scanned", dev_tooling_columns())]
+        dv$ruleset_version <- DEV_TOOLING_RULESET_VERSION
+        dev_rows[[length(dev_rows) + 1L]] <- dv[c("repo_id", "last_scanned", "ruleset_version", dev_tooling_columns())]
       }
       if (is.null(tree) && is.null(pr)) next            # both channels errored -> deferred
       ev <- assemble_repo_evidence(tree, pr)
@@ -257,13 +385,28 @@ run_cheap <- function(io, out_dir, roster_path, i, N, batch_size = TIER_D_BATCH)
     }
     scanned <- scanned + nrow(repos)
   }
+  failed_df <- if (length(failed)) do.call(rbind, failed) else .fetch_failed_frame()
   flagged_df <- if (length(flagged)) do.call(rbind, flagged) else .ai_empty_flagged()
   ev_df <- if (length(evrows)) do.call(rbind, evrows) else .ai_empty_ev()
   write_flagged_partial(file.path(out_dir, sprintf("vcs-ai-cheap-%d.db", i)), flagged_df, ev_df)
   dev_df <- if (length(dev_rows)) do.call(rbind, dev_rows) else .devtool_empty_shard()
-  write_dev_tooling_partial(file.path(out_dir, sprintf("vcs-dev-tooling-%d.db", i)), dev_df)
+  write_dev_tooling_partial(file.path(out_dir, sprintf("vcs-dev-tooling-%d.db", i)), dev_df, failed_df)
   message(sprintf("ai cheap shard %d/%d: %d flagged repos, %d evidence rows, %d dev-tooling rows",
                   i, N, nrow(flagged_df), nrow(ev_df), nrow(dev_df)))
+  message(sprintf("ai cheap shard %d/%d: %d repositories failed (contents %d), %d not read this week",
+                  i, N, length(unique(failed_df$repo_id)), sum(failed_df$query == "contents"),
+                  nrow(mine) - scanned))
+  if (bad_rbi_lines > 0L)
+    message(sprintf("ai cheap shard %d/%d: %d .Rbuildignore line(s) did not compile and were skipped",
+                    i, N, bad_rbi_lines))
+  n_contents <- sum(failed_df$query == "contents")
+  if (contents_shard_stops(n_contents, scanned)) {
+    first <- failed_df[failed_df$query == "contents", , drop = FALSE]
+    stop(sprintf(paste0("ai cheap shard %d/%d: the contents read failed for %d of %d repositories, ",
+                        "so the query itself is broken. First: %s. First message: %s"),
+                 i, N, n_contents, scanned, paste(utils::head(first$repo_id, 5L), collapse = ", "),
+                 first$error[1]), call. = FALSE)
+  }
 }
 
 # ---- gate -------------------------------------------------------------------
@@ -731,6 +874,8 @@ run_merge <- function(io, out_dir, parts_dir) {
   inv$ruleset_version <- AI_RULESET_VERSION
   DBI::dbExecute(con, "DELETE FROM vcs_ai_rule_inventory")
   DBI::dbWriteTable(con, "vcs_ai_rule_inventory", inv, append = TRUE)
+  DBI::dbExecute(con, "DELETE FROM vcs_dev_tooling_rules")
+  DBI::dbWriteTable(con, "vcs_dev_tooling_rules", dev_tooling_rules_table(), append = TRUE)
 
   # Rebuild the summary so ai_* rollups reflect the merged onsets. Non-AI columns come
   # from the seeded series_latest; descriptive + release facts carry forward from the
@@ -777,6 +922,16 @@ run_merge <- function(io, out_dir, parts_dir) {
   message(sprintf("ai merge: %d dev-tooling rows (%d incoming across %d shard(s))",
                   nrow(merged_dev), nrow(dev_df), length(dev_parts)))
 
+  fail_list <- lapply(dev_parts, read_scan_failures)
+  fails <- if (length(fail_list)) do.call(rbind, fail_list) else .fetch_failed_frame()
+  active_n <- tryCatch(DBI::dbGetQuery(con,
+    "SELECT COUNT(*) n FROM repos WHERE host = 'github' AND status = 'active'")$n[1],
+    error = function(e) NA_integer_)
+  message(sprintf("ai merge: %d repositories failed a read this week (contents %d) of %s on the roster",
+                  length(unique(fails$repo_id)), length(unique(fails$repo_id[fails$query == "contents"])),
+                  active_n))
+  failure_stop <- scan_failure_stop_message(fails, active_n)
+
   message(sprintf("ai merge: %d prior, %d incoming, %d reduced onset rows",
                   nrow(prior), nrow(incoming), nrow(reduced)))
   out <- publish(io, con, out_dir, tag = "current", source_kind = "live",
@@ -784,15 +939,14 @@ run_merge <- function(io, out_dir, parts_dir) {
 
   # Raised after the data is out, so the alarm costs a red build and not a
   # week of stale dev-tooling rows.
-  if (nrow(canary_unexplained) > 0) {
-    stop(sprintf(paste0("AI detection canary: %d channel(s) detected nothing on the whole roster ",
-                        "and are not recorded in AI_SILENT_CHANNELS_KNOWN: %s. ",
-                        "Either the rule is broken or the zero is real; record which, with a date."),
-                 nrow(canary_unexplained),
-                 paste(canary_unexplained$tier, canary_unexplained$tool,
-                       sep = "/", collapse = ", ")),
-         call. = FALSE)
-  }
+  canary_stop <- if (nrow(canary_unexplained) > 0)
+    sprintf(paste0("AI detection canary: %d channel(s) detected nothing on the whole roster ",
+                   "and are not recorded in AI_SILENT_CHANNELS_KNOWN: %s. ",
+                   "Either the rule is broken or the zero is real; record which, with a date."),
+            nrow(canary_unexplained),
+            paste(canary_unexplained$tier, canary_unexplained$tool, sep = "/", collapse = ", "))
+  stops <- c(failure_stop, canary_stop)
+  if (length(stops)) stop(paste(stops, collapse = " "), call. = FALSE)
   invisible(out)
 }
 
@@ -805,6 +959,11 @@ main <- function(mode, out_dir, io = NULL) {
     graphql        = default_io(token)$graphql,
     search_hit     = function(owner, name, query, delay = SEARCH_DELAY_S)
                        search_earliest_commit_hit(token, owner, name, query, delay),
+    sleep          = function(seconds) Sys.sleep(seconds),
+    cran_packages  = function() {
+      db <- tools::CRAN_package_db()
+      db[!duplicated(db$Package), c("Package", "Version")]
+    },
     release_exists = function() gh_release_exists(RELEASE_REPO),
     generation     = function() gh_release_generation(RELEASE_REPO),
     download       = function(pattern, dir) gh_release_download(RELEASE_REPO, pattern, dir),
@@ -812,6 +971,8 @@ main <- function(mode, out_dir, io = NULL) {
 
   if (mode == "enumerate") {
     run_enumerate_ai(io, out_dir)
+  } else if (mode == "canary") {
+    tree_query_canary(io)
   } else if (mode == "cheap") {
     i <- suppressWarnings(as.integer(Sys.getenv("VCS_SHARD_I", "0")))
     N <- suppressWarnings(as.integer(Sys.getenv("VCS_SHARD_N", "1")))
@@ -838,7 +999,7 @@ main <- function(mode, out_dir, io = NULL) {
     # repeated.
     retry_on_publish_conflict(io, function() run_merge(io, out_dir, Sys.getenv("VCS_PARTS", "parts")))
   } else {
-    stop("usage: ai_backfill.R [enumerate|cheap|gate|gate-incremental|deep|merge]")
+    stop("usage: ai_backfill.R [enumerate|canary|cheap|gate|gate-incremental|deep|merge]")
   }
 }
 

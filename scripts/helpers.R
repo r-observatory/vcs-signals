@@ -723,11 +723,15 @@ ensure_series_schema <- function(con) {
   dt_have <- tryCatch(DBI::dbGetQuery(con, "PRAGMA table_info(vcs_dev_tooling)")$name,
                       error = function(e) character(0))
   if (length(dt_have)) {
-    for (col in setdiff(dev_tooling_columns(), dt_have)) {
-      DBI::dbExecute(con, sprintf("ALTER TABLE vcs_dev_tooling ADD COLUMN %s %s",
-                                  col, if (identical(col, "readme_source")) "TEXT" else "INTEGER"))
+    types <- c(ruleset_version = "TEXT", dev_tooling_column_types())
+    for (col in setdiff(names(types), dt_have)) {
+      DBI::dbExecute(con, sprintf("ALTER TABLE vcs_dev_tooling ADD COLUMN %s %s", col, types[[col]]))
     }
   }
+  # What each vcs_dev_tooling column means, rebuilt from config by every AI merge.
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_dev_tooling_rules (
+    col TEXT NOT NULL, source TEXT NOT NULL, rule TEXT NOT NULL, ruleset_version TEXT NOT NULL,
+    PRIMARY KEY (col)) WITHOUT ROWID")
   # The rule inventory, republished on every merge. A tier's breadth is a fact
   # about the ruleset, and until now the viewer asserted it in prose: tier C
   # scans one pattern for one tool while tier D scans 19, so presenting them
@@ -1760,6 +1764,8 @@ summary_regressions <- function(prev_path, next_path, tol = 0.02) {
       vcs_ai_rule_inventory  = .regress_rule_inventory(pc, nc),
       vcs_ai_models          = .regress_ai_models(pc, nc, tol),
       repo_package_links     = .regress_package_links(pc, nc),
+      # Rebuilt from config each merge: a smaller rule set is a ruleset change, not a loss.
+      vcs_dev_tooling_rules  = character(0),
       .regress_row_count(t, pc, nc, tol)))
   }
 

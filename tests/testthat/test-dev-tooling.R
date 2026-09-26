@@ -80,7 +80,13 @@ test_that("classifier, empty helper, and DDL share one config-derived column set
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   DBI::dbExecute(con, dev_tooling_create_sql())
   expect_identical(DBI::dbListFields(con, "vcs_dev_tooling"),
-                   c("repo_id", "last_scanned", dev_tooling_columns()))
+                   c("repo_id", "last_scanned", "ruleset_version", dev_tooling_columns()))
+  info <- DBI::dbGetQuery(con, "PRAGMA table_info(vcs_dev_tooling)")
+  expect_identical(stats::setNames(info$type, info$name)[dev_tooling_columns()], dev_tooling_column_types())
+  expect_identical(vapply(.devtool_empty(), class, ""),
+                   ifelse(dev_tooling_column_types() == "TEXT", "character", "integer"))
+  row <- classify_dev_tooling(character(0), character(0))
+  expect_identical(vapply(row, class, ""), vapply(.devtool_empty(), class, ""))
   # WITHOUT ROWID is a deliberate departure; assert it survives in the stored DDL so the
   # merger (which copies the CREATE TABLE text verbatim) reproduces it downstream.
   sql <- DBI::dbGetQuery(con, "SELECT sql FROM sqlite_master WHERE name = 'vcs_dev_tooling'")$sql
@@ -92,7 +98,7 @@ test_that("ensure_series_schema creates vcs_dev_tooling with the config-derived 
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   expect_true(DBI::dbExistsTable(con, "vcs_dev_tooling"))
   expect_identical(DBI::dbListFields(con, "vcs_dev_tooling"),
-                   c("repo_id", "last_scanned", dev_tooling_columns()))
+                   c("repo_id", "last_scanned", "ruleset_version", dev_tooling_columns()))
 })
 
 test_that("ai-weekly.yml uploads and downloads the dev-tooling shards", {
@@ -135,4 +141,151 @@ test_that("skills a package ships are a practice, and skills used to build it ar
 test_that("a directory named skills anywhere else is not a shipped skill", {
   expect_equal(classify_dev_tooling(c("skills"), character(0))$has_agent_skills, 0L)
   expect_equal(classify_dev_tooling(c("dev/skills"), character(0))$has_agent_skills, 0L)
+})
+
+test_that("a published table gains every new column with its declared type", {
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  DBI::dbExecute(con, "CREATE TABLE vcs_dev_tooling (repo_id TEXT PRIMARY KEY, last_scanned TEXT, has_lintr INTEGER)")
+  ensure_series_schema(con)
+  info <- DBI::dbGetQuery(con, "PRAGMA table_info(vcs_dev_tooling)")
+  types <- stats::setNames(info$type, info$name)
+  expect_equal(types[["ruleset_version"]], "TEXT")
+  expect_identical(types[dev_tooling_columns()], dev_tooling_column_types())
+})
+
+test_that("the ruleset version names v3 and the day it landed", {
+  expect_match(DEV_TOOLING_RULESET_VERSION, "^v3 \\(\\d{4}-\\d{2}-\\d{2}\\)$")
+  for (d in DEV_TOOLING_DERIVED) {
+    expect_true(d$type %in% c("INTEGER", "TEXT"), info = d$col)
+    expect_true(d$source %in% c("tree", "graphql", "workflow_text", "derived"), info = d$col)
+    expect_true(nzchar(d$rule), info = d$col)
+  }
+  expect_false(any(duplicated(dev_tooling_columns())))
+})
+
+test_that("every subtree a rule names is one the contents query lists", {
+  for (m in DEV_TOOLING_MARKERS)
+    expect_identical(unfetched_rule_paths(m$paths, m$location %||% "root"), character(0), info = m$col)
+  for (paths in list(COC_TREE_PATHS, CONTRIBUTING_TREE_PATHS, PR_TEMPLATE_TREE_PATHS))
+    expect_identical(unfetched_rule_paths(paths, "both"), character(0))
+  # The retired litedown path is the case this check exists for.
+  expect_identical(unfetched_rule_paths(c("site/_litedown.yml", "docs/_litedown.yml"), "root"),
+                   "docs/_litedown.yml")
+})
+
+test_that("a rule path below a listed subtree's first level is reported, since only that level is listed", {
+  expect_identical(unfetched_rule_paths(c("inst/skills", "inst/skills/SKILL.md"), "root"),
+                   "inst/skills/SKILL.md")
+  expect_identical(unfetched_rule_paths(c("workflows/check.yml", "workflows/sub/x.yml"), "github"),
+                   "workflows/sub/x.yml")
+  expect_identical(unfetched_rule_paths("inst/skills/SKILL.md", "both"), "inst/skills/SKILL.md")
+})
+
+test_that("the community and pkgdown lists are the ones the analyzer shares", {
+  expect_identical(COC_TREE_PATHS, c("CODE_OF_CONDUCT.md", "CODE_OF_CONDUCT", "CODE_OF_CONDUCT.Rmd",
+    "CODE_OF_CONDUCT.rst", "code_of_conduct.md", "Code_of_conduct.md", "CODE-OF-CONDUCT.md", "CONDUCT.md"))
+  expect_identical(CONTRIBUTING_TREE_PATHS, c("CONTRIBUTING.md", "CONTRIBUTING", "CONTRIBUTING.Rmd",
+    "CONTRIBUTING.rst", "contributing.md", "Contributing.md", "CONTRIBUTING.MD"))
+  expect_identical(PR_TEMPLATE_TREE_PATHS, c("pull_request_template.md", "PULL_REQUEST_TEMPLATE.md",
+                                             "PULL_REQUEST_TEMPLATE"))
+  pk <- Find(function(m) m$col == "has_pkgdown", DEV_TOOLING_MARKERS)$paths
+  expect_setequal(pk, c(PKGDOWN_CONFIG_TREE_PATHS, "pkgdown"))
+})
+
+test_that("the v3 tree rules read what the repository holds", {
+  expect_equal(classify_dev_tooling(c("inst/_pkgdown.yml"), character(0))$has_pkgdown, 1L)
+  expect_equal(classify_dev_tooling(c("inst/_pkgdown.yaml"), character(0))$has_pkgdown, 1L)
+  expect_equal(classify_dev_tooling(c("docs/_litedown.yml"), character(0))$has_litedown, 0L)
+  expect_equal(classify_dev_tooling(c("issue_template.md"), character(0))$has_issue_template, 1L)
+  expect_equal(classify_dev_tooling(character(0), c("issue_template.md"))$has_issue_template, 1L)
+  expect_equal(classify_dev_tooling(c("ISSUE_TEMPLATE"), character(0))$has_issue_template, 1L)
+  expect_equal(classify_dev_tooling(c("tests"), character(0))$has_tests_dir, 1L)
+  expect_equal(classify_dev_tooling(c("jarl.toml"), character(0))$has_jarl, 1L)
+  expect_false("has_pr_template" %in% dev_tooling_marker_cols())
+})
+
+test_that("package_at_root says whether DESCRIPTION is at the root", {
+  expect_equal(classify_dev_tooling(c("DESCRIPTION"), character(0))$package_at_root, 1L)
+  expect_equal(classify_dev_tooling(c("pkg", "README.md"), character(0))$package_at_root, 0L)
+})
+
+test_that("Travis alone is told apart from Travis beside another CI system", {
+  alone <- classify_dev_tooling(c(".travis.yml"), character(0))
+  expect_equal(alone$ci_travis_only, 1L)
+  expect_equal(alone$has_ci, 1L)
+  both <- classify_dev_tooling(c(".travis.yml"), c("workflows"))
+  expect_equal(both$ci_travis_only, 0L)
+  expect_equal(both$has_ci, 1L)
+  expect_equal(classify_dev_tooling(c("DESCRIPTION"), character(0))$ci_travis_only, 0L)
+})
+
+test_that("Travis beside any CI system has_ci counts is not Travis alone", {
+  # has_ci reads every ci_ tree rule, so a new one must also clear ci_travis_only.
+  for (m in Filter(function(m) startsWith(m$col, "ci_") && m$col != "ci_travis", DEV_TOOLING_MARKERS)) {
+    other <- m$paths[[1]]
+    in_github <- identical(m$location %||% "root", "github")
+    row <- classify_dev_tooling(c(".travis.yml", if (!in_github) other),
+                                if (in_github) other else character(0))
+    expect_equal(row[[m$col]], 1L, info = m$col)
+    expect_equal(row$has_ci, 1L, info = m$col)
+    expect_equal(row$ci_travis_only, 0L, info = m$col)
+  }
+})
+
+test_that("the rules table states one rule per published column, from config", {
+  rules <- dev_tooling_rules_table("v3 (2026-09-27)")
+  expect_identical(rules$col, dev_tooling_columns())
+  expect_true(all(rules$source %in% c("tree", "graphql", "workflow_text", "derived")))
+  expect_true(all(nzchar(rules$rule)))
+  expect_true(all(rules$ruleset_version == "v3 (2026-09-27)"))
+  expect_equal(rules$rule[rules$col == "has_litedown"], "_litedown.yml|site/_litedown.yml at root")
+  expect_match(rules$rule[rules$col == "coc_source"], "CONDUCT.md", fixed = TRUE)
+  expect_false(any(grepl("\u2014", rules$rule, fixed = TRUE)))
+})
+
+test_that("without the contents read every column the read feeds is NA", {
+  r <- classify_dev_tooling(c("DESCRIPTION", ".Rbuildignore", "README.md"), c("workflows"))
+  read_fed <- vapply(Filter(function(d) d$source %in% c("graphql", "workflow_text"), DEV_TOOLING_DERIVED),
+                     function(d) d$col, "")
+  for (cn in c(read_fed, "rbuildignore_excluded", "pages_url", "site_generator",
+               "cran_version_at_scan", "repo_version_vs_cran",
+               "coc_source", "contributing_source", "pr_template_source"))
+    expect_true(is.na(r[[cn]]), info = cn)
+  expect_equal(r$package_at_root, 1L)
+})
+
+test_that("an older snapshot folds with a v3 shard and writes into an ALTERed table", {
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  v2 <- setdiff(dev_tooling_marker_cols(), c("has_tests_dir", "has_jarl"))
+  DBI::dbExecute(con, sprintf("CREATE TABLE vcs_dev_tooling (repo_id TEXT NOT NULL, last_scanned TEXT, %s,
+    readme_source TEXT, has_ci INTEGER, has_pr_template INTEGER, PRIMARY KEY (repo_id)) WITHOUT ROWID",
+    paste(v2, "INTEGER", collapse = ", ")))
+  DBI::dbExecute(con, "INSERT INTO vcs_dev_tooling (repo_id, last_scanned, has_lintr) VALUES ('github.com/a/old', '2026-09-13', 1)")
+  ensure_series_schema(con)
+  prior <- DBI::dbReadTable(con, "vcs_dev_tooling")
+  fresh <- classify_dev_tooling(c("DESCRIPTION"), character(0), repo = list(
+    name_with_owner = "b/new", coc_url = NA_character_, rbuildignore_text = NA_character_))
+  fresh$repo_id <- "github.com/b/new"; fresh$last_scanned <- "2026-09-27"
+  fresh$ruleset_version <- DEV_TOOLING_RULESET_VERSION
+  wd <- setwd(.repo_root); source(file.path(.repo_root, "scripts", "ai_backfill.R")); setwd(wd)
+  merged <- bind_dev_tooling(prior, fresh)
+  DBI::dbExecute(con, "DELETE FROM vcs_dev_tooling")
+  DBI::dbWriteTable(con, "vcs_dev_tooling", merged, append = TRUE)
+  got <- DBI::dbReadTable(con, "vcs_dev_tooling")
+  old <- got[got$repo_id == "github.com/a/old", , drop = FALSE]
+  expect_true(is.na(old$coc_source)); expect_true(is.na(old$ruleset_version)); expect_equal(old$has_lintr, 1L)
+  expect_equal(got$coc_source[got$repo_id == "github.com/b/new"], "none")
+  expect_equal(DBI::dbGetQuery(con, "SELECT typeof(coc_source) t FROM vcs_dev_tooling WHERE repo_id = 'github.com/b/new'")$t, "text")
+})
+
+test_that("a smaller rules table is a ruleset change, not a regression", {
+  mk <- function(n) {
+    p <- tempfile(fileext = ".db"); con <- DBI::dbConnect(RSQLite::SQLite(), p)
+    ensure_series_schema(con)
+    DBI::dbWriteTable(con, "vcs_dev_tooling_rules", utils::head(dev_tooling_rules_table(), n), append = TRUE)
+    DBI::dbDisconnect(con); p
+  }
+  expect_identical(summary_regressions(mk(60L), mk(10L)), character(0))
 })

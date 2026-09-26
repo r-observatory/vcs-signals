@@ -53,6 +53,7 @@ test_that("summary_integrity_core reports filename, bytes, sha256, tables, compl
     vcs_ai_signals      = 0L,
     vcs_ai_silent_channels = 0L,
     vcs_dev_tooling     = 0L,
+    vcs_dev_tooling_rules = 0L,
     vcs_signals_summary = 3L))
   expect_true(core$complete)
 })
@@ -158,6 +159,8 @@ test_that("every table the pipeline writes reaches the published summary with it
     VALUES ('B','replit','open','only the commit-author trailer remains','2026-08-01')")
   DBI::dbExecute(con, "INSERT INTO repo_package_links (repo_id, package, origin, first_seen, last_seen)
     VALUES ('github.com/o/gone','delisted','cran','2026-08-01','2026-08-21')")
+  DBI::dbExecute(con, "INSERT INTO vcs_dev_tooling_rules (col, source, rule, ruleset_version)
+    VALUES ('has_litedown','tree','_litedown.yml|site/_litedown.yml at root','v3 (2026-09-27)')")
 
   out <- tempfile("pub_"); dir.create(out)
   rel <- tempfile("rel_"); dir.create(rel)
@@ -173,6 +176,11 @@ test_that("every table the pipeline writes reaches the published summary with it
   expect_equal(DBI::dbGetQuery(scon, "SELECT family FROM vcs_ai_models")$family, "Opus")
   expect_equal(DBI::dbGetQuery(scon, "SELECT last_seen FROM repo_package_links")$last_seen,
                "2026-08-21")
+})
+
+test_that("the repository practices rules table follows the package links", {
+  at <- match("repo_package_links", SUMMARY_EXTRA_TABLES)
+  expect_identical(SUMMARY_EXTRA_TABLES[at + 1L], "vcs_dev_tooling_rules")
 })
 
 test_that("the declared list matches the tables the schema creates", {
@@ -729,6 +737,8 @@ test_that("a publish and a reseed keep the extra tables, both ways round", {
     VALUES ('R1','claude','Opus','4.8',12,1)")
   DBI::dbExecute(con, "INSERT INTO repo_package_links (repo_id, package, origin, first_seen, last_seen)
     VALUES ('github.com/o/gone','delisted','cran','2026-08-01','2026-08-21')")
+  DBI::dbExecute(con, "INSERT INTO vcs_dev_tooling_rules (col, source, rule, ruleset_version)
+    VALUES ('has_litedown','tree','_litedown.yml|site/_litedown.yml at root','v3 (2026-09-27)')")
 
   io <- local_release_io(remote)
   publish(io, con, out, "v1", "live", force_full = TRUE, base_generation = "")

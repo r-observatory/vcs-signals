@@ -35,8 +35,8 @@ classify_tree_markers <- function(root_entries, github_entries) {
 
 # ---- Development-tooling classifier (pure, no I/O) --------------------------
 # Parallel to classify_tree_markers, but the output shape is DIFFERENT: one WIDE row (one 0/1
-# INTEGER per DEV_TOOLING_MARKERS col, plus a readme_source enum and a has_ci rollup), not one
-# row per matched marker. The column set is derived from DEV_TOOLING_MARKERS so the classifier,
+# INTEGER per DEV_TOOLING_MARKERS col, plus the DEV_TOOLING_DERIVED columns), not one row per
+# match. The column set is derived from those two lists so the classifier,
 # the DDL (dev_tooling_create_sql), and the empty helper (.devtool_empty) cannot drift. This
 # reads DEV_TOOLING_MARKERS directly and does NOT route through ai_deliberate_markers(): that
 # ambient filter is AI-only, and ambient markers (.positai) ARE dev-tooling evidence.
@@ -44,29 +44,27 @@ classify_tree_markers <- function(root_entries, github_entries) {
 #' The flag column names, in DEV_TOOLING_MARKERS order. Config-derived.
 dev_tooling_marker_cols <- function() vapply(DEV_TOOLING_MARKERS, function(m) m$col, character(1))
 
-#' The full classifier output column order: the flag cols plus the two computed columns.
-dev_tooling_columns <- function()
-  c(dev_tooling_marker_cols(), "readme_source", "has_ci")
+#' The derived column names, in DEV_TOOLING_DERIVED order.
+dev_tooling_derived_cols <- function() vapply(DEV_TOOLING_DERIVED, function(d) d$col, character(1))
 
-#' Typed 0-row frame with the IDENTICAL column set/types classify_dev_tooling produces.
-.devtool_empty <- function() {
-  # Derived from dev_tooling_columns() rather than rebuilt from the marker list,
-  # so a computed column added there cannot leave this helper a column short.
-  # It already had: the vignette columns landed and this still returned the old
-  # shape, which the drift test caught.
-  int_cols <- setdiff(dev_tooling_columns(), "readme_source")
-  base <- setNames(replicate(length(int_cols), integer(0), simplify = FALSE), int_cols)
-  out <- do.call(data.frame, c(base, list(readme_source = character(0),
-                                          stringsAsFactors = FALSE)))
-  out[, dev_tooling_columns(), drop = FALSE]
+#' The full classifier output column order: the flag columns, then the derived ones.
+dev_tooling_columns <- function() c(dev_tooling_marker_cols(), dev_tooling_derived_cols())
+
+#' SQLite type of every column, in dev_tooling_columns() order; the DDL, ALTER and empty frame read it.
+dev_tooling_column_types <- function() {
+  c(stats::setNames(rep("INTEGER", length(DEV_TOOLING_MARKERS)), dev_tooling_marker_cols()),
+    stats::setNames(vapply(DEV_TOOLING_DERIVED, function(d) d$type, character(1)), dev_tooling_derived_cols()))
 }
 
-#' One wide presence row from a repo's root and .github tree entry names. Each flag is 1 if ANY
-#' of its paths is present in the location(s) it names (endsWith for match == "suffix", e.g.
-#' *.Rproj). readme_source is the authoring-source enum (qmd > rmd > md > none, root-only, since
-#' the .Rmd/.qmd variants are .Rbuildignore-stripped). has_ci is the OR of the ci_* systems.
-#' Pure: no network, no file reads. NULL inputs guard to character(0) like classify_tree_markers.
-classify_dev_tooling <- function(root_entries, github_entries) {
+#' Typed 0-row frame with the column set and types classify_dev_tooling produces.
+.devtool_empty <- function() {
+  cols <- lapply(dev_tooling_column_types(), function(t) if (identical(t, "TEXT")) character(0) else integer(0))
+  do.call(data.frame, c(cols, list(stringsAsFactors = FALSE, check.names = FALSE)))
+}
+
+#' One wide row from a repo's root and .github entry names, plus the parsed contents read
+#' when supplied (`repo`). A column whose source is not in the inputs is NA, never 0.
+classify_dev_tooling <- function(root_entries, github_entries, repo = NULL) {
   root_entries <- root_entries %||% character(0)
   github_entries <- github_entries %||% character(0)
   hit <- function(m) {
@@ -86,27 +84,33 @@ classify_dev_tooling <- function(root_entries, github_entries) {
     else if ("README.Rmd" %in% root_entries) "rmd"
     else if ("README.md" %in% root_entries) "md"
     else "none"
+  # Only the CI configuration flags, never the workflow-text ci_ columns.
   ci_cols <- grep("^ci_", names(flags), value = TRUE)
   row$has_ci <- as.integer(any(flags[ci_cols] == 1L))
 
-  row[, dev_tooling_columns(), drop = FALSE]
+  derived <- dev_tooling_derive(root_entries, github_entries, flags, repo)
+  for (cn in names(derived)) row[[cn]] <- derived[[cn]] %||% NA
+  types <- dev_tooling_column_types()
+  for (cn in names(types)) {
+    v <- if (cn %in% names(row)) row[[cn]] else NA
+    row[[cn]] <- if (identical(types[[cn]], "TEXT")) as.character(v) else as.integer(v)
+  }
+  out <- row[, dev_tooling_columns(), drop = FALSE]
+  attr(out, "rbuildignore_bad_lines") <- attr(derived, "rbuildignore_bad_lines") %||% 0L
+  out
 }
 
-#' The CREATE TABLE text for vcs_dev_tooling, built from the config so it matches the classifier
-#' column for column. WITHOUT ROWID is deliberate (no other table in this repo uses it): the hot
-#' path is a repo_id point lookup, so the table IS its own b-tree keyed on repo_id and a lookup
-#' is a single covering seek. Emitted inline because the merger copies this CREATE TABLE text
-#' verbatim from sqlite_master (SQLite strips IF NOT EXISTS but preserves WITHOUT ROWID, and the
-#' merger's rewrite reproduces a valid CREATE TABLE IF NOT EXISTS ... WITHOUT ROWID).
+#' The CREATE TABLE text for vcs_dev_tooling, typed from dev_tooling_column_types(). WITHOUT
+#' ROWID because the hot path is a repo_id point lookup; the merger copies this text verbatim.
 dev_tooling_create_sql <- function() {
-  marker_ddl <- paste(sprintf("    %s INTEGER", dev_tooling_marker_cols()), collapse = ",\n")
+  types <- dev_tooling_column_types()
+  ddl <- paste(sprintf("    %s %s", names(types), types), collapse = ",\n")
   sprintf("CREATE TABLE IF NOT EXISTS vcs_dev_tooling (
     repo_id TEXT NOT NULL,
     last_scanned TEXT,
+    ruleset_version TEXT,
 %s,
-    readme_source TEXT,
-    has_ci INTEGER,
-    PRIMARY KEY (repo_id)) WITHOUT ROWID", marker_ddl)
+    PRIMARY KEY (repo_id)) WITHOUT ROWID", ddl)
 }
 
 #' The real repository path for a Tier-D config marker's entry name. AI_MARKERS records the

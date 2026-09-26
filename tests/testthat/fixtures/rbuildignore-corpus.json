@@ -1,0 +1,1202 @@
+[
+  {
+    "repo_id": "github.com/accio/bioqc",
+    "text": "^Meta$\n^doc$\n.git\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.travis\\.yml$\n^Makefile$\n^coverage\\.txt$\n^coverage\\.r$\n^codecov\\.yml$\n^\\.github$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n"
+  },
+  {
+    "repo_id": "github.com/adamlilith/enmsdmx",
+    "text": "^CONDUCT\\.md$\n^\\.travis\\.yml$\n^README-.*\\.png$\n^cran-comments\\.md$\n^LICENSE.md\n^enmSdmX.png\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.github\n^\\.github$\n^vignettes_compiled$\n^enmSdmX_workspace.code-workspace\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^doc$\n^Meta$\n"
+  },
+  {
+    "repo_id": "github.com/afialkowski/simmulticorrdata",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.Rmd$\n^README-.*\\.png$\n^cran-comments\\.md$\n^cran-comments\\.Rmd$\n^tests$\n^revdep$\n"
+  },
+  {
+    "repo_id": "github.com/azure/azurestor",
+    "text": "^misc$\n^\\.vs$\n\\.sln$\n\\.Rproj$\n\\.Rxproj$\n^\\.Rproj\\.user$\nCONTRIBUTING.md\ndrat.sh\n.travis.yml\n^LICENSE\\.md$\n^__azurite\n^__blobstorage__\n^__queuestorage__\n^\\.github$\n^SECURITY\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/boettiger-lab/sarsop",
+    "text": "LICENSE\n.DS_Store\n.travis.yml\n.git\n.gitignore\n.Rhistory\n^.*\\.Rproj$\n^\\.Rproj\\.user$\nwindows\nREADME.md\n^src/.*\\.a$\n^src/.*\\.o$\n^src/.*\\.so$\n^src/.*\\.dll$\n^src/appl-0.96/Makefile\n^src/polgraph$\n^src/pomdpconvert$\n^src/pomdpeval$\n^src/pomdpsim$\n^src/pomdpsol$\n^windows\n^inst/bin$\n^\\.travis\\.yml$\n^inst/notebook\n^inst/doc/*\\.pdf\ninst/doc/*.md\ninst/doc/*.png\n^appveyor\\.yml$\n^README\\.Rmd$\n^README-.*\\.png$\n^codecov\\.yml$\n^docs\n^articles$\n^\\.github$\n^out\\.policy$\n^cran-comments\\.md$\n^CRAN-RELEASE$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/causalfragility-lab/aigovernance",
+    "text": "^data-raw$\n^LICENSE\\.md$\n^\\.Rbuildignore$\n^cran-comments\\.md$\n^\\.gitignore$\n^AIGovernance\\.Rproj$\n^\\.Rproj\\.user$\n^\\.github$\n"
+  },
+  {
+    "repo_id": "github.com/cboettig/roxigraph",
+    "text": "^roxigraph\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.Rmd$\n^LICENSE\\.md$\n^\\.github$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.vscode$\n^\\.claude$\n^roxigraph_.*\\.tar\\.gz$\n^roxigraph\\.Rcheck$\n^src/\\.cargo$\n^src/rust/vendor$\n^src/rust/target$\n^src/Makevars$\n^src/Makevars\\.win$\n^CRAN-SUBMISSION$\n^cran-comments\\.md$\n^doc$\n^Meta$\n"
+  },
+  {
+    "repo_id": "github.com/centerforstatistics-ugent/reconsi",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.md$\n^README\\.Rmd$\n^README_figs$\n"
+  },
+  {
+    "repo_id": "github.com/charlescoverdale/obr",
+    "text": "^LICENSE\\.md$\n^cran-comments\\.md$\n^\\.github$\n^CRAN-SUBMISSION$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^V0_3_PLAN\\.md$\n^llms.*\\.txt$\n^CITATION\\.cff$\n"
+  },
+  {
+    "repo_id": "github.com/cherylisabella/widr",
+    "text": "^data-raw$\n^README\\.Rmd$\n^\\.git$\n^\\.gitignore$\n^\\.github$\n^codecov\\.yml$\n^\\.Rproj\\.user$\n^.*\\.Rproj$\n^CRAN-SUBMISSION$\n^cran-comments\\.md$\n^LICENSE\\.md$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^CONTRIBUTING\\.md$"
+  },
+  {
+    "repo_id": "github.com/choi-phd/maat",
+    "text": "^\\.vscode$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^cran-comments\\.md$\n^readme\\.md$\n^readme\\.Rmd$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.github$\n^memo\\.txt$\n"
+  },
+  {
+    "repo_id": "github.com/cjbarrie/academictwitter",
+    "text": "^twitterv2r\\.Rproj$\n^\\.Rproj\\.user$\ntest.R\ndata\\*.*\nincludes\\*.*\n.Rbuildignore\n^LICENSE\\.md$\n.DS_Store\n.github\ntwittterv2r.Rproj\npaper.bib\npaper.md\ndemo.R\ncran-comments.md\n^CRAN-RELEASE$\n^CODE_OF_CONDUCT\\.md$\n^\\.github$\n^tests/testthat/api\\.twitter\\.com/\n^tests/testthat/storage\\.googleapis\\.com/\n^tests/testthat/_snap\n^tests/testdata/.+\\.RDS\n^tests/testdata/hk\n^tests/testdata/reuter\n^codecov\\.yml$\n^doc$\n^Meta$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/ckntav/rchea3",
+    "text": "^rChEA3\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^README\\.Rmd$\n^data-raw$\n^cran-comments\\.md$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.github$\n^CRAN-SUBMISSION$\n^\\.claude$\n"
+  },
+  {
+    "repo_id": "github.com/cmmr/jobqueue",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^_pkgdown\\.yml$\n^docs$\n^notests$\n^pkgdown$\n^\\.github$\n^codecov\\.yml$\n^doc$\n^logo$\n^Meta$\n^LICENSE\\.md\n^paper\\.md\n^Dockerfile\n^docker\\.txt$\n^cran-comments\\.md$\n^CODE_OF_CONDUCT\\.md$\n^CRAN-SUBMISSION$\n^install\\.sh$\n"
+  },
+  {
+    "repo_id": "github.com/cuiweig/survinger",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^README\\.Rmd$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.github$\n^data-raw$\n^\\.lintr$\n^cran-comments\\.md$\n^doc$\n^Meta$\n^CONTRIBUTING\\.md$\n^CODE_OF_CONDUCT\\.md$\n^codemeta\\.json$\n"
+  },
+  {
+    "repo_id": "github.com/decktools/votesmart",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^data-raw$\n^LICENSE\\.md$\n^README\\.Rmd$\n^\\.travis\\.yml$\n^CODE_OF_CONDUCT\\.md$\n^codecov\\.yml$\n^\\.covrignore$\n^\\.github$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^cran-comments\\.md$\n^CRAN-RELEASE$\n.github/workflows/*\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/dusadrian/ddiwr",
+    "text": "^DDIwR\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^README\\.Rmd$\n^README\\.md$\n^\\.travis\\.yml$\n^images$\n^instructiuni\\.txt$\n^TODO\\.txt$\n^\\.github$\n^src/Makevars$\n^src/.+\\.o$\n^src/.+\\.so$\n^DDIwR\\.Rcheck$\n^\\.\\.Rcheck$\n^\\.clangd$\n^\\.vscode$\n^tools/build-cran-source[.]R$\n^configure[.]log$\n^openmp[.]log$\n^AGENTS.md$\n"
+  },
+  {
+    "repo_id": "github.com/egpivo/spatpca",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n.travis.yml\n^\\.github$\n^codecov\\.yml$\n^.*\\.gcno$\n^NEWS$\nLICENSE\n\\.github\n"
+  },
+  {
+    "repo_id": "github.com/emilhvitfeldt/emoji",
+    "text": "^emoji\\.Rproj$\n^\\.Rproj\\.user$\n^data-raw$\n^LICENSE\\.md$\n^\\.github$\n^README\\.Rmd$\n^CODE_OF_CONDUCT\\.md$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^cran-comments\\.md$\n^CRAN-RELEASE$\n^codecov\\.yml$\n^CRAN-SUBMISSION$\n^revdep$\n"
+  },
+  {
+    "repo_id": "github.com/epiviz/epivizrserver",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\ninst/doc/epivizrServer.R*$\n^update_remotes.sh\n"
+  },
+  {
+    "repo_id": "github.com/etiennebacher/conductor",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^srcjs$\n^node_modules$\n^package\\.json$\n^package-lock\\.json$\n^webpack\\.dev\\.js$\n^webpack\\.prod\\.js$\n^webpack\\.common\\.js$\n^LICENSE\\.md$\n^docs$\n^\\.github$\ntest.R\nhex-conductor.png\n_\\.new\\.png$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^CODE_OF_CONDUCT\\.md$\n^altdoc$\n^vignettes$\n"
+  },
+  {
+    "repo_id": "github.com/eu-ecdc/episignaldetection",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\ntest\nLICENSE.md\n"
+  },
+  {
+    "repo_id": "github.com/evolecolgroup/tidysdm",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\nci_dependencies\n.circleci\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.github$\n^cran-comments.md\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^codecov.yml\n^data-raw$\n.covrignore\n^doc$\n^Meta$\npkgdown/\n.lintr\n^\\.positai$\n^\\.claude$\n"
+  },
+  {
+    "repo_id": "github.com/fbartos/robtt",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^do-not-share$\n^models$\n^tests/results$\n^tests/testthat/_snaps$\ntests/testthat/test-1-fit.R\ntests/testthat/test-2-methods.R\ntests/testthat/test-3-plots.R\n^..Rcheck\n^.*\\.o\n^docs$\n^doc$\n^Meta$\n^RoBTT.Rcheck$\nREADME.Rmd\n^\\.github$\n^codecov\\.yml$"
+  },
+  {
+    "repo_id": "github.com/fishr-core-team/rfishbc",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n\n^\\.Rhistory\n^\\.gitignore$\n^_pkgdown\\.yml\n^README\\.md\n\n^\\.github\n^pkgdown\n^vignettes\n^docs\n^data-raw$\n^cran-comments\nCODE_OF_CONDUCT.md\n\n^man/figures/logo\\.png\n^inst/sticker\n^tests/Validating\n^tests/testthat/Rplots*\n^\\.github$\n^codecov\\.yml$\n"
+  },
+  {
+    "repo_id": "github.com/frankkramer-lab/rcx",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^R/old/*\\.R$\n^man-roxygen$\n^man-roxygen-examples$\n^data-raw$\n^LICENSE\\.md$\n\n"
+  },
+  {
+    "repo_id": "github.com/gabrielslpires/ggdaynight",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^\\.github$\n"
+  },
+  {
+    "repo_id": "github.com/gunhanb/metastan",
+    "text": "^MetaStan\\.Rproj$\r\n^\\.Rproj\\.user$\r\n^\\.travis\\.yml$\r\n^data-raw$\r\ncran-comments.md\r\nREADME.md\r\n^\\.travis\\.yml$\r\n^.*\\.Rproj$\r\n^\\.Rproj\\.user$\r\n\\.github/*\r\n^docs$\r\ntests/testthat/For_paper.R\r\n\r\n^_pkgdown\\.yml$\r\n^pkgdown$\r\n^doc$\r\n^Meta$\r\n"
+  },
+  {
+    "repo_id": "github.com/gwpcor/gwpcormapper",
+    "text": "^LICENSE$\n^data-raw$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.idea$\n^\\.env$\n^\\.dockerignore$\n^\\.github$\n^\\.gitignore$\n^\\.Renviron$\n^\\.gitattributes$\n^Dockerfile$\n^dev$\n^README\\.Rmd$\n^README\\.md$\n^CODE_OF_CONDUCT\\.md$\n^doc$\n^Meta$\n^shiny-server\\.conf$\n^shiny-server\\.sh$\n^vignettes$\n"
+  },
+  {
+    "repo_id": "github.com/harriet-mason/ggdibbler",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^doc$\n^Meta$\ndata-raw\n_pkgdown.yml\ndocs\nREADME.qmd\n^codecov\\.yml$\n^\\.github$\ncran-comments.md\nREADME.md\nCODE_OF_CONDUCT.md\n^CRAN-RELEASE$\n^CRAN-SUBMISSION$\nhexsticker/*\nhexfile.png\npkgdown\n^README\\.Rmd$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\nREADME_files\n^cran-comments\\.md$\n^\\.positai$\n^\\.claude$\n"
+  },
+  {
+    "repo_id": "github.com/helgasoft/amapro",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.\\.Rcheck$\n^doc$\n^Meta$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^LICENSE\\.md$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.github$\n"
+  },
+  {
+    "repo_id": "github.com/hfshr/jqbr",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^README\\.Rmd$\n^jqbr\\.Rproj$\n^\\.github$\n^srcjs$\n^node_modules$\n^package\\.json$\n^package-lock\\.json$\n^webpack\\.dev\\.js$\n^webpack\\.prod\\.js$\n^webpack\\.common\\.js$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.lintr$\n^.devcontainer\n^cran-comments\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/hugheylab/tipa",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.md$\n^_pkgdown\\.yml$\n^docs$\n^\\.github$\n^data-raw$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/hussein-mahfouz/flowcluster",
+    "text": "^\\.github$\n^flowcluster\\.Rproj$\n^LICENSE\\.md$\n^README\\.Rmd$\n^README\\.qmd$\n^README_files$\n^bibliography\\.bib$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.Rproj\\.user$\n^\\.data-raw$\n^\\.Rhistory$\n^data-raw$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/inzightvit/inzightmr",
+    "text": "^Makefile$\n^.*\\.md$\n^todo$\n^revdep$\n^\\.travis\\.yml$\n^cran-comments\\.md$\n^appveyor\\.yml$\n^codecov\\.yml$\n^CRAN-RELEASE$\n^\\.github$\n^\\.git$\n^docs$\n^README\\.Rmd$\n^wordlist$\n^_pkgdown\\.yml$\n"
+  },
+  {
+    "repo_id": "github.com/ipumin/primirtss",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.md$\n^NEWS\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/janmarvin/openxlsx2",
+    "text": "# R project files\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n\n# Documentation files\n^docs$\n^pkgdown$\n_pkgdown.yml\nREADME.Rmd\n\n# Configuration files\n^\\.github$\n^\\.vscode$\ncodecov.yml\n.lintr\n.covrignore\n\n# Temporary files\n.DS_Store\n\\~\\$.*\\.[a-z]+$\n^inst/img$\nvignettes/img/worksheet_styling.jpg\n\n# Test files\n^tests/testthat/_snaps$\n^tests/testthat/testfiles$\n"
+  },
+  {
+    "repo_id": "github.com/jaredlander/resumer",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^packrat/\n^\\.Rprofile$\n^README\\.Rmd$\n^README-.*\\.png$\n^prep/\n^cran-comments\\.md$\n^CRAN-RELEASE$\n^\\.github$\n"
+  },
+  {
+    "repo_id": "github.com/javenrflo/picr",
+    "text": "^picR\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.Rmd$\n^LICENSE\\.md$\n^\\.github$\n^revdep$\n^cran-comments\\.md\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/jbryer/multilevelpsa",
+    "text": "^\\.Rproj\\.user$\n^.*\\.Rproj$\n.gitignore\nExclude\nmultilevelPSA.dev.R\npisa.dataprep.R\nPoster\nTables\nFigures\nPaper\nR/new\nJSSstyle\ncran-comments.md\n.travis.yml\nREADME.md\nbuild.R\n.github\nREADME.Rmd\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/jianhong/annolinker",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n.github\n_pkgdown.yml\nreadme.md\n"
+  },
+  {
+    "repo_id": "github.com/jmotif/jmotif-r",
+    "text": "^\\.git\n^\\.github\n^\\.vscode\n^\\.cursor\n^\\.claude\n^\\.DS_Store\n^audit-report\\.html\n^AUDIT\\.html\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.travis\\.yml$\n^\\.Rhistory$\n.Rprofile\ninst/site\ninst/test_data\n^\\.lintr$\n^cran-comments.md$\n^CRAN-RELEASE$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/johnsonandjohnson/raccess",
+    "text": "^rAccess\\.Rproj$\n^\\.Rproj\\.user$\nLICENSE\n^LICENSE\\.md$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^data$\n^_deploy\\.R$\n^r_access\\.Rproj$\n^rsconnect$\n^lint_results\\.txt$\n^\\.github$\n^badges$\n"
+  },
+  {
+    "repo_id": "github.com/jonasrieger/ldaprototype",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\nignore\nLICENSE\nCODE_OF_CONDUCT.md\npaper\n^\\.travis\\.yml$\n^appveyor\\.yml$\n^\\.github$\nshim_package.sh\n"
+  },
+  {
+    "repo_id": "github.com/julia-dyck/egocor",
+    "text": "^.*\\.Rproj$\r\n^\\.Rproj\\.user$\r\n^\\.github$\r\n^.*\\.pdf$\r\nREADME.md\r\nREADME.Rmd\r\nmanual_creation_for_RPackages.R\r\nmake_sticker.R\r\nsticker_ChatGPT_Image2026-09-17.png\r\n"
+  },
+  {
+    "repo_id": "github.com/juliocollazos64/mochita",
+    "text": "^mochita\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^README\\.Rmd$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/junhuili1017/stepreg",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^doc$\n^Meta$\n"
+  },
+  {
+    "repo_id": "github.com/kamapu/yamlme",
+    "text": "^\\.dbeaver$\n^\\.git$\n^\\.github$\n^\\.settings$\n^\\.gitignore$\n^\\.project$\n^NEWS\\.md$\n^README\\.md$\n^README\\.Rmd$\n^data-raw$\n^build-pkg$\n^examples$\n^lab$\n^LICENSE$\n^codecov\\.yml$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^tests$\n"
+  },
+  {
+    "repo_id": "github.com/kingjms1/gp_zinb_r",
+    "text": "^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.github$\n^experiments$\n^.lintr$\n^not_package$\n^examples$\n^tmp$\n^ZINB\\.GP_.*\\.tar\\.gz$\n^ZINB\\.GP\\.Rcheck$\n^cran-comments\\.md$\n^\\..*\n^doc$\n^Meta$\n"
+  },
+  {
+    "repo_id": "github.com/lhzmix/mpem",
+    "text": "^mpem\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.Rmd$\n^cran-comments\\.md$\n^LICENSE\\.md$\n^\\.github$\n"
+  },
+  {
+    "repo_id": "github.com/lifewatch/sdmpredictors",
+    "text": "^CRAN-RELEASE$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^data-raw$\n^.travis.yml$\n^LICENSE.md$\n^TODO.md$\n^\\.git$\n^tests/tmp_load$\n^tests/data$\n^cran-comments.md\n^\\.github$\n^doc$\n^Meta$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/martin3141/fmriqa",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^cran-comments\\.md$\n^README\\.md$\n^README\\.Rmd$\n^.*\\.png$\n^\\.travis\\.yml$\n^appveyor\\.yml$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/mattwarkentin/fidelius",
+    "text": "^LICENSE\\.md$\n^CODE_OF_CONDUCT\\.md$\n^\\.github$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\nREADME.Rmd\ndocs/\n_pkgdown.yml\ninst/examples\n^cran-comments\\.md$\n^CRAN-RELEASE$\n"
+  },
+  {
+    "repo_id": "github.com/merck/boxly",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^_pkgdown\\.yml$\n^pkgdown$\n^docs$\n^LICENSE\\.md$\n^LICENSES_THIRD_PARTY$\n^\\.github$\n^boxly\\.Rcheck$\n^boxly.*\\.tar\\.gz$\n^boxly.*\\.tgz$\n^codecov\\.yml$\n\n^vignettes/design-pattern.Rmd$\n^vignettes/boxly.Rmd$\n"
+  },
+  {
+    "repo_id": "github.com/modal-inria/cfda",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\nREADME.md\n.gitignore\n^codecov\\.yml$\n^\\.github$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\nscripts\nCITATION.cff"
+  },
+  {
+    "repo_id": "github.com/mooresm/serrsbayes",
+    "text": "^.*\\.Rproj$\n^.travis.yml$\n^\\.Rproj\\.user$\n^\\.git\n^cran-comments.md\n^cran-comments.html\n^NEWS.html\n^README.Rmd\n^vignettes/jss.bst\n^vignettes/jss.cls\n^vignettes/refs.bib.bak\n^vignettes/refs.bib.sav\n^vignettes/Figure 2$\n^Figure 2$\n^docs$\n^CRAN-RELEASE$\n"
+  },
+  {
+    "repo_id": "github.com/mrcieu/ieugwasr",
+    "text": "^LICENSE\\.md$\n^mrbase\\.oauth$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.github$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^codecov\\.yml$\n^ieugwasr_oauth$\n^\\.positai$\n^\\.claude$\n^justfile$\n"
+  },
+  {
+    "repo_id": "github.com/mtorchiano/effsize",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^spikes\n^bugs\n^paper\n^reference\n^reverse\n^vignettes_draft\n^Performance\n^README.md$\n^.git\\.*$\n^.travis.yml\n^LICENSE$\n"
+  },
+  {
+    "repo_id": "github.com/muhammedalkhalaf/xtcspqardl",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.Rmd$\n^LICENSE\\.md$\n^\\.github$\n^codecov\\.yml$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.lintr$\n^cran-comments\\.md$\n^build_check\\.R$\n^\\.gitignore$\n\n^data-raw$\n"
+  },
+  {
+    "repo_id": "github.com/naidantu/fcirt",
+    "text": "^fcirt\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.Rmd$\n^\\.travis\\.yml$\n^CRAN-SUBMISSION$\n^cran-comments\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/ncss-tech/sharpshootr",
+    "text": "^renv$\n^renv\\.lock$\n.travis.yml\n.git\nREADME.md\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^docs$\n^misc$\n^\\.github$\n^CITATION\\.cff$\n^README\\.Rmd$\n^man/figures$\n^revdep$\n^CRAN-SUBMISSION$\n^cran-comments\\.md$\n^doc$\n^Meta$\n"
+  },
+  {
+    "repo_id": "github.com/nik01010/openbanker",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^Makefile$\n^Jenkinsfile$\n^\\.lintr$\n^\\.travis\\.yml$\n^codecov\\.yml$\n^LICENSE\\.md$\n^cran-comments\\.md$\n^\\.github$\n^doc$\n^Meta$\n"
+  },
+  {
+    "repo_id": "github.com/nowosad/colorblindcheck",
+    "text": "^README\\.Rmd$\n^\\.travis\\.yml$\n^LICENSE\\.md$\n^colorblindcheck\\.Rproj$\n^\\.Rproj\\.user$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^data-raw$\n^vignettes/articles$\n^codecov\\.yml$\n^codemeta\\.json$\n^\\.github$\n"
+  },
+  {
+    "repo_id": "github.com/oswaldogressani/epilps",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.Rmd$\n^man/figures$\n^README_files\n^cran-comments\\.md$\n^LICENSE$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/paulesantos/peruocc",
+    "text": "^\\.Rproj\\.user$\n^data$\n^results$\n^config$\n^scripts$\n^main\\.R$\n^peruocc\\.Rproj$\n^renv$\n^renv\\.lock$\n^\\.gitignore$\n^codecov\\.yml$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.github$\n^LICENSE\\.md$\n^README\\.Rmd$\n^README\\.html$\n^peruocc-output$\n^peruocc$\n^Rplots\\.pdf$\n^vignettes/peruocc-output$\n^\\.agents$\n^cran-comments\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/pharmaverse/ggsurvfit",
+    "text": "^ggsurvfit\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^README\\.Rmd$\n^cran-comments\\.md$\n^codecov\\.yml$\n^\\.github$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^data-raw$\n.covrignore\ncodemeta.json\n^CRAN-SUBMISSION$\n^vignettes/articles$\n^revdep$\n^\\.DS_Store$\n.DS_Store\n^AGENTS\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/philaris/afmpar",
+    "text": "^.*\\.Rproj$\r\n^\\.Rproj\\.user$\r\n^LICENSE\\.txt$\r\n^Jenkinsfile$\r\n^\\.travis\\.yml$\r\n^\\.circleci$\r\n\r\n"
+  },
+  {
+    "repo_id": "github.com/probaverse/probaverse",
+    "text": "^probaverse\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^README\\.Rmd$\n^\\.github$\n^CODE_OF_CONDUCT\\.md$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^codemeta\\.json$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/qlands/formshare-r-package",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/r-lib/vctrs",
+    "text": "^CRAN-RELEASE$\n^cran-comments\\.md$\n^bench$\n^docs$\n^_pkgdown\\.yml$\n^codecov\\.yml$\n^\\.travis\\.yml$\n^README\\.Rmd$\n^man/figures/*\\.graffle$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^TAGS$\n^revdep$\n^revdep-all$\n^\\.github$\n^man/faq/.*\\.html\n^man/faq/.*/.*\\.html\n^LICENSE\\.md$\n^\\.projectile$\n^src/\\.clang_complete$\n^\\.clang-format$\n\\.clangd$\n^compile_commands\\.json$\n^compile_flags\\.txt$\n^\\.dir-locals\\.el$\n^\\.cache$\n^launch\\.json$\n^\\.vscode$\n^CRAN-SUBMISSION$\n^pkgdown$\n^[.]?air[.]toml$\n^\\.git-blame-ignore-revs$\n^\\.claude$\n^dev-notes$\n"
+  },
+  {
+    "repo_id": "github.com/r-spatial/qgisprocess",
+    "text": "^renv$\n^renv\\.lock$\n^.*\\.Rproj$\n^CITATION\\.cff$\n^CODE_OF_CONDUCT\\.md$\n^CONTRIBUTING\\.md$\n^Dockerfile$\n^LICENSE.md$\n^LICENSE\\.md$\n^README\\.Rmd$\n^\\.Rproj\\.user$\n^\\.github$\n^\\.httr-oauth$\n^\\.zenodo\\.json$\n^_pkgdown.yml$\n^_pkgdown\\.yml$\n^checklist.yml$\n^codecov\\.yml$\n^cran-comments\\.md$\n^data-raw$\n^docs$\n^man-roxygen$\n^misc$\n^pkgdown$\n^qgisprocess\\.Rproj$\n^CRAN-SUBMISSION$\n^revdep$\n^codemeta\\.json$\n"
+  },
+  {
+    "repo_id": "github.com/ramiromagno/batsch",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^data-raw$\n^README\\.Rmd$\n^CODE_OF_CONDUCT\\.md$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^\\.github$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n"
+  },
+  {
+    "repo_id": "github.com/rgyoung6/dbtc",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n"
+  },
+  {
+    "repo_id": "github.com/riatelab/planisphere",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\nLICENSE\n^doc$\n^Meta$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^CITATION\\.cff$\n^codemeta\\.json$\n"
+  },
+  {
+    "repo_id": "github.com/robeltakele/aquabeher",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^README\\.Rmd$\n^doc$\n^Meta$\n^_pkgdown\\.yml$\n^docs$\n^inst\\doc$\n^pkgdown$\n^\\.github$\n^\\.git$\n^Makefile$\n^Jenkinsfile$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n\n"
+  },
+  {
+    "repo_id": "github.com/romankyrychenko/telegramr",
+    "text": "^\\.env$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^\\.github$\n^\\.claude$\n^\\.idea$\n^readthedocs$\n^run_tests\\.R$\n^run_covr\\.R$\n^run_covr_report\\.R$\n^test_session[0-9]*$\n^test_session$\n^test_session2$\n^1$\n^my_session$\n\\.DS_Store$\n^\\.lintr$\n.*\\.session\\.rds$\n^_pkgdown\\.yml$\n^CITATION\\.cff$\n^docs$\n^pkgdown$\n^doc$\n^Meta$\n^scripts$\n^downloads$\n^load_old\\.R$\n^logo\\.R$\n^prmpt$\n^telegramR_sticker\\.png$\n^telegramR_init_trace\\.log$\n^covr_.*\\.csv$\n^unique_channels\\.rds$\n^ze\\.csv$\n^pechalbeda.*\\.csv$\n^ukrainian-.*\\.udpipe$\n^vignette_session\\.rds$\ncran-comments.md\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/ropensci/rotl",
+    "text": "^CRAN-RELEASE$\n^pkgdown$\n^_pkgdown\\.yml$\n^docs$\n^\\.travis\\.yml$\n^appveyor\\.yml$\n^README\\.rmd$\n^README\\.html$\nREADME_files/\nfigure/\ntmp/\n^CONDUCT\\.md$\n^cran-comments\\.md$\n^.projectile$\nrevdep/\n^codemeta\\.json$\n^tic.R$\n^.pre-commit-config.yaml$\n^\\.github$\n^CRAN-SUBMISSION$\n^vignettes/make-vignettes.R$\n^doc$\n^Meta$\n"
+  },
+  {
+    "repo_id": "github.com/ropensci/wikitaxa",
+    "text": ".gitignore\n^Makefile$\n.travis.yml\nman-roxygen\n^.*\\.Rproj$\n^\\.Rproj\\.user$\nCONTRIBUTING.md\nREADME.html\nREADME.Rmd\ninst/stuff/\nvignettes/taxize_vignette.md\nvignettes/taxize_infotable.md\nvignettes/margins.sty\nvignettes/cache/\n^appveyor\\.yml$\n^CODE_OF_CONDUCT\\.md$\n^cran-comments\\.md$\n^revdep$\n.github\ndocs\nappveyor.yml\n^codemeta\\.json$\nvcr.log\ntests/testthat/vcr.log\n^\\.github$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/rstudio/shinytest",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^Makefile$\n^README.Rmd$\n^docs$\n^_pkgdown\\.yml$\n^vignettes$\n^pkgdown$\n^\\.github$\n^revdep$\n^cran-comments\\.md$\n^CRAN-RELEASE$\n"
+  },
+  {
+    "repo_id": "github.com/samuel-marsh/sccustomize",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^vignettes$\n^index\\.md$\n.git\n^inst$\n^\\.github$\nvignettes/*.orig$\n^vignettes$\n^index\\.Rmd$\n^README\\.Rmd$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^data-raw$\n^\\.positai$\n^\\.claude$\n"
+  },
+  {
+    "repo_id": "github.com/sistm/vici",
+    "text": "^renv$\n^renv\\.lock$\n^LICENSE\\.md$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^data-raw$\ndev_history.R\n^dev$\n$run_dev.*\n^README\\.Rmd$\n^\\.travis\\.yml$\n^appveyor\\.yml$\n^cran-comments\\.md$\n^\\.github$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/spsanderson/tidydensity",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^README\\.Rmd$\n^README-.*\\.png$\n^_pkgdown\\.yml$\n^docs$\n^doc$\n^pkgdown$\n^cran-comments\\.md$\n^CRAN-RELEASE$\n^.github$\n^CODE_OF_CONDUCT\\.md$\n^revdep$\nimg\n^logo\\.png$\n^index\\.Rmd$\n^Meta$\n^CRAN-SUBMISSION$\n^CONTRIBUTING\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/sstoeckl/crypto2",
+    "text": "^CRAN-RELEASE$\n^.*\\.Rproj$\n^.*\\.RData$\n^.*\\.Rhistory$\n^.*\\.tar.gz$\n^\\.Rproj\\.user$\n^README.Rmd\ncrypto-markets.csv\nCODE_OF_CONDUCT.md\nCONTRIBUTING.md\nISSUE_TEMPLATE.md\ncran-comments.md\n/inst/\n/data/\n.gitconfig\ncmc_apikey\nsandbox_cmc_apikey\n.travis.yml\n^cran-comments\\.md$\nman/figures/\n^CRAN-SUBMISSION$\nREADME-quotes-plot-1.png\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.github$\n^LICENSE\\.md$\n^CITATION\\.cff$\ncreate_hidden_links.R\n^revdep$\n^HANDOFF-.*\\.md$\n^CLAUDE\\.md$\n^\\.claude$\n^smoke_test\\..*$\n"
+  },
+  {
+    "repo_id": "github.com/stefanodamato/tweediedistr",
+    "text": "^\\.DS_Store$\n^\\.Rproj\\.user$\n^\\.git$\n^\\.github$\n^\\.gitignore$\n^.*\\.Rproj$\n^data-raw$\n^README\\.Rmd$\n^time_tests$\n^cran-comments\\.md$\n^LICENSE\\.md$\n^peer_review\\.html$\n^CRAN-SUBMISSION$\n^data-raw\\cran_downloads.R$\n"
+  },
+  {
+    "repo_id": "github.com/stephenrho/pminternal",
+    "text": "^pminternal\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.Rmd$\nvignettes/pminternal-comparisons.Rmd\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.github$\n^vignettes/articles$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/stla/cyclotomic",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^inst/essais$\n^inst/trash$\n^README\\.Rmd$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^inst/Rcpp$\n^inst/rcpp$\n^\\.github$\n"
+  },
+  {
+    "repo_id": "github.com/stla/gfiultra",
+    "text": "^gfiUltra\\.Rproj$\n^\\.Rproj\\.user$\n^inst/essais$\n^inst/documents$\n^cran-comments\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/strategicprojects/cardargus",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^README\\.Rmd$\n^example\\.R$\n^\\.github$\n^docs$\n^_pkgdown\\.yml$\n^pkgdown$\n^\\.lintr$\n^codecov\\.yml$\n\\.DS_Store$\n^\\.Rhistory$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^CLAUDE\\.md$\n^\\.claude$\n"
+  },
+  {
+    "repo_id": "github.com/talegari/safer",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^docs$\n^CRAN-SUBMISSION$\n^_pkgdown\\.yml$\n"
+  },
+  {
+    "repo_id": "github.com/tgerke/dplyneage",
+    "text": "^\\.Rproj\\.user$\n^.*\\.Rproj$\n^\\.git$\n^\\.gitignore$\n^\\.Rhistory$\n^\\.RData$\n\\.DS_Store$\n^srcjs/node_modules$\n^srcjs/package-lock\\.json$\n^build_bundle\\.sh$\n^BUILD\\.md$\n^LICENSE\\.md$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^README\\.Rmd$\n^srcjs$\n^\\.claude$\n^\\.github$\n^inst/python/__pycache__$\n^inst/examples$\n^vignettes/articles$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^revdep$\n^codecov\\.yml$\n^tests/browser$\n^decisions$\n"
+  },
+  {
+    "repo_id": "github.com/thijsjanzen/nodesub",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^NEWS\\.md$\n\n^\\.github$\n^codecov.yaml\n^/pics\n^pics$\n^codecov\\.yaml$\n"
+  },
+  {
+    "repo_id": "github.com/tidymodels/modeldata",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^\\.github$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^README\\.Rmd$\n^codecov\\.yml$\n^CODE_OF_CONDUCT\\.md$\n^data-raw$\n^revdep$\n^.Rhistory$\n^[\\.]?air\\.toml$\n^\\.vscode$\n^\\revdep$\n"
+  },
+  {
+    "repo_id": "github.com/tjebo/eye",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^data-raw$\n[.]bib$\n[.]png$\n^README\\.Rmd$\n^LICENSE\\.md$\n^cran-comments\\.md$\n^\\.git$\n^\\.Rhistory$\n^CRAN-RELEASE$\n^revdep$\n^man/figures$\n^\\.github$\n^CRAN-SUBMISSION$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n"
+  },
+  {
+    "repo_id": "github.com/toxpi/toxpir",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^codecov\\.yml$\n^\\.github$\n^CONTRIBUTING\\.md$\n^README\\.md$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^LICENSE\\.md$\n^man-roxygen$\nman/figures/logo*"
+  },
+  {
+    "repo_id": "github.com/trevorld/bracer",
+    "text": "^cran-comments.md$\n^README.Rmd$\n^README.html$\n^Rakefile$\n^notes.txt$\n^LICENSE.md$\n^\\.air.toml$\n^\\.appveyor.yml$\n^\\.editorconfig$\n^\\.travis.yml$\n^\\.lintr$\n^\\.pre-commit-config.yaml$\n^_pkgdown.yml$\n^\\.git$\n^\\.github$\n"
+  },
+  {
+    "repo_id": "github.com/um-kevinhe/pprof",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^src/.*\\.tmp$\n^\\.github$\n^\\.github/\n^pprof/docs/deps/bootstrap-5\\.3\\.1/fonts/.+\n^LICENSE\\.md$\n\n# Exclude pkgdown configuration\n^_pkgdown\\.yml$\n\n# Exclude cleanup script\n^cleanup\\.txt$\n\n# Exclude incorrect configure script\n^configure\\.txt$\n\n# Exclude pkgdown-generated docs\n^docs/\n\n# Exclude Windows DLLs\n^pprof/src/.*\\.dll$\n^src/.*\\.dll$\n\n# Exclude other build artifacts\n^.*\\.o$\n^.*\\.so$\n^.*\\.dylib$\n\n# Exclude vignettes folder\n^vignettes/\n"
+  },
+  {
+    "repo_id": "github.com/vg-lab/tseal",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^revdep$\n^CRAN-SUBMISSION$\n^cran-comments\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/viniciusoike/metrosp",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^data-raw$\n^LICENSE\\.md$\n^doc$\n^Meta$\n^\\.github$\n^README\\.Rmd$\n^README\\.html$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^\\.claude$\n^AGENTS\\.md$\n^\\.vscode$\n^pkgdown$\n^_pkgdown\\.yml$\n^docs$\n^\\.plan-mode$\n^\\.quarto$\n^plan\\.md$\n^CLAUDE\\.md$\n^_targets\\.yaml$\n^_targets$\n^CITATION\\.cff$\n^\\.positai$\n^vignettes/\\.quarto$\n^vignettes/articles$\n^dev$\n"
+  },
+  {
+    "repo_id": "github.com/wjschne/arrowheadr",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^README\\.Rmd$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.github$\n^data-raw$\n^dev$\n^codecov\\.yml$\n^revdep$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/yain22/winratiosim",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n"
+  },
+  {
+    "repo_id": "github.com/zabis13/drogonr",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.claude$\n^CLAUDE\\.md$\n^TODO\\.md$\n^LICENSE\\.md$\n^LICENSE\\.note$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^drogonR_architecture\\.md$\n^inst/test-backend$\n^uploads$\n^\\.Rhistory$\n^\\.gitignore$\n^\\.github$\n\\.o$\n\\.so$\n\\.so\\.[0-9.]+$\n\\.dylib$\n\\.a$\n\\.dll$\n^src/Makevars$\n^src/Makevars\\.win$\n^tools/bench/\\.libs$\n"
+  },
+  {
+    "repo_id": "github.com/abarbour/kelvin",
+    "text": ".git\n.git/*\n.gitignore\n.github\n.github/*\n.RData\n.Rhistory\n\nREADME.md\n\n^\\.Rproj\\.user$\n\n$\\.Rout\nRplots.pdf\nRout$\n\n^.*\\.Rproj$\n^\\.travis\\.yml$\n\n^revdep$\n\n^vignettes/figure$\n^appveyor\\.yml$\n^cran-comments\\.md$\n^CRAN-RELEASE$\n^\\.github$\n^codecov\\.yml$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/adayim/gridmicrotex",
+    "text": "^LICENSE\\.md$\n^README\\.Rmd$\n^README\\.html$\n^Rplots\\.pdf$\n^gridmicrotex\\.Rproj$\n^mytest/.*$\n^src/MicroTeX/lib/CMakeLists\\.txt$\n^src/MicroTeX/lib/meson\\.build$\n^src/MicroTeX/lib/microtexConfig\\.cmake\\.in$\n^src/MicroTeX/lib/microtexconfig\\.h\\.in$\n^src/MicroTeX/lib/microtexapi\\.h$\n^src/MicroTeX/lib/wrapper/\n^_pkgdown\\.yml$\n^pkgdown$\n^docs$\n^doc$\n^Meta$\nsrc/.*\\.o$\nsrc/.*\\.so$\nsrc/.*\\.dll$\n\n^src/Makevars$\n^src/Makevars\\.win$\n^debug_*\n^tools$\n^\\..+$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^\\.Rproj\\.user$\n^\\.positai$\n^\\.claude$\n^CLAUDE\\.md$"
+  },
+  {
+    "repo_id": "github.com/adrientaudiere/cati",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.github$\n^\\.travis\\.yml$\n^\\.claude$\n^Documentation$\n^audits$\n^cran-comments\\.md$\n^LICENSE\\.md$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/alasgarliakbar/seqcomp",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^README\\.Rmd$\n^cran-comments\\.md$\n^\\.github$\n^CRAN-SUBMISSION$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n"
+  },
+  {
+    "repo_id": "github.com/altanalytics/schwabr",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.Rmd$\n^README\\.html$\n^cran-comments\\.md$\n^LICENSE\\.md$\n^\\.DS_Store$\n^\\.gitignore$\n^\\.git$\n^CRAN-SUBMISSION$\n^\\.positai$\n^\\.claude$\n"
+  },
+  {
+    "repo_id": "github.com/andrisignorell/desctoolsaddins",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n"
+  },
+  {
+    "repo_id": "github.com/antonikingston/gipsda",
+    "text": "^gipsDA\\.Rproj$\n^\\.Rproj\\.user$\n^\\.idea$\n^\\.git$\n.*\\.md\n.gitignore\n\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.github$\n^codecov\\.yml$\n^LICENSE\\.md$\n^doc$\n^Meta$\n"
+  },
+  {
+    "repo_id": "github.com/arcaldwell49/superpower",
+    "text": "^Meta$\n^mess$\n^doc$\n^README_files$\n^README.html$\n^LICENSE\\.md$\n^superpower\\.Rproj$\n^.travis.yml$\n^\\.Rproj\\.user$\n^codecov\\.yml$\n^Shiny$\n^Sticker$\n^jamovi$\n^build/js$\n^temp$\n^.*\\.jmo$\n^Validation$\n^NEWS\\.Rmd$\n^jmvpower$   \n^ANCOVA$\n^R/data_generation\\.R$\n^R/jmvpower\\.b\\.R$\n^R/jmvpower\\.h\\.R$\n^simple_ANCOVA\\.R$\n^R/simple_ANCOVA\\.R$\n^tests/testthat/test-simple_ANCOVA\\.R$\n^README\\.Rmd$\n^CRAN-RELEASE$\n^\\.RData$\n^\\.Rhistory$\n^cran-comments\\.md$\n^.covrignore$\n^CLAUDE\\.md$\n^references$\n^\\.claude$\n\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^index\\.Rmd$\n^index\\.md$\n^index\\.html$\n^\\.github$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/barbaratarantino/semdeep",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^_pkgdown\\.yml$\n^pkgdown$\n^docs$\n^figures$\n"
+  },
+  {
+    "repo_id": "github.com/bnaras/assistant",
+    "text": "^.Rhistory$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.travis\\.yml$\n^docs$\n^_pkgdown\\.yml$\n^README\\.Rmd$\n^README-.*\\.png$\n^pkgdown$\n^codecov\\.yml$\n^LICENSE\\.md$\n^CRAN-RELEASE$\n^inst/misc"
+  },
+  {
+    "repo_id": "github.com/brandmaier/semtree",
+    "text": ".git\nREADME.Rmd\nREADME.md\nCONTRIBUTORS.md\nCONTRIBUTE.md\nMakefile\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^doc$\n^Meta$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^LICENSE\\.md$\n^\\.travis\\.yml$\nmisc\ncran-comments.md\n^CRAN-SUBMISSION$\n^\\.github$\n^\\.httr-oauth$\nerror.log\nvignettes/vignette-cache\ninst/extdata/cache.rds\n^README_files*\n"
+  },
+  {
+    "repo_id": "github.com/byzheng/rapsimng.lentil",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\ncran-comments.md\n.travis.yml\n^LICENSE.md$\n^CRAN-RELEASE$\n^NEWS.md$\n.*\\.db\n.*\\.bak\n.*\\.db-shm\n.*\\.db-wal\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.github$\n^CRAN-SUBMISSION$\n^.vscode$"
+  },
+  {
+    "repo_id": "github.com/caetanods/ratematrix",
+    "text": "^doc$\n^Meta$\n.gitignore\n^README\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/chris-prener/biscale",
+    "text": "^CRAN-RELEASE$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.travis\\.yml$\n^\\.travis\n^appveyor\\.yml$\n^codecov\\.yml$\n^\\.github\n^data-raw$\n^_pkgdown\\.yml$\n^cran-comments\\.md$\n^README\\.Rmd$\n^index\\.Rmd$\n^index\\.md$\n^LICENSE$\n^CRAN-SUBMISSION$\n^revdep\n"
+  },
+  {
+    "repo_id": "github.com/coneill-math/m2r",
+    "text": "^appveyor\\.yml$\n^\\.travis\\.yml$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^.*\\.png$\n^README.Rmd$\nfigures/\n.Rhistory\n.gitignore\n.Rproj.user\n.git\nold/\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n"
+  },
+  {
+    "repo_id": "github.com/daya6489/smarteda",
+    "text": "^renv$\n^renv\\.lock$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^revdep$\n^README\\.Rmd$\n^README-.*\\.png$\n^cran-comments\\.md$\n^CONDUCT\\.md$\n^\\.travis\\.yml$\n^codecov\\.yml$\n^CODE_OF_CONDUCT\\.md$\n^CRAN-RELEASE$\n^doc$\n^Meta$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/deploid-dev/deploid-r",
+    "text": "# R project\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.Rhistory$\n^tmp.*\n^NEWS\\.md$\n\n# bash scripts\n^tools$\n^buildLocally.sh$\n^cpHardCopies.sh$\n\n# C.I.\n^\\.travis\\.yml$\n^appveyor\\.yml$\n^\\.lintr$\nlint-and-covr.Rout\n\n# C++\n\\.o$\n^DEploid.*.gz$\n^.DEploid\\/*$\n^.*\\.dirstamp$\n^.*\\.gcda$\n^pf3k-dEploid.*$\nsrc/DEploid/dEploid.cpp\nsrc/DEploid/lasso/lassoOut.cpp\nsrc/DEploid/gzstream/version\nsrc/DEploid/export/mcmcIO.cpp\nsrc/DEploid/gzstream/version\nsrc/DEploid/lasso/.ci/\nsrc/DEploid/lasso/.git\nsrc/DEploid/lasso/.gitignore\nsrc/DEploid/lasso/.travis.yml\nsrc/DEploid/lasso/Brewfile\nsrc/DEploid/lasso/COPYING\nsrc/DEploid/lasso/Makefile.am\nsrc/DEploid/lasso/README.md\nsrc/DEploid/lasso/bootstrap\nsrc/DEploid/lasso/configure.ac\nsrc/DEploid/lasso/data/\nsrc/DEploid/lasso/main.cpp\nsrc/DEploid/lasso/tests/\nsrc/DEploid/lasso/utility/\nsrc/DEploid/lasso/version\n\nsrc/DEploid/AUTHORS\nsrc/DEploid/Brewfile\nsrc/DEploid/CODE_OF_CONDUCT.md\nsrc/DEploid/CONTRIBUTING.md\nsrc/DEploid/COPYING\nsrc/DEploid/DEploid.wiki\nsrc/DEploid/Dockerfile\nsrc/DEploid/Makefile.am\nsrc/DEploid/NEWS\nsrc/DEploid/PULL_REQUEST_TEMPLATE.md\nsrc/DEploid/README\nsrc/DEploid/README.md\nsrc/DEploid/VERSION\nsrc/DEploid/bootstrap\nsrc/DEploid/checkfiles.sh\nsrc/DEploid/configure.ac\nsrc/DEploid/coverage\nsrc/DEploid/data\nsrc/DEploid/docs\nsrc/DEploid/m4\ntests\nsrc/DEploid/\\.gcno$\nsrc/DEploid/.circleci/.circleci-matrix.yml\nsrc/DEploid/.git\nsrc/DEploid/.travis.yml\nsrc/DEploid/src/lasso/.git\nsrc/DEploid/src/lasso/.travis.yml\nsrc/DEploid/src/vcf/.git\nsrc/DEploid/src/vcf/coverage/.gitkeep\nsrc/DEploid/.ci\nsrc/DEploid/.circleci\nsrc/DEploid/.github\nsrc/DEploid/src/lasso/.ci\nsrc/DEploid/src/lasso/.circleci\nsrc/DEploid/src/vcf/.ci\nsrc/DEploid/src/vcf/.circleci\nsrc/DEploid/src/vcf/.github\nsrc/DEploid/src/vcf/gzstream/VERSION\nsrc/DEploid/src/DEploid/src/vcf/coverage\nDEploid/src/vcf/src/gzstream/VERSION\nsrc/DEploid/src/vcf/src/gzstream/VERSION\nDEploid/src/vcf/src/gzstream/VERSION\n\n# extras\n^extra$\n^LICENSE$\n\n# git\n^\\.git\n^\\.gitignore$\n^\\.gitattributes$\n\n# testthat\n^tests/testthat/Rplots.pdf$\n^tests/testthat/.*\\.png$\n^tests/testthat/.*\\.html$\ncodecov.yml\n\n# vignettes/\n^vignettes/commbine.sh\n^vignettes/dEploid-Arguments.Rmd.src\n^\\.github$\n"
+  },
+  {
+    "repo_id": "github.com/deutsche-nationalbibliothek/casimir",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^casimir\\.Rproj$\n^LICENSE\\.md$\n^\\.vscode$\n^\\.github$\n^r-casimir$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n"
+  },
+  {
+    "repo_id": "github.com/dmurdoch/rgl2gltf",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^README.Rmd$\n^inst/localtests\n^_pkgdown.yml\n^docs/\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^\\.github$\n"
+  },
+  {
+    "repo_id": "github.com/douglasmunro/iod25",
+    "text": "^LICENSE\\.md$\n^[.]?air[.]toml$\n^\\.vscode$\n^README\\.Rmd$\n^data-raw$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.github$\n^vignettes/\\.quarto$\n^vignettes/*_files$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/ecohealthalliance/fasterize",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^Makefile$\n^README.Rmd$\n^README.md$\n^.travis.yml$\n^appveyor.yml$\n^appveyor\\.yml$\n^CODE_OF_CONDUCT\\.md$\n^CONTRIBUTING\\.md$\n^.*_cache$\n^.*\\.prof$\n^.*\\.zip$\n^Mammals_Terrestrial$\n^\\.lintr$\n^.*test.R$\n^codecov\\.yml$\n^.*\\.pdf$\n^.test.cpp$\n^\\.github$\n^codemeta\\.json$\n^cran-comments\\.md$\n^Dockerfile$\n^CRAN-RELEASE$\n^revdep$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/eddelbuettel/pkgkitten",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\nTODO\norig\n\\.travis.yml\n^.*\\.tar\\.gz$\n\\.github\n^docs\n^docs-src\n"
+  },
+  {
+    "repo_id": "github.com/eddelbuettel/rcppziggurat",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\nLICENSE\ndemo/notForCRANbenchmark.R\ndemo/notForCRANbenchmark.cpp\ndemo/oldRgenerator.R\n^\\.travis\\.yml$\nvignettes/.install_extras\ninst/code/ziggurat_code.zip\ninst/papers\n.*\\.tar\\.gz$\n^local\n^\\.github\n^\\.editorconfig\n^vignettes/rmd\n"
+  },
+  {
+    "repo_id": "github.com/edgararuiz/pkgsite",
+    "text": "^LICENSE\\.md$\n^README\\.Rmd$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^_quarto\\.yml$\n^index\\.qmd$\n^.*docs$\n^.*reference$\n^.*\\.quarto$\n^.*site$\n^\\.github$\n^.*articles$\n^codecov\\.yml$\n^\\.claude$\n^_post-render\\.R$\n^_freeze$\n^changelog\\.qmd$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^README\\.html$\n"
+  },
+  {
+    "repo_id": "github.com/edm44/hydraulics",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^CRAN-RELEASE$\n^NEWS\\.Rmd$\n^README\\.Rmd$\n^cran-comments\\.md$\n^hydraulics_0\\.1\\.0\\.pdf$\n^doc$\n^Meta$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.github$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/el-cordero/potentiomap",
+    "text": "^\\.DS_Store$\n^\\.Rproj\\.user$\n^\\.git$\n^\\.gitignore$\n^\\.github$\n^\\.Rhistory$\n^\\.RData$\n^README 2\\.md$\n^README\\.html$\n^README\\.Rmd$\n^Rplots\\.pdf$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^cran-comments\\.md$\n^CITATION\\.cff$\n^CODE_OF_CONDUCT\\.md$\n^CONTRIBUTING\\.md$\n^dev$\n^LICENSE$\n^data-raw$\n^paper$\n^SECURITY\\.md$\n^SUPPORT\\.md$\n^tests/testthat/.* 2\\.R$\n^potentiomap\\.Rcheck$\n^potentiomap_[0-9].*\\.tar\\.gz$\n^doc$\n^Meta$\n^inst/logo\\.png$\n^man/figures/(arrow_density|arrow_scale|contour_intervals|grid_resolution|interpolation_methods|raster_smoothing|social-preview|tps_smoothing)\\.png$\n"
+  },
+  {
+    "repo_id": "github.com/emmekeaarts/mhmmbayes",
+    "text": "^Meta$\n^doc$\n^data-raw$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.Rmd$\n^README-.*\\.png$\n^cran-comments\\.md$\n^CRAN-RELEASE$\n^CRAN-SUBMISSION$\n^\\.github$\n^\\.gitignore$\n^revdep$\n"
+  },
+  {
+    "repo_id": "github.com/emre-cebeci/spatcovar",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^.*\\.Rcheck$\n^.*\\.tar\\.gz$\n^\\.github$\n^CITATION\\.cff$\n^CONTRIBUTING\\.md$\n^LICENSE\\.md$\n^cran-comments\\.md$\n^dev$\n^\\.lintr$\n^codecov\\.yml$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^vignettes/articles$\n^\\.DS_Store$\n^.*\\.(gpkg|shp|shx|dbf|prj|cpg|xlsx|xls|csv|tsv|parquet|feather|sqlite|RData|rda|rdata|swp|swo|swx)$\n^(?!build/vignette\\.rds$).*\\.rds$\n^.*~$\n^(private|local-data|validation-output|calibration-output)$\n"
+  },
+  {
+    "repo_id": "github.com/epurdom/gloscope",
+    "text": "^R/create_example_object\\.R$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n\n^.*\\\\.md$\n^\\\\.DS_Store$\n\n# Git and SVN related\n^.svn\n^\\\\.git\n\n\n# R related\n^vignettes/.*[.](pdf|PDF)$\n^vignettes/.*[.](r|R)$\n^vignettes/.*[.](html)$\n^vignettes/R_cache\n^vignettes/R_figure\n"
+  },
+  {
+    "repo_id": "github.com/estfernandez/safari",
+    "text": "^SAFARI\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE$\n^README\\.Rmd$\n^TODO\\.md$\n^cran-comments\\.md$\n^inst/CLT\\.zip$\n^CRAN-RELEASE$\n"
+  },
+  {
+    "repo_id": "github.com/fbertran/cascadedata",
+    "text": "genlogo.R\n.gitignore\n^codecov\\.yml$\n^revdep$\n^_pkgdown\\.yml$\n^figure$\n^pkgdown$\n^Meta$\n#^doc$\n#All packages\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.gitignore$\n^NEWS$    \n#For the pkgdown website\n^docs*$\n#For the cached chunks of README.Rmd\n^cache*$\n^README_cache*$\n#If README too big, not on CRAN but only on git\n^man/figures*$\n^README\\.Rmd$\n#^README\\.md$\n#Specific\n^fullrespdf*$\n^inst/animation*$\n^articles*$\n^review*$\n^\\.github$\n"
+  },
+  {
+    "repo_id": "github.com/feiyoung/gfm",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n"
+  },
+  {
+    "repo_id": "github.com/ff1201/sgs",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE.md\n^doc$\n^Meta$\n^CRAN-SUBMISSION$\n^cran-comments\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/fsavje/quickblock",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.travis\\.yml$\n^appveyor\\.yml$\n^cran-comments\\.md$\n^LICENSE$\n^release-checklist\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/ge11232002/tfmpvalue",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.travis\\.yml$\n^README\\.md$\n.gitignore\n"
+  },
+  {
+    "repo_id": "github.com/gjmvanboxtel/gsignal",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.github$\n^README.Rmd$\n^cran-comments\\.md$\n^doc$\n^Meta$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/gunhanb/nmainla",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^data-raw$\ncran-comments.md\nREADME.md\n^docs$\n^\\.travis\\.yml$\n^doc$\n^Meta$\n"
+  },
+  {
+    "repo_id": "github.com/hmu-wh/ggcompare",
+    "text": "^pkgdown$\n^LICENSE$\n^\\.github$\n^.*\\.Rproj$\n^README\\.md$\n^README\\.Rmd$\n^\\.Rproj\\.user$\n^CRAN-SUBMISSION$\n^.*/README-.*\\.png$\n^cran-comments\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/hturner/bradleyterry2",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\ntmp\n^README\\.Rmd$\n^README-.*\\.png$\n^cran-comments\\.md$\n^CONDUCT\\.md$\n^doc$\n^Meta$\n^\\.github$\n^revdep$\n"
+  },
+  {
+    "repo_id": "github.com/huishenlab/iscream",
+    "text": "^LICENSE\\.md$\n\n.github\n\n^pkgdown$\n^_pkgdown\\.yml$\n^docs$\n\n_test*\n^data/*\n\nMakefile\nflake.*\n.ccls/*\n.envrc\n.lintr\n.direnv\n\n.git\n^codecov\\.yml$\nair.toml\nvignettes/*.nocompute\n"
+  },
+  {
+    "repo_id": "github.com/ipeadata-lab/metaphonebr",
+    "text": "^metaphonebr\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.Rmd$\n^LICENSE\\.md$\n^pkgdown/_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.github$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/jafiorucci/bayesdccgarch",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n"
+  },
+  {
+    "repo_id": "github.com/jancaha/spatialkde",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.github*\nLICENSE.md\n^release*\n^pkgdown*\n^docs*\n\\.travis.yml\n"
+  },
+  {
+    "repo_id": "github.com/jasinmachkour/tlars",
+    "text": "^tlars\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^README\\.Rmd$\n^README\\.html$\n^cran-comments\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/jeffreyracine/r-package-np",
+    "text": "^\\.git\n^BUILD\\.md\n^CRAN_DIFF\\.md\n^OPTIMIZATION\\.md\n^WORKTREES\\.md\nnpver\nmknpkg.sh\n^np_.*\\\\.tar\\\\.gz$\n^demo/n_.*/$\n^demo/serial/.*$\n^demo/.*\\\\.tex$\n^demo/.*\\\\.dat$\n^demo/.*latex.*$\n^demo/.*\\\\.pdf$\n^demo/.*\\\\.log$\n^demo/.*\\\\.aux$\n^demo/.*\\\\.fls$\n^demo/.*\\\\.fdb_latexmk$\n^audit_report\\.md$\n^issue_notes\n^benchmarks\n^AGENTS\\.md$\n^SKILLS\\.md$\n^MODERNIZATION_DOD\\.md$\n^AS_CRAN_WARNING_LEDGER\\.md$\n^archive$\n^archive/\n^cran-comments\\.md$\n^\\.DS_Store$\n^\\.Rlib$\n^\\.Rlib/\n^Rplots\\.pdf$\n^tests/testthat/Rplots\\.pdf$\n^man/run$\n^man/dontrun$\n^man/sed_run\\.scr$\n^man/sed_dontrun\\.scr$\n\n^benchmarks/oneoff\n^benchmarks/perf\n^benchmarks/validation\n^benchmarks/common\n"
+  },
+  {
+    "repo_id": "github.com/jessecambon/tidygeocoder",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^doc$\n^Meta$\n^data-raw$\n^LICENSE.md$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^bin$\n^tidygeocoder\\.yml$\n^README\\.Rmd$\n^sandbox$\n^cran-comments\\.md$\n^CRAN-RELEASE$\n^.github$\n^external$\n^vignettes/geocoder_services\\.Rmd$\n^vignettes/developer_notes\\.Rmd$\n^\\.github$\n^CRAN-SUBMISSION$\n^revdep$\n"
+  },
+  {
+    "repo_id": "github.com/jiezhou-2/lglasso",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.Rmd$\n^data-raw$\n^sample_data.rda$\n^scripts\n^LICENSE\\.md$\n^\\.github$\n^README.Rmd$\n^data-raw\\.R\n^docs\n"
+  },
+  {
+    "repo_id": "github.com/jmbh/fspe",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n"
+  },
+  {
+    "repo_id": "github.com/johncoene/sever",
+    "text": "^test\\.R$\n^LICENSE\\.md$\n^\\.travis\\.yml$\n^appveyor\\.yml$\n^\\.circleci$\n^\\.circleci/config\\.yml$\n^docs$\n^cran-comments\\.md$\n^CRAN-RELEASE$\n^\\.github$\n^FUNDING\\.yml$\n^srcjs$\n^node_modules$\n^package\\.json$\n^package-lock\\.json$\n^webpack\\.dev\\.js$\n^webpack\\.prod\\.js$\n^webpack\\.common\\.js$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/josiahpjking/dasguptr",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^doc$\n^Meta$\n^README\\.Rmd$\n^cran-comments\\.md$\n^LICENSE\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/js2264/tidycoverage",
+    "text": "^LICENSE\\.md$\n^README\\.Rmd$\n^\\.github$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^doc$\n^Meta$\n.*\\.qmd$\n"
+  },
+  {
+    "repo_id": "github.com/kosukeimai/wru",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.travis\\.yml$\nwru.png\n.github\ninst\n.travis.yml\nChangeLog\n.gitignore\n.Rhistory\n\n\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^README\\.Rmd$\n^README\\.html$\n^data-raw$\n^release-data$\n^\\.RData$\n^wru_.*\\.tar\\.gz$\n^ebisg-firstname-mlp\\.pt$\n^ebisg-surname-mlp\\.pt$\n^inst/python/__pycache__$\nwru-data-.*\\.rds$\n"
+  },
+  {
+    "repo_id": "github.com/larmarange/ggstats",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n.github\n^\\.github$\n^README\\.Rmd$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\ntests/testthat/_snaps\ntests/testthat/Rplots.pdf\n.lintr\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^revdep$\n^LICENSE\\.md$\n^doc$\n^Meta$\n"
+  },
+  {
+    "repo_id": "github.com/lazappi/clustree",
+    "text": "^Meta$\n^doc$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.travis\\.yml$\n^codecov\\.yml$\n^appveyor\\.yml$\n^docs$\n^_pkgdown\\.yml$\nLICENSE\n^data-raw$\n^cran-comments\\.md$\n^CRAN-RELEASE$\n^\\.github$\n^CRAN-SUBMISSION$\n^pkgdown$\n"
+  },
+  {
+    "repo_id": "github.com/lbbe-software/interatrix",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.github$\n^vignettes/*_files$\n_pkgdown.yml\n"
+  },
+  {
+    "repo_id": "github.com/ldliao/jointvip",
+    "text": "^jointVIP\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n<<<<<<< HEAD\n<<<<<<< HEAD\n^data-raw$\n=======\n^README\\.Rmd$\n>>>>>>> 38802c698b7513bb5bd529d7c210b18f5081a4d5\n=======\n^README\\.Rmd$\n>>>>>>> 38802c698b7513bb5bd529d7c210b18f5081a4d5\n^\\.github$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n"
+  },
+  {
+    "repo_id": "github.com/lordrudolf/featdelta",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.Rhistory$\n^R/README\\.md$\n^inst/dev\\.R$\n^CRAN-SUBMISSION$\n^cran-comments\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/lululuella/debcam",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n"
+  },
+  {
+    "repo_id": "github.com/maarten14c/rbacon",
+    "text": "^cran-comments\\.md$\n^checkTheseRunCommands.txt$\n^CRAN-RELEASE$\n^doc$\n^Meta$\n^CRAN-SUBMISSION$\n^\\.github$\n^\\.DS_Store$\ninst/dev/*.Rmd\ninst/dev/*.html\n^ci$\n^CITATION\\.cff$\n\n\n"
+  },
+  {
+    "repo_id": "github.com/magosil86/getspres",
+    "text": "^codecov\\.yml$\n^CRAN-RELEASE$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.md$\n^image-spres-forestplots\\.png$\n^spre_eqn\\.png$\n^_config.yml$\n^\\.travis\\.yml$\n^CONDUCT.md$\n^cran-comments.md$\n^_layouts$\n^assets$\n"
+  },
+  {
+    "repo_id": "github.com/markabney/mvnpermute",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\ncran-comments.md\n^CRAN-RELEASE$\n^README*\n"
+  },
+  {
+    "repo_id": "github.com/markean/elgbd",
+    "text": "^renv$\n^renv\\.lock$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.Rmd$\n^LICENSE\\.md$\n^cran-comments\\.md$\n^CRAN-RELEASE$\n^CRAN-SUBMISSION$\n^\\.github$\n\n"
+  },
+  {
+    "repo_id": "github.com/mbojan/alluvial",
+    "text": "man-roxygen\n^.*\\.Rproj$\n^\\.Rproj\\.user$\nREADME.Rmd\nMakefile\n^\\.github$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n"
+  },
+  {
+    "repo_id": "github.com/mdlincoln/hypothesisr",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.Rprofile$\n^appveyor\\.yml$\n^\\.travis\\.yml$\n^tests/testthat/token_av\\.enc$\n^tests/testthat/token_travis\\.enc$\n^secure-file/*$\n^cran-comments\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/mdneuzerling/ptvapi",
+    "text": "^ptvapi\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^\\.github$\n^releases$\n^docs$\n"
+  },
+  {
+    "repo_id": "github.com/mdsumner/spbabel",
+    "text": "^CRAN-RELEASE$\n^tic\\.R$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.Rmd$\n^figure\n^\\.travis\\.yml$\n^data-raw$\n^appveyor\\.yml$\n^cran-comments\\.md$\n^codecov\\.yml$\n^revdep$\n^docs$\n^CONDUCT\\.md$\n^prepare_package.r$\n^README-.*\\.png$\n^spbabel\\.Rproj$\n^\\.github$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/mittelmark/snha",
+    "text": "^\\.git$\n^\\.github$\n^build$\n^rlibs$\n^bin$\n^img$\n^snha-tutorial.pdf$\n^\\.\\.Rcheck$\n^\\.Rbuildignore~$\n^Makefile$\n\\.swo$\n^LICENSE.md$\n"
+  },
+  {
+    "repo_id": "github.com/modesto-escobar/netcoin-2.x",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^docs$\n^index\\.md$\n^index\\.Rmd$\n^_pkgdown\\.yml$\n^README\\.md$\nvignettes/pkgdown\n\n^pkgdown$\n^\\.positai$\n^\\.claude$\n^U\\.Rdata$\n"
+  },
+  {
+    "repo_id": "github.com/mohsaqr/bibnets",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^LEARNINGS\\.md$\n^HANDOFF\\.md$\n^CHANGES\\.md$\n^CLAUDE\\.md$\n^\\.claude$\n^\\.github$\n^tmp$\n^tutorials$\n^data-raw$\n^LA_bibliometric_data$\n^README\\.md$\n^bibnets\\.Rcheck$\n^bibnets_.*\\.tar\\.gz$\n^AGENTS\\.md$\n^cran-comments\\.md$\n^codex$\n^DESCRIPTION\\.orig$\n^sidelined$\n^local_testing_and_equivalence$\n^\\.DS_Store$\n^.*\\.DS_Store$\n^audit$\n^\\.\\.Rcheck$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^doc$\n^Meta$\n"
+  },
+  {
+    "repo_id": "github.com/musajajorge/poppyramid",
+    "text": "data-raw/\nimgs/\npopPyramid.Rproj"
+  },
+  {
+    "repo_id": "github.com/ncn-foreigners/nonprobsvy",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\nplayground\n^notes$\n^\\.claude$\n^CLAUDE\\.md$\n^tools$\n^README\\.Rmd$\n^README\\.html$\n^NEWS$\n^LICENSE\\.md$\n^\\.github$\n^codecov\\.yml$\n^references\\.bib$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^vignettes/\\.quarto$\n^vignettes/articles/\\.quarto$\n^vignettes/articles/*_files$\n^vignettes/articles$\n^vignettes/*_files$\n\n^CITATION\\.cff$\n^src/.*\\.(o|so|dll)$\n"
+  },
+  {
+    "repo_id": "github.com/neurogenomics/epicompare",
+    "text": "vignettes/*\\.html\n^Icon*\n^EpiCompare\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^\\.Rproj\\.user$\n^README.Rmd\n^\\.github$\n^doc$\n^Meta$\n^codecov\\.yml$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n.dockerignore\nDockerfile\nDOCKERFILE\n\n^node_modules$\npackage-lock.json\npackage.json\n^inst/report\n^report/\n"
+  },
+  {
+    "repo_id": "github.com/olgnaydn/compindexr",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/opasche/extremeconformal",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^README\\.Rmd$\n^\\.github$\n^\\.positai$\n^\\.claude$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n"
+  },
+  {
+    "repo_id": "github.com/ovgu-sh/desk",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.Rproj\\.user$\n.gitignore\nREADME.md\n.Rhistory\n.Rbuildignore\ndev\ntests\n^CRAN-SUBMISSION$\n^cran-comments\\.md$\n^revdep$\n"
+  },
+  {
+    "repo_id": "github.com/p10911004-npust/normality",
+    "text": "^LICENSE\\.md$\n^normality\\.Rproj$\n^\\.Rproj\\.user$\n^data-raw$\n^\\.github$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n"
+  },
+  {
+    "repo_id": "github.com/pcbrendel/multibias",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^multibias\\.Rproj$\n^data-raw$\n^LICENSE\\.md$\n^misc\\.R$\n^misc2\\.R$\n^\\.github$\n^git$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^\\.lintr\n^.vscode\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^README\\.Rmd$\n^R/test_confounders\\.R\n"
+  },
+  {
+    "repo_id": "github.com/peterblattmann/swath2stats",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.github$\n"
+  },
+  {
+    "repo_id": "github.com/piarasfahey/cryptography",
+    "text": "^cryptography\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/pjesscarter/scr",
+    "text": "^scR\\.Rproj$\n^\\.Rproj\\.user$\n^\\.git$\n^\\.github$\n^\\.DS_Store$\n^LICENSE\\.md$\n^cran-comments\\.md$\n^README_files$\n^\\.gitignore$\n^\\.gitattributes$\n^PACKAGES(\\.gz|\\.rds)?$\n^.*\\.tar\\.gz$\n^.*\\.Rcheck$\n^\\.\\.Rcheck$\n^\\.agents$\n^Library$\n^Outputs$\n"
+  },
+  {
+    "repo_id": "github.com/pouyaroudaki/ford",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^doc$\n^Meta$\n"
+  },
+  {
+    "repo_id": "github.com/queelius/serieshaz",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^CLAUDE\\.md$\n^\\.claude$\n^README\\.Rmd$\n^_pkgdown\\.yml$\n^docs$\n^vignettes/.*_cache$\n^CONTRIBUTING\\.md$\n^CODE_OF_CONDUCT\\.md$\n^paper\\.md$\n^paper\\.bib$\n^CRAN-SUBMISSION$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^cran-comments\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/r-arcgis/arcgisutils",
+    "text": ".claude/\n^configure~$\n^arcgisutils\\.Rproj$\n^\\.Rproj\\.user$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^dev$\n^LICENSE\\.md$\n^README\\.Rmd$\n^\\.github$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^src/\\.cargo$\n^src/rust/vendor$\n^src/vendor$\n^README\\.*$\n^\\.vscode$\n^src/rust/target$\n^rust-target$\n^src/Makevars$\n^src/Makevars\\.win$\nREADME.html\njustfile\nllms.txt\nCLAUDE.md\njarl.toml"
+  },
+  {
+    "repo_id": "github.com/r-barnes/webglobe",
+    "text": "tar.gz\nREADME.md\nLICENSE\nmailinglist\nwintest\n^inst/client/tiles/osm/5/.*\n^inst/client/tiles/stamen_toner/.*\n^inst/client/tiles/stamen_bw/.*\n^inst/client/tiles/stamen_terrain/.*\n^misc\n"
+  },
+  {
+    "repo_id": "github.com/r-lib/xml2",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\nwindows\n.travis.yml\n^cran-comments\\.md$\n^revdep$\n^src/Makevars$\n^codecov\\.yml$\n^docker$\n^src/\\.ycm_extra_conf\\.py$\n^src/\\.ycm_extra_conf\\.pyc$\n^appveyor\\.yml$\n^script\\.R$\n^\\.github$\n^TODO\\.md$\n^_pkgdown.yml$\n^docs/$\n^docs$\n^CRAN-RELEASE$\n^LICENSE\\.md$\n^Makefile$\n\\.dll$\n\\.o$\n\\.so$\n^CRAN-SUBMISSION$\n^README\\.Rmd$\n^configure.log$\n^[.]?air[.]toml$\n^\\.vscode$\n^\\.deps$\nautobrew\n^\\.positai$\n^\\.claude$\n"
+  },
+  {
+    "repo_id": "github.com/r-lib/yaml",
+    "text": "^\\.gitignore$\n^\\.github$\n^Makefile$\n^src/implicit\\.re$\n^misc$\n^VERSION$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^codecov\\.yml$\n^\\.claude$\n^[.]?air[.]toml$\n^\\.vscode$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^README\\.Rmd$\n^cran-comments\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/r-lib/zip",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^Makefile$\n^README.Rmd$\n^.travis.yml$\n^appveyor.yml$\n^revdep$\n^[^/]*[.]zip$\n^README\\.html$\n^src/.*\\.o$\n^src/zip.dll$\n^src/tools/cmdunzip$\n^src/tools/cmdunzip\\.exe$\n^src/tools/cmdunzip\\.dSYM$\n^src/tools/cmdzip$\n^src/tools/cmdzip\\.exe$\n^src/tools/cmdzip\\.dSYM$\n^src/tools/zip.exe$\n^\\.Rprofile$\n^r-packages$\n^LICENSE\\.md$\n^\\.github$\n^codecov\\.yml$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^[\\.]?air\\.toml$\n^\\.vscode$\n^\\.cache$\n^tools/extra/[.]*$\n^CLAUDE\\.md$\n^\\.git$\n^\\.covrignore$\n"
+  },
+  {
+    "repo_id": "github.com/r-spatialecology/shar",
+    "text": "codecov.yml\ncodemeta.json\nCODE_OF_CONDUCT.md\nCONTRIBUTING.md\ncran-comments.md\nCRAN-SUBMISSION\ndata-raw\ndocs\nLICENSE.md\npkgdown\nREADME.Rmd\nREADME.md\nshar.Rproj\nvignettes/articles\n.github\n_pkgdown.yml\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^CRAN-SUBMISSION$\n^\\.github$\n^codecov\\.yml$\n"
+  },
+  {
+    "repo_id": "github.com/radiant-rstats/radiant",
+    "text": "^CRAN-RELEASE$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.travis\\.yml$\n^docs$\n^inst/app/tests$\ncran-comments.md\nradiant.code-workspace\n.vscode\n^CRAN-SUBMISSION$\n.codespellrc\n.github\n"
+  },
+  {
+    "repo_id": "github.com/reservoirpy/reservoirr",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.github$\n^LICENSE\\.md$\n^cran-comments\\.md$\n^CRAN-RELEASE$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/riatelab/gepaf",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.Rmd$\n^microbench\\.R$\n^CITATION\\.cff$\n^codemeta\\.json$\n"
+  },
+  {
+    "repo_id": "github.com/richjjackson/psc",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.github$\n^README\\.Rmd$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^revdep$\n"
+  },
+  {
+    "repo_id": "github.com/rockwillck/cbn2path",
+    "text": "^CBN2Path\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^README\\.Rmd$\n^doc$\n^Meta$\n"
+  },
+  {
+    "repo_id": "github.com/ropensci/binman",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.travis\\.yml$\n^appveyor\\.yml$\ndocs\n^\\.github$\n^CRAN-RELEASE$\n^cran-comments\\.md$\n^codemeta\\.json$\n"
+  },
+  {
+    "repo_id": "github.com/ropensci/geojsonio",
+    "text": "man-roxygen/\n.travis.yml\n.DS_Store\ntravis-tool.sh\nvignettes/\nMakefile\ninst/stuff/\n^appveyor\\.yml$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\nREADME.Rmd\nREADME.md\n.V8history\ncran-comments.md\nmyfile.geojson\ninst/myfile.geojson\nmyfile.topojson\n^CODE_OF_CONDUCT\\.md$\n^cran-comments\\.md$\n^revdep$\nman-roxygen\n^\\.httr-oauth$\n.github\n^codemeta\\.json$\n.txt\nEW.geojson\ninst/ignore/*\nDockerfile\n^LICENSE\\.md$\n^README\\.Rmd$\n^codecov\\.yml$\n^\\.github$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/ropensci/gtexr",
+    "text": "^renv$\n^renv\\.lock$\n^gtexr\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.github$\n^README\\.Rmd$\n^codecov\\.yml$\n^.vscode$\n^doc$\n^Meta$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^codemeta\\.json$\n^.devcontainer$\n^CODE_OF_CONDUCT\\.md$\n^revdep$\n^CITATION\\.cff$\n"
+  },
+  {
+    "repo_id": "github.com/ropensci/jsonld",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^appveyor\\.yml$\n^\\.travis\\.yml$\n^readme.md$\n^readme.rmd$\n^readme.html$\n^tests$\n"
+  },
+  {
+    "repo_id": "github.com/ropensci/spelling",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^src/.*\\.a$\n^src/.*\\.o$\n^appveyor\\.yml$\n^.travis.yml$\n^README.md$\n^\\.github$\n"
+  },
+  {
+    "repo_id": "github.com/ropensci/xslt",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\nwindows\n.travis.yml\n^cran-comments\\.md$\n^revdep$\n^src/Makevars$\n^codecov\\.yml$\n^docker$\n^readme.md$\n^appveyor\\.yml$\n^configure.log$\n^\\.github$\n"
+  },
+  {
+    "repo_id": "github.com/roux-ohdsi/allofus",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^README\\.Rmd$\n^README\\.qmd$\n^data-raw$\n^cran-comments\\.md$\n^\\.github$\n^doc$\n^Meta$\n^CRAN-SUBMISSION$\n^revdep$\n\n\n^altdoc$\n^_quarto$\n"
+  },
+  {
+    "repo_id": "github.com/rstudio/bslib",
+    "text": "^bootswatch\\.Rproj$\n^\\.Rproj\\.user$\ninst/lib/bsw4/.github\ninst/lib/bs3/assets/images/.keep\ninst/lib/bsw3/.npmignore\n^inst/lib/bs-a11y-p/\\.jshintrc$\n^inst/lib/bs-a11y-p/\\.npmignore$\n^test-apps$\n^autocolors-demo$\n^bslib\\.Rproj$\n^README\\.Rmd$\n^\\.travis\\.yml$\n^docs$\n^sandbox$'\n^_dev$\n^revdep$\n^pkgdown$\n^_pkgdown\\.yml$\n^vignettes$\n^sandbox$\n\n^srcts$\n^node_modules$\n^package\\.json$\n^tsconfig\\.json$\n^yarn\\.lock$\n^\\.eslintrc\\.yml$\n\n^\\.github$\n^\\.gitattributes$\n^CODE_OF_CONDUCT\\.md$\n^cran-comments\\.md$\n^inst/examples-shiny/brand.yml/Monda\\.ttf$\n^inst/examples-shiny/brand.yml/Monda-OFL\\.txt$\n^AGENTS\\.md$\n^[.]?air[.]toml$\n^\\.vscode$\n^\\.claude$\n^inst/examples-shiny/toast/\\.gitignore$\n^inst/examples-shiny/brand\\.yml/\\.gitignore$\n"
+  },
+  {
+    "repo_id": "github.com/rvlenth/unrepx",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\ntestData.R\nREADME.html\nREADME.md\nREADME_files\n\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n"
+  },
+  {
+    "repo_id": "github.com/seandavi/methylumi",
+    "text": "^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.github$\n^\\.claude$\n"
+  },
+  {
+    "repo_id": "github.com/sevvandi/eventstream",
+    "text": "^\\.travis\\.yml$\n^README\\.Rmd$\n^LICENSE\\.md$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.github$\n"
+  },
+  {
+    "repo_id": "github.com/shanascogin/bayespostest",
+    "text": "^Meta$\n^doc$\n^\\.travis\\.yml$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^cran-comments\\.md$\n^JOSSpaper$\n^LICENSE$\n^CODE_OF_CONDUCT\\.md$\n^CONTRIBUTING\\.md$\nCONTRIBUTING.md\n^codecov\\.yml$\n^data-raw$\n^docs$\n^pkgdown$\n^pkgdown/_pkgdown\\.yml$\n^CRAN-RELEASE$\n^_pkgdown\\.yml$\n^revdep$\n^README.Rmd\n^README.log\n^README.tex\n^mod.jags\n^mod.stan\n^mod.rds\n^README.pdf\n^README.rmd\n^README_files\n^\\.github$\n^tests/testdata/.*\\.rds$\n^tests/data-static\n^README\\.Rmd$\n"
+  },
+  {
+    "repo_id": "github.com/sufyansuleman/insusenscalc",
+    "text": "^renv$\n^renv\\.lock$\n^InsuSensCalc\\.Rproj$\n^\\.Rproj\\.user$\n^docs$\n^\\.Rhistory$\n^LICENSE\\.md$\n^\\.lastMiKTeXException$\n^\\.NULL$\n^\\.gitignore$\n^lastMiKTeXException$\n^NULL$\n\\.tmp$\n^temp\\.txt$\n^temp_files/\n^\\.github$\n^\\.git$\n^\\.Rcheck$\n^\\.\\.Rcheck$\n^InsuSensCalc_.*\\.tar\\.gz$\n^commit_msg.*\\.txt$\n^commit_remove_msg.*\\.txt$\n^run_rcmd_check\\.bat$\n^\\.Rprofile$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/tadascience/valentine",
+    "text": "^valentine\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^README\\.Rmd$\n^cran-comments\\.md$\n^\\.github$\n^codecov\\.yml$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/therealcfdrake/mvalpha",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^cran-comments\\.md$\n^LICENSE\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/timbeechey/opa",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.lintr$\n^doc$\n^Meta$\n^LICENSE\\.md$\n^cran-comments\\.md$\n^\\.github$\n^README\\.Rmd$\n^.DS\\_Store\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^logo$\n"
+  },
+  {
+    "repo_id": "github.com/tripati-lab/bayclumpr",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^\\.github$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^CONTRIBUTING\n^README.md\nvignettes/*.R$\nvignettes/*.orig$\n\n^doc$\n^Meta$\n"
+  },
+  {
+    "repo_id": "github.com/tychobra/polished",
+    "text": "node_modules/\n^.*\\.Rproj$\n^\\.Rproj\\.user$\nsrcjs/\n.travis.yml\nrsconnect/\n.firebaserc\ncran-comments.md\n^CRAN-RELEASE$\n^\\.github$\n^CRAN-SUBMISSION$\ninst/examples\n"
+  },
+  {
+    "repo_id": "github.com/vusaverse/vvtermtime",
+    "text": "^LICENSE\\.md$\n.Rproj$\n^\\.github$\n^docs$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^TODO\\.md$\n.pdf$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/wlandau/crew",
+    "text": "^.*\\.css$\n^.*code-workspace\n^.*\\.gcda$\n^.*\\.gcno$\n^.*\\.js$\n^.*\\.log$\n^.*\\.out$\n^.*\\.nfs.*$\n^.*\\.Rout$\n^.*\\.Rproj$\n^.*\\.svg$\n^\\.DS_Store\n^\\.future$\n^\\.git$\n^\\.github$\n^\\.gitignore$\n^\\.gittargets$\n^\\.httr-oauth$\n^\\.lintr$\n^\\.Rapp.history$\n^\\.Rbuildignore$\n^\\.RData$\n^\\.Rhistory$\n^\\.Rproj\\.user$\n^_pkgdown\\.yml$\n^_targets$\n^_targets_r$\n^_targets\\.R$\n^_targets_packages\\.R$\n^_targets\\.Rmd$\n^_targets\\.yaml$\n^skeleton\\.html$\n^README\\.html$\n^docs$\n^dump\\.rdb$\n^CODE_OF_CONDUCT.md$\n^codemeta\\.json$\n^CONTRIBUTING.md$\n^pkgdown$\n^README\\.md$\n^README\\.Rmd$\n^revdep$\n^LICENSE\\.md$\n^paper\\.md$\n^paper\\.bib$\n^CODE_OF_CONDUCT\\.md$\n^NOTICE$\n^fd\\.key$\n^fd\\.csr$\n^fd\\.crt$\n^fd\\.cert$\n"
+  },
+  {
+    "repo_id": "github.com/xytangtang/proclhmm",
+    "text": "^proclhmm\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^README\\.Rmd$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/zshao1/erssa",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^doc$\n^Meta$\n"
+  },
+  {
+    "repo_id": "github.com/agerada/mic",
+    "text": "^renv$\n^renv\\.lock$\n^MIC\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^tmp/\n^pre_R_package/\n^data-raw$\n^README\\.Rmd$\n^\\.github$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^revdep$\n"
+  },
+  {
+    "repo_id": "github.com/albertopallotta/portfoliotester",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^doc$\n^Meta$\n^cran-comments\\.md$\n^\\.github$\n^data-raw$              # raw data scripts (not shipped)\n^README\\.Rmd$           # if your README is knitted from Rmd\n^README\\.qmd$           # if you use Quarto\n^_quarto\\.yml$          # Quarto config\n^_site$                 # Quarto render output\n^_freeze$               # Quarto cache\n^_pkgdown\\.yml$         # pkgdown config (if any)\n^pkgdown$               # pkgdown cache dir (if any)\n^CRAN-RELEASE$          # created by devtools::release()\n^revdep$                # reverse-deps results, if you run them\n^\\.vscode$              # editor folders\n^\\.DS_Store$            # macOS cruft\n\n^CRAN-SUBMISSION$\ncran-comments.md\n^^doc$$\n^^README\\\\.html$$\n^^README_files$$\n^README\\.html$\n^README_files$\n^file.*\\.pdf$\n^rd_check$\n^rd_html_problems\\.csv$\n^rd_brace_issues\\.csv$\n^roxygen_dump\\.txt$\n^\\.git.*$\n^README\\.Rmd$\n^pkgdown$\n^revdep$\n"
+  },
+  {
+    "repo_id": "github.com/alec-stashevsky/blocklength",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.Rmd$\n^LICENSE\\.md$\n^cran-comments\\.md$\n^pkgdown$\n^_pkgdown\\.yml$\n^\\.github$\n^codecov\\.yml$\n^CRAN-RELEASE$\n^docs$\n^CITATION\\.cff$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/alforj/muir",
+    "text": "^muir\\.Rproj$\n^muir\\.Rproj\\.user$\n^\\.travis\\.yml$\n^NEWS\\.md$\n^README\\.Rmd$\n^cran-comments\\.md$\n^\\.Rproj\\.user$\n"
+  },
+  {
+    "repo_id": "github.com/anna-neufeld/countsplit",
+    "text": "^countsplit\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^_pkgdown.yml$\n^docs$\n^cran-comments\\.md$\n^revdep$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/annaladdach/catscradle",
+    "text": "^doc$\n^Meta$\n"
+  },
+  {
+    "repo_id": "github.com/arianeschad/mbqn",
+    "text": "^Meta$\n^doc$\n^data-raw$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^.*\\.pdf$\n^examples/example2\\.R$\n^examples/example3\\.R$\n^examples/example4\\.R$\n^examples/examples_old\\.R$\n^R/mbqn\\.boxplot_dev\\.R$\n^R/mbqn\\.simu\\.distortion\\.R$\n^R/fig_label\\.R$\n#^R/mbqn\\.demo\\.R$\n^R/mbqn\\.simu.\\data1.\\R$\n^.*\\.zip$\n^\\.git/$\n^\\figures/$\n^temp/$\n^README\\.Rmd$\n^README-.*\\.png$\n^packrat/\n^\\.Rprofile$\n^README.html$\n^.mbqnExample_Backup.R$\n^\\.github$\n"
+  },
+  {
+    "repo_id": "github.com/atmoschem/emissv",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.travis\\.yml$\n^appveyor.yml$\n^Readme.md$\n^docs$\n^CO_all.png\n^CO_final.png\n^hex_logo.png\n^hex_logo_true.png\n^paper.md\n^paper.bib\n^CONDUCT.md\n^CONTRIBUTING.md\n^MIT\n^codecov\\.yml$\n^.github\ninst/extdata/dmsp_hi-res.tiff\n^_pkgdown\\.yml$\n^pkgdown$\n^\\.github$\n"
+  },
+  {
+    "repo_id": "github.com/baddstats/goftest",
+    "text": "README.md\n.git\n.gitignore\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.travis\\.yml$\n\\.gcov$\n\\.gcda$\n\\.gcno$\n^appveyor\\.yml$"
+  },
+  {
+    "repo_id": "github.com/bart-turczynski/punycoder",
+    "text": "^\\.DS_Store$\n^LICENSE\\.md$\n^\\.git$\n^\\.gitignore$\n^docs$\n^docs/.*\n^data-raw$\n^data-raw/.*\n^\\.Rproj\\.user$\n^\\.Rhistory$\n^\\.RData$\n^\\.Ruserdata$\n^\\.vscode$\n^\\.idea$\n^\\.env$\n^.*\\.Rcheck$\n^revdep$\n^revdep/.*\n^\\.covrignore$\n^user_story\\.md$\n^dev$\n^dev/.*\n^README\\.Rmd$\n^README\\.html$\n^src/.*\\.(o|so|dll)$\n^src/Makevars$\n^src/symbols\\.rds$\n^.*coverage\\.html$\n^.*\\.tar\\.gz$\n^lib$\n^lib/.*\n^\\.gitlab$\n^\\.gitlab/.*\n^\\.gitlab-ci\\.yml$\n^\\.claude$\n^\\.claude/.*\n^CLAUDE\\.md$\n^FP_CLAUDE\\.md$\n^\\.fp$\n^\\.fp/.*\n^AGENTS\\.md$\n^ARCHITECTURE\\.md$\n^DECISIONS\\.md$\n^CONTRIBUTING\\.md$\n^CODE_OF_CONDUCT\\.md$\n^\\.pre-commit-config\\.yaml$\n^THIRD_PARTY_NOTICES\\.md$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^\\.lintr$\n^_scratch$\n^_pkgdown\\.yml$\n^CITATION\\.cff$\n^codemeta\\.json$\n^\\.zenodo\\.json$\n^ACKNOWLEDGMENTS\\.md$\n^\\.bestpractices\\.json$\n^SECURITY\\.md$\n# The citation gate ported from seor (design/adr/0002 there). Not part\n# of the installable package; without this, --as-cran reports it as a\n# non-standard top-level directory.\n^scripts$\n# The CI job library. `R_LIBS_USER` points here and `cache:` carries it, so\n# once SEOR-dyzgzyot made the cached library actually populate, `R CMD check`\n# started seeing a hidden directory full of installed packages inside the\n# package source -- one WARNING for a non-portable path and one NOTE for the\n# hidden directory. seor carries the same pair of entries for the same reason.\n^\\.Rlibs$\n"
+  },
+  {
+    "repo_id": "github.com/benwolst/odiffr",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^README\\.Rmd$\n^\\.github$\n^tools$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.lintr$\n^codecov\\.yml$\n^cran-comments\\.md$\n^\\.claude$\n^CLAUDE\\.md$\n^node_modules$\n^.*\\.tar\\.gz$\n^inst/ci-bench/\n"
+  },
+  {
+    "repo_id": "github.com/biostatspmh/reportrmd",
+    "text": "^reportRmd\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^README\\.Rmd$\n^ARCHITECTURE\\.qmd$\n^cran-comments\\.md$\n^data-raw$\n^docs$\n^images$\n^index\\.Rmd$\n^Meta$\n^.nojekyll$\n^_bookdown\\.yml$\n^CRAN-SUBMISSION$\n^cran-comments\\.md$\n^CRAN-RELEASE$\n^\\.github$\n^doc$\n^_etSum\\.R$\n^_old\\.qmd\n^_old\\.R\n^_old\\.Rmd\n^overview\\.qmd$\n^_vignettes$\n^vignettes/overview_files$\n^_delta_calculation\\.R$\n^_deprecated\\.R$\n^_forestPlots\\.R$\n^_testScript3\\.R$\n^_testScript4\\.R$\n^_ggkmcif2\\.R$\n^_ggkmcif3_tests\\.r$\n^R/_test_ggkmcif3_files$\n^_forestPlots\\.R$\n^_forestplots_TP\\.R$\n^_refactored_compactsum\\.r$\n^_ToDo\\.R$\n^_unusedFunctions\\.R$\n^_tidyselectForReportRmd\\.R$\n^pkgdown\\.yml$\n^pkgdown$\n^\\.git$\n^R/\\.claude$\nDOCUMENTATION_WORKFLOW.md\n"
+  },
+  {
+    "repo_id": "github.com/bsaul/geex",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^.*scratch.*$\n^.*manuscript.*$\n^docs$\n^README\\.md$\n^CODE_OF_CONDUCT\\.md$\n^CONTRIBUTING\\.md$\n^\\.travis\\.yml$\n^_pkgdown\\.yaml$\n^codecov\\.yml$\n^LICENSE\\.md$\n^doc$\n^Meta$\ninst/create_sample_data.R\n"
+  },
+  {
+    "repo_id": "github.com/c-monaghan/lwc2022",
+    "text": "^lwc2022\\.Rproj$\n^\\.Rproj\\.user$\n^data-raw$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.github$\nREADME.md$\ncran-comments.md$\n^doc$\n^Meta$\n"
+  },
+  {
+    "repo_id": "github.com/catarinaploureiro/aida",
+    "text": "^\\.vscode$\n^doc$\n^Meta$\n^data-raw$\n^simulations$\n^LICENSE\\.md$\n^README\\.Rmd$\n^README\\.html$\n^references\\.bib$\n^tests\\.r$\n^\\.github$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/chiliubio/file2meco",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n"
+  },
+  {
+    "repo_id": "github.com/cornball-ai/rotio",
+    "text": "^.git$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.github$\n^\\.positai$\n^\\.claude$\n^README\\.Rmd$\n^CLAUDE\\.md$\n^PLAN\\.md$\n^OTIO_PARITY\\.md$\n^AGENTS\\.md$\n^tasks$\n^tools$\n^plan\\.md$\n^LICENSE$\n^cran-comments\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/d-gomon/success",
+    "text": "^success\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^README\\.Rmd$\n^data-raw$\n^Old_Stuff$\n^\\.github$\n^hexagon$\n^success\\.git\n^.*\\.xcf\n\n^doc$\n^Meta$\n^codecov\\.yml$\n"
+  },
+  {
+    "repo_id": "github.com/danchaltiel/crosstable",
+    "text": ".git\n.git/*\n.Rproj.user*\nman/figures/*\nexamples/*\n\n\nTODO\\.R\nDEV\\.R\n^R/dev-.*\\.R$\n^R/knit_print_debug\\.R$\n\n.*~.*\n\n^README.Rmd$\n^\\.lintr$\n^.*\\.Rproj$\n^.*\\.RData$\n^\\.github$\n^\\.Rproj\\.user$\n^\\.travis\\.yml$\n^_pkgdown\\.yml$\n^codecov\\.yml$\n^cran-comments\\.md$\n^doc$\n^Meta$\n^data-raw$\n^docs$\n^pkgdown$\n^CRAN-RELEASE$\n^codemeta\\.json$\n^CRAN-SUBMISSION$\n^revdep$\n"
+  },
+  {
+    "repo_id": "github.com/eco-stats/ecocopula",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^CRAN-RELEASE$\n^cran-comments\\.md$\n^\\.travis\\.yml$\n^CRAN-SUBMISSION$\n^\\.github$\n^codecov\\.yml$\n^doc$\n^Meta$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.Rmd\\.orig\n"
+  },
+  {
+    "repo_id": "github.com/ecoisilva/movedesign",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^data-raw$\ndev_history.R\n\n^dev$\n$run_dev.*\n\n^LICENSE\\.md$\n^README\\.Rmd$\n^CODE_OF_CONDUCT\\.md$\n^doc$\n\n^Meta$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n\n^\\.github$\n^app\\.R$\n^rsconnect$\n^codecov\\.yml$\n\nmovedesign.git\n_\\.new\\.png$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n\n(^|/)\\\\.quarto$\n^vignettes/\\\\.quarto$\n"
+  },
+  {
+    "repo_id": "github.com/ericdunipace/wpproj",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^dev$\n^cran-comments\\.md$\n^revdep$\n^\\.github$\n^README\\.Rmd$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/europeanifcbgroup/irfcb",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.Rhistory$\n^\\.RData$\n^\\.Rbuildignore$\n^\\.git$\n^\\.gitignore$\n^docs$\n^_pkgdown\\.yml$\n^\\.github$\n^pkgdown$\n^codecov\\.yml$\n^doc$\n^Meta$\n^LICENSE\\.md$\npkgdown/\nvignettes/data/\n^vignettes/dwca-tutorial\\.Rmd$\n^vignettes/metadata-template\\.Rmd$\n^vignettes/matlab-tutorial\\.Rmd$\n^vignettes/ecotaxa-tutorial\\.Rmd$\n^vignettes/image-export-tutorial\\.Rmd$\n^vignettes/whoi-plankton-data-integration\\.Rmd$\n^vignettes/files/\n.virtualenvs/\n^man/figures/image_gallery.png\n^vignettes/articles$\n^\\.httr-oauth$\n^data-raw$\n__pycache__\n^\\.claude$\n^\\.positai$\n"
+  },
+  {
+    "repo_id": "github.com/fabianenc/r6qualitytools",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^cran-comments\\.md$\n^README\\.Rmd$\n^codecov\\.yml$\n^\\.github$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/farewe/virtualspecies",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\nREADME.md\nevaluateRasters.R\nTODO.Rmd\n^\\.vscode$"
+  },
+  {
+    "repo_id": "github.com/feddelegrand7/gomogomonomi",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^README\\.Rmd$\n^cran-comments\\.md$\n^CRAN-RELEASE$\n^CODE_OF_CONDUCT\\.md$\n^\\.github$\n"
+  },
+  {
+    "repo_id": "github.com/frbcesab/rcompendium",
+    "text": "^LICENSE\\.md$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.Rmd$\n^README\\.html$\n^\\.github$\n^CODE_OF_CONDUCT\\.md$\n^rcompendium\\.Rproj$\n^_pkgdown\\.yml$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^CITATION\\.cff$\n^CONTRIBUTING\\.md$\n^codemeta\\.json$\n^[.]?air[.]toml$\n^\\.vscode$\n"
+  },
+  {
+    "repo_id": "github.com/friendly/ggbiplot",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.Rmd$\n^README-.*\\.png$\nexamples/\ndiscussion/\nissues/\n^cran-comments\\.md$\ndocs/\npkgdown/\n_pkgdown.yaml\n^CRAN-SUBMISSION$\ndev/\n^\\.positai$\n^\\.claude$\n^\\.release_check_result\\.rds$\n^revdep$\n"
+  },
+  {
+    "repo_id": "github.com/gabybudel/dbhc",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^cran-comments\\.md$\n^cran-comments\\.Rmd$\n^README\\.Rmd$\n^README-.*\\.png$\n^\\.travis\\.yml$\n^CRAN-SUBMISSION$\n^Rplots\\.pdf$\n^tasks$\n"
+  },
+  {
+    "repo_id": "github.com/hansenlab/mpra",
+    "text": "^\\.travis\\.yml$\nREADME.md\n\n"
+  },
+  {
+    "repo_id": "github.com/hughjonesd/doctest",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.Rmd$\n^README\\.html$\n^LICENSE\\.md$\n^\\.github$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^example\\.Rmd$\n^example\\.md$\n^doc$\n^Meta$\n^codecov\\.yml$\n^vignettes/rsconnect\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^revdep$\n^\\.positai$\n^\\.claude$\n"
+  },
+  {
+    "repo_id": "github.com/hypertidy/area",
+    "text": "^area\\.Rproj$\n^\\.Rproj\\.user$\n^data-raw$\n^\\.github$\n^README\\.Rmd$\n^CODE_OF_CONDUCT\\.md$\n^CRAN-SUBMISSION$\n^cran-comments\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/isciences/exactextractr",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n.o$\n.git$\nci$\n.gitlab-ci.yml$\n^docs$\nappveyor.yml$\n.dockerignore\n.gz$\nCONTRIBUTING.md\n^_pkgdown\\.yml$\n^pkgdown$\n^vignettes.*cache$\n.gpkg-shm$\n.gpkg-wal\n"
+  },
+  {
+    "repo_id": "github.com/jacobkap/meditations",
+    "text": "^CRAN-RELEASE$\n^docs$\n^_pkgdown\\.yml$\n^cran-comments\\.md$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.travis\\.yml$\n^appveyor\\.yml$\n^README\\.Rmd$\n^README-.*\\.png$\n^codecov\\.yml$\n^data-raw$\n^LICENSE\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/jedalong/wildlifedi",
+    "text": "^\\.travis\\.yml$\n^README\\.Rmd$\n^cran-comments.md$\n^CRAN-RELEASE$\n^\\.github$\n^\\.Rhistory$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/jimhester/knitrbootstrap",
+    "text": "\\.gitignore\n^\\.git$\nvignettes/.*\\.md\n.*/figure\ninst/examples/.*\\.md\n.*\\.png\n.*CanvasMatrix.js\nexec/customize.pl\nMakefile\nR_package\n^cran-comments\\.md$\n^CRAN-RELEASE$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/jniedballa/camtrapr",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^_pkgdown\\.yml$\n^docs$\n^data-raw$\n^pkgdown$\n^README\\.Rmd\n^.github\n^.git\n^R/_not_for_CRAN$\n^.travis\\.yml$\n^to_do.txt$\n^vignettes/camtrapr1.Rmd$\n^vignettes/camtrapr2.Rmd$\n^vignettes/camtrapr3.Rmd$\n^vignettes/camtrapr4.Rmd$\n^vignettes/camtrapr5.Rmd$\n^vignettes/camtrapr6.Rmd$\n^vignettes/mapview_example\\.png$\n^vignettes/SpeciesID_digiKam\\.png$\n^\\.github$\n^.covrignore$\n^\\.positai$\n^\\.claude$\n^.stignore\n^.stfolder\n^.stversions\n.vscode\n^Image-ExifTool-11.94\\.tar\\.gz$\n^Image-ExifTool-11.94$\n^tests/testthat/_snaps$\n^\\.posit/assistant$\n"
+  },
+  {
+    "repo_id": "github.com/joa3aquin50/agrobox",
+    "text": "# Repos/IDE\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.vscode$\n^\\.idea$\n\n# Control de versiones / CI\n^\\.git$\n^\\.gitignore$\n^\\.gitattributes$\n^\\.github$\n^codecov\\.yml$\n^\\.pre-commit-config\\.yaml$\n^\\.lintr\\.yaml$\n\n# Archivos CRAN / release\n^CRAN-SUBMISSION$\n^cran-comments\\.md$\n^revdep$\n\n# Documentación generada / sitio\n^README\\.Rmd$\n^_pkgdown\\.yml$\n^pkgdown$\n^docs$\n\n# Data y utilidades internas que no deben ir al build\n^data-raw$\n^tools$\n^tmp$\n^notes?$\n\n# Otros del sistema\n^\\.DS_Store$\n^LICENSE\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/kanji709/marp",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.github$\n^cran-comments\\.md$\n^S3_IMPLEMENTATION_LOG\\.md$\n^CRAN_RESUBMISSION_READINESS\\.md$\n^CRAN-RELEASE$\n^inst/extdata/small\\.txt$\n^inst/extdata/medium\\.txt$\n^inst/extdata/large\\.txt$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/kiante-fernandez/masc",
+    "text": "^masc\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^README\\.Rmd$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^data-raw$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^doc$\n^Meta$\n^\\.github$\n"
+  },
+  {
+    "repo_id": "github.com/lbbe-software/nlsmicrobio",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.github$\n^codemeta\\.json$\n"
+  },
+  {
+    "repo_id": "github.com/lennon-li/courier",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^PLAN\\.md$\n^\\.claude$\n^\\.git$\n^\\.gitignore$\n^implementation\\.md$\n^UI_REDESIGN_PLAN\\.md$\n^launch_app\\.R$\n^logo\\.png$\n^tests/testthat/\\.courier-depot$\n^LICENSE\\.md$\n^\\.github$\n^tmp-.*\\.log$\n^tmp-.*\\.R$\n^CRAN-SUBMISSION$\n^cran-comments\\.md$\n^_pkgdown\\.yml$\n^docs$\n^\\.superpowers$\n^vignettes/figures/\\.gitkeep$\n^IDEAS\\.md$\n^courieR_.*\\.tar\\.gz$\n^internal$\n^pkgdown$\n"
+  },
+  {
+    "repo_id": "github.com/lz100/spscomps",
+    "text": "^\\.Rproj\\.user$\n^.github\n^docs\n.*Rproj$\n.*tar.gz\n^img\n^_pkgdown\\.yml\n^index\\.md\n^.*\\.Rproj$\n^inst/depend$\n^examples$\n^.devcontainer$\n"
+  },
+  {
+    "repo_id": "github.com/maggiexma/ggincerta",
+    "text": "^ggfuzzy\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.Rmd$\n^LICENSE\\.md$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^data-raw$\n^ggincerta\\.Rproj$\n^cran-comments\\.md$\n^codecov\\.yml$\n^\\.github$\n^CRAN-SUBMISSION$\n^revdep$\n"
+  },
+  {
+    "repo_id": "github.com/mneunhoe/rgan",
+    "text": "^RGAN\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^README\\.Rmd$\n^cran-comments\\.md$\n^CRAN-RELEASE$\n^CRAN-SUBMISSION$\n^CLAUDE\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/modeloriented/treeshap",
+    "text": "^LICENSE\\.md$\n^README\\.Rmd$\n^data-raw$\n^README.md$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^misc$\n^python$\n^docs$\n^_pkgdown\\.yml$\n.travis.yml\nvignettes/\npkgdown/\n^LICENSE$\n^CONTRIBUTING.md\nDALEXpiramide\n^codecov\\.yml$\n^\\.github$\n^tox.ini$\n^pkgdown$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^revdep$\n"
+  },
+  {
+    "repo_id": "github.com/mountainmath/tongfen",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.travis\\.yml$\n^cran-comments\\.md$\n^docs$\n^pkgdown$\n.*data_cache/\nR/hex_sticker.R\n^Meta$\nimages\nimages/*\ncard_fix.sh\n^doc$\n^LICENSE\\.md$\n^data-raw$\n^CRAN-RELEASE$\n^\\.github$\n^CRAN-SUBMISSION$\n^benchmarks$\n^claude$\n^\\.claude$\n"
+  },
+  {
+    "repo_id": "github.com/mrbcuda/stressr",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n"
+  },
+  {
+    "repo_id": "github.com/msoto-perez/olsengine",
+    "text": "^OLSengine\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^validation_scripts$\n^\\.claude$\n^cran-comments\\.md$\n^harness$"
+  },
+  {
+    "repo_id": "github.com/mtmorgan/cellxgenedp",
+    "text": "README.*\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n.httr-oauth\n\n^doc$\n^Meta$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.github$\n"
+  },
+  {
+    "repo_id": "github.com/nabipoor/rocftp.mms",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^README\\.Rmd$\n^README\\.html$\n^ROCFTP.MMS_1.0.0\\.pdf$\n\n^cran-comments\\.md$\n\n\n"
+  },
+  {
+    "repo_id": "github.com/neurodata/lol",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^docs$\n^LICENSE$\n^README\\.md$\n^\\.travis\\.yml$\n^codecov\\.yml$\n^citation\\.bib$\n"
+  },
+  {
+    "repo_id": "github.com/nixtla/nixtlar",
+    "text": "^nixtlar\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^data-raw$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.github$\n^README\\.Rmd$\n^codecov\\.yml$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^experiments$\n^parity-tests$\n^\\.env$\n^\\.cursor$\n^developer-notes\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/nlmixr2/babelmixr2",
+    "text": "^benchmarks$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.github$\n^dev-setup.R$\n^cran-comments\\.md$\n^codecov\\.yml$\n^docs$\n^_pkgdown.yaml$\n^pkgdown$\n^logo.svg$\n^CRAN-SUBMISSION$\n^Readme.Rmd$\n^vignettes/articles$\n^_pkgdown\\.yml$\n^\\.vexp$\n"
+  },
+  {
+    "repo_id": "github.com/norskregnesentral/shapr",
+    "text": "^README\\.Rmd$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^Rprof\\.out$\n^\\.circleci$\n^\\.lintr$\n^\\.covrignore$\n^LICENSE\\.md$\n^\\.github$\n^CODE_OF_CONDUCT\\.md$\n^cran-comments\\.md$\n^docs$\n^CRAN-RELEASE$\n^inst/scripts$\n^doc$\n^Meta$\n^_pkgdown\\.yml$\n^pkgdown$\n[.]Rout$\n[.]out$\n^CRAN-SUBMISSION$\n^.Rprofile\n^python$\n^python-shim$\n^vignettes/general_usage\\.Rmd\\.orig$\n^vignettes/vaeac\\.Rmd\\.orig$\n^vignettes/regression\\.Rmd\\.orig$\n^vignettes/asymmetric_causal\\.Rmd\\.orig$\n^vignettes/benchmarks\\.Rmd$\n^vignettes/cache_general_usage/*$\n^vignettes/cache_vaeac/*$\n^vignettes/cache_regression/*$\n^vignettes/cache_asymmetric_causal/*$\n^inst/code_paper/*$\n^inst/demo/*$\n^inst/joss_paper/*$\n^inst/extdata/*$\n^inst/devel/*$\n^dev$\n^benchmarks$\n^\\.venv$\n^\\.vscode$\n^AGENTS\\.md$\n# Uncomment the below line for CRAN/win-builder only (snapshot tests skipped):\n# ^tests/testthat/_snaps/*$\n"
+  },
+  {
+    "repo_id": "github.com/nunompmoniz/iron",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n"
+  },
+  {
+    "repo_id": "github.com/oncologylab/craftgrn",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^data-raw$\ndev_history.R\n^dev$\n^dev-plan\\.MD$\n$run_dev.*\n^.here$\n^LICENSE\\.md$\n^README\\.Rmd$\n^CODE_OF_CONDUCT\\.md$\n^doc$\n^Meta$\n^workspace\\.RData$\n^\\.vscode$\n^_pkgdown\\.yml$\n^pkgdown$\n^docs$\n^\\.github$\n^AGENTS\\.md$\n^figures$\n^figure$\n^Rplots\\.pdf$\n^R_bak$\n^tmp$\n^output/doc$\n^output$\n^presentation$\n^inst/extdata/GeneHancer_v5[.]24_full[.]csv$\n^\\.agents$\n^\\.codex$\n^\\.superpowers$\n^.*\\.Rcheck$\n^.*\\.tar\\.gz$\n^[^/]+[.]pptx$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/onofriandreapg/statforbiology",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^CRAN-SUBMISSION$\n^cran-comments\\.md$\n\n^\\.github$\n"
+  },
+  {
+    "repo_id": "github.com/pbreheny/grpreg",
+    "text": "^pkgdown$\n^docs$\n^index.Rmd$\n\n^\\.github$\n^\\.version\\.json$\n^\\.air.toml$\n"
+  },
+  {
+    "repo_id": "github.com/pepijn-devries/amigaffh",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.github$\n^README\\.Rmd$\n"
+  },
+  {
+    "repo_id": "github.com/philipberg/baldur",
+    "text": "^baldur\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.Rmd$\n^LICENSE\\.md$\n^cran-comments\\.md$\n^revdep$\n^CRAN-SUBMISSION$\n^\\.github$\n"
+  },
+  {
+    "repo_id": "github.com/pwarncke77/resin",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^rstudio$\n^\\.rstudio\n^rstudio\\.\n^ResIN\\.Rcheck$\n^\\.Rcheck$\n^\\.\\.Rcheck$\n^\\.git$\n^\\.github$\n^docs$\n^doc$\n^pkgdown$\n^_pkgdown\\.yml$\n^Meta$\n^CRAN-SUBMISSION$\n^cran-comments\\.md$\n^\\.Rproj\\.user$\n^.*\\.Rproj$\n^\\.Rhistory$\n^\\.RData$\n\n\n^CRAN-SUBMISSION$\n^cran-comments\\.md$\n^doc$\n^Meta$\n^\\.github$\n"
+  },
+  {
+    "repo_id": "github.com/robjhyndman/vital",
+    "text": "^renv$\n^renv\\.lock$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^data-raw$\n^cran-comments\\.md$\n^README\\.Rmd$\n^\\.github$\n^docs$\n_pkgdown.yml\n^pkgdown$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/roga11/warmasvp",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n(^|/)\\.DS_Store$\n^inst/gmkf-tables/(logs|csvTables)$\n^cran-comments\\.md$\n^\\.Rhistory$\n^\\.RData$\n^CRAN-SUBMISSION$\n^\\.github$\n^src/.*\\.o$\n^src/.*\\.so$\n^src/.*\\.dll$\n^src/.*\\.tmp$\n"
+  },
+  {
+    "repo_id": "github.com/ropensci/lightr",
+    "text": "^codemeta\\.json$\n^appveyor\\.yml$\n^docs$\n^_pkgdown\\.yml$\n^\\.github$\n^codecov\\.yml$\n^\\.travis\\.yml$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^cran-comments\\.md$\n^inst/specs_joss.pdf$\n^inst/paper\\.md$\n^CRAN-RELEASE$\n^AvaSoft8_File_Formats\\.pdf$\n^local$\n^man/figures/logo_sources$\n^pkgdown$\n^revdep$\n^CRAN-SUBMISSION$\n^\\.lintr$\n^[\\.]?air\\.toml$\n^\\.vscode$\n^touchstone$\n"
+  },
+  {
+    "repo_id": "github.com/sckott/httping",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\nREADME.Rmd\n.travis.yml\n^CODE_OF_CONDUCT\\.md$\n^NEWS\\.md$\n^cran-comments\\.md$\n^Makefile$\n.github\n"
+  },
+  {
+    "repo_id": "github.com/sqyu/genscore",
+    "text": ".DS_Store\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.Rhistory$\n^\\.RData$\n\\.Rbuildignore\n\\.DS_Store\n^\\.git$\n^\\.gitignore$\ncran-comments.md\n^CRAN-RELEASE$\nvignettes/precompile.R\nsrc/*o\nsrc/*so\n.Rproj.user\n.git\n.gitignore\n"
+  },
+  {
+    "repo_id": "github.com/staburo/shadowvimp",
+    "text": "# Exclude temporary library paths\n# ^temp_libpath\n\n# Exclude any shadowVIMP directories within temporary library paths\n# ^temp_libpath/shadowVIMP/\n# ^temp_libpath\n\n# Exclude any temporary directories within tests\n# ^tests/testthat/temp_\n\n^\\.Rproj\\.user$\n^.*\\.Rproj$\n^\\.Rhistory$\n^README\\.Rmd$\n^README\\.html$\n^dev$\n^vignettes/pertvimp-vignette\\.Rmd$\n\n# Exclude version control directories\n^\\.git$\n^\\.gitignore$\n^\\.gitlab-ci\\.yml$\n\n# Exclude R CMD check directories\n^..Rcheck$\n\n# Exclude other common hidden files\n^\\.Rhistory$\n^\\.Rproj.user$\n^doc$\n^Meta$\n\n\n# Other common temporary files\n^.*\\.log$\n^.*\\.tmp$\n^LICENSE\\.md$\n^shadowVIMP\\.Rproj$\n^\\.github$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/stefanocoretta/rticulate",
+    "text": "^renv$\n^renv\\.lock$\n^data-raw$\n^Meta$\n^doc$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^packrat/\n^\\.Rprofile$\n^README\\.md$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^\\.github$\n^README\\.Rmd$\n^LICENSE\\.md$\n^cran-comments\\.md$\n^CRAN-RELEASE$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/strategicprojects/transferegovr",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.github$\n^\\.lintr$\n^\\.DS_Store$\n^\\.claude$\n^CLAUDE\\.md$\n^CLAUDE\\.local\\.md$\n^README\\.Rmd$\n^README\\.html$\n^LICENSE\\.md$\n^_pkgdown\\.yml$\n^pkgdown$\n^docs$\n^data-raw$\n^vignettes/articles$\n^cran-comments\\.md$\n^CODE_OF_CONDUCT\\.md$\n^CONTRIBUTING\\.md$\n^codemeta\\.json$\n^.*\\.tar\\.gz$\n^.*\\.Rcheck$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/sujit-sahu/bmstdr",
+    "text": "^doc$\n^Meta$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^.git/.*$\n^.*\\.git/.*$\n^\\.gitignore$\n^vignettes/.gitignore$\n^\\.git$\n^README.*$\n^\\.github$\n"
+  },
+  {
+    "repo_id": "github.com/svkucheryavski/mdatools",
+    "text": "# temporary and hidden files\n^.*\\.Rproj$\n^docs/.+$\n^\\.Rproj\\.user$\n^\\figure$\n^\\startide$\n^\\test$\n.vscode\n.travis.yml\n.lintr\n.xlsx\n.github\n.gitignore\n.claude\n.superpowers\nLICENSE.md\nCLAUDE.md\nTODO.md\n\n# do not add tests to builds\ntests\ntests/*\ntests/testthat\ntests/testthat/*\n\n# local tests and linting\nlinting.R\nlocaltests.R\n\n\n\n"
+  },
+  {
+    "repo_id": "github.com/szelepcsenyi/macrobiome",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^data-raw$\n^README\\.Rmd$\n^LICENSE\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/thinhong/denim",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^doc$\n^\\.github$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^README\\.Rmd$\n^LICENSE\\.md$\n^LICENSE\\.note$\n^vignettes/web_only\n^vignettes/denim_benchmark.Rmd\n^vignettes/denim_vs_deSolve.Rmd\n^.covrignore$\n^codecov\\.yml$\n^cran-comments\\.md$\n^Meta$\n^revdep$\n^CRAN-SUBMISSION$\n^supplements$\n^extra_benchmark$\n^manuscript_plots$\n^\\.vscode$\n^logo\\.svg$\n^CODE_OF_CONDUCT\\.md$\n"
+  },
+  {
+    "repo_id": "github.com/topepo/caret",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.travis\\.yml$\n^revdep$\n^\\.github/workflows/R-CMD-check\\.yaml$\n^codecov\\.yml$\n^\\.github$\n^inst/bookdown$\n^inst/model_sources$\n^inst/release_process$\n^man-roxygen$\n^plans$\n^\\.git-blame-ignore-revs$\n"
+  },
+  {
+    "repo_id": "github.com/trevorld/r-getopt",
+    "text": "^AGENTS.md$\n^CONTRIBUTING$\n^LICENSE.md$\n^README.Rmd$\n^README.Rrst$\n^README.html$\n^README.rst$\n^Rakefile$\n^\\.air.toml$\n^\\.claude$\n^\\.editorconfig$\n^\\.git$\n^\\.github$\n^\\.lintr$\n^\\.pre-commit-config.yaml$\n^_pkgdown.yml$\n^codecov.yml$\n^cran-comments.md$\n^data-raw$\n^docs$\n^pkgdown$\n^revdep$\n^share$\n^tmp$\n"
+  },
+  {
+    "repo_id": "github.com/trinker/sentimentr",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.gitignore\nNEWS$\nFAQ.md\nNEWS.html\nFAQ.html\n^\\.travis\\.yml$\ntravis-tool.sh\ninst/web\ncontributors.geojson\ninst/build.R\n^.*\\.Rprofile$\nREADME.Rmd\nREADME.html\nREADME.R\ntravis.yml\ninst/sentimentr_logo\ninst/staticdocs\ninst/extra_statdoc\ninst/maintenance.R\ncomparisons_between_sentiment_detectors.pdf\ncomparisons_between_sentiment_detectors.png\ninst/data_create_scripts\nzzz_useResearch.R\nr_sentimentra.png\nresize_icon.txt\nresize_examples.txt\ncomparisons_between_sentiment_detectors2a.png\nThumbs.db\nhotel_reviews.rds\ninst/deprecated_data\ninst/articles\n.gitattributes\ninst/sentimentr_jss\npolarity.html\nhighlight_deprecated.png\ninst/sentiment_testing/results_list.rds\nsentiment_data"
+  },
+  {
+    "repo_id": "github.com/uberlulu/methodcompare",
+    "text": "^MethodCompare\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^README\\.Rmd$\n"
+  },
+  {
+    "repo_id": "github.com/valentint/pcapp",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^doc$\n^docs$\n^NEWS.rmd\n.gitignore\n^README\\.rmd$\n^\\.github$\n^codecov\\.yml$\n\n"
+  },
+  {
+    "repo_id": "github.com/vjcitn/scvir",
+    "text": "^\\.github$\n\n^\\.BBSoptions$\n"
+  },
+  {
+    "repo_id": "github.com/wenjie1991/cellbarcode",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\ndevtools.R\n^LICENSE\\.md$\n./data/\n./vignettes\n.clangd\n./bk/*\n./compile_commands.json\n^doc$\n^Meta$\n^\\.github$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n"
+  },
+  {
+    "repo_id": "github.com/winvector/sigr",
+    "text": "^CRAN-RELEASE$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^README.Rmd$\n^cran-comments.md$\n^sigr.png$\n^docs$\n^_pkgdown\\.yml$\n^extras$\n^revdep$\n^LICENSE$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/winvector/wvplots",
+    "text": "^CRAN-RELEASE$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^cran-comments\\.md$\n^revdep$\n^README\\.Rmd$\n^README\\.html$\n^README-.*\\.png$\n^LICENSE$\n^.*\\.DS_Store$\n^.*\\.Rhistory$\n^.*\\.gitignore$\n^\\.git.*$\n^html$\n^.*rsconnect.*$\n^WVPlots\\.png$\n^\\.gitignore$\n^docs$\n^_pkgdown\\.yml$\n^extras$\n^Examples$\n\n^doc$\n^Meta$\n^CRAN-SUBMISSION$\n"
+  },
+  {
+    "repo_id": "github.com/xqnwang/conformalforecast",
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^cran-comments\\.md\n^CRAN-SUBMISSION$\n^LICENSE\\.md$\n^_pkgdown\\.yml$\n^.github$\n^cran-comments\\.md$\n^README\\.Rmd$\n^docs\n^pkgdown"
+  }
+]
