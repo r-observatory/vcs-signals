@@ -21,7 +21,9 @@ VIEWS_RETRY_WAITS_S <- c(5, 15, 30, 60, 120, 300, 600)
 KNOWN_FORGES <- c(
   "github.com" = "github", "gitlab.com" = "gitlab", "codeberg.org" = "codeberg",
   "bitbucket.org" = "bitbucket", "git.sr.ht" = "sourcehut", "sr.ht" = "sourcehut",
-  "r-forge.r-project.org" = "rforge"
+  "r-forge.r-project.org" = "rforge",
+  # INRAE's GitLab; no forge token in its name, so it needs naming here.
+  "forgemia.inra.fr" = "gitlab"
 )
 
 # Non-repo domains: return NULL even with an owner/name-shaped path (DOIs, preprints, docs, publishers).
