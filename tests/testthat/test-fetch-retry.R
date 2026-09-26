@@ -211,3 +211,54 @@ test_that("a 502, which reaches R as an error, is halved, read again and reporte
   expect_equal(got$failed$error, "gh api graphql returned no output")
   expect_equal(sum(slept == AI_BATCH_RETRY_WAIT_S), 1L)
 })
+
+# ---- run_cheap: the shard stop and the per-shard breaker ---------------------
+
+.fr_wd <- setwd(.repo_root)
+source(file.path(.repo_root, "scripts", "ai_backfill.R"))
+setwd(.fr_wd)
+
+cheap_over <- function(io, n, prefix = "p") {
+  out <- tempfile("cheap_"); dir.create(out)
+  roster_path <- file.path(out, "vcs-ai-roster.db")
+  write_ai_roster(roster_path, fake_repos(n, prefix))
+  list(out = out, run = function() run_cheap(io, out, roster_path, 0, 1, batch_size = 10))
+}
+
+test_that("the breaker trips at the twentieth identical failure, across two chunks", {
+  local_fast_batches()
+  io <- fake_contents_io(fail = sprintf("p%02d", 1:60))
+  sh <- cheap_over(io, 60)
+  expect_error(sh$run(), "contents read failed for 60 of 60 repositories")
+  q <- contents_queries(io)
+  expect_match(q[length(q)], 'name: "p20"', fixed = TRUE)
+  expect_false(any(grepl('name: "p(2[1-9]|[3-6][0-9])"', q)))
+  f <- read_scan_failures(file.path(sh$out, "vcs-dev-tooling-0.db"))
+  expect_equal(nrow(f), 60L)
+  expect_true(all(f$error == "Something went wrong while executing your query."))
+})
+
+test_that("five contents failures at five percent of the shard stop it", {
+  local_fast_batches()
+  io <- fake_contents_io(fail = sprintf("p%02d", c(3, 23, 43, 63, 83)))
+  expect_error(cheap_over(io, 100)$run(), "failed for 5 of 100 repositories")
+})
+
+test_that("five failures under five percent, or four failures, do not stop the shard", {
+  local_fast_batches()
+  io <- fake_contents_io(fail = sprintf("p%03d", c(3, 23, 43, 63, 83)))
+  sh <- cheap_over(io, 101, prefix = "p0")
+  expect_no_error(sh$run())
+  expect_equal(nrow(read_scan_failures(file.path(sh$out, "vcs-dev-tooling-0.db"))), 5L)
+  io4 <- fake_contents_io(fail = sprintf("p%02d", 1:4))
+  expect_no_error(cheap_over(io4, 20)$run())
+})
+
+test_that("repositories a paused shard never reached are not failures", {
+  local_fast_batches()
+  calls <- 0L
+  io <- fake_contents_io(remaining = function() { calls <<- calls + 1L; if (calls == 1L) 5000L else 100L })
+  sh <- cheap_over(io, 30)
+  expect_message(sh$run(), "20 not read this week")
+  expect_equal(nrow(read_scan_failures(file.path(sh$out, "vcs-dev-tooling-0.db"))), 0L)
+})

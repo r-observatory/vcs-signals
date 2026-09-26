@@ -179,13 +179,17 @@ bind_dev_tooling <- function(prior, incoming) {
   rbind(fill(prior), fill(incoming))
 }
 
-write_dev_tooling_partial <- function(path, dev_df) {
+write_dev_tooling_partial <- function(path, dev_df, failures = NULL) {
   if (file.exists(path)) unlink(path)
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   DBI::dbExecute(con, "PRAGMA journal_mode=DELETE")
   DBI::dbExecute(con, dev_tooling_create_sql())
   if (nrow(dev_df) > 0) DBI::dbWriteTable(con, "vcs_dev_tooling", dev_df, append = TRUE)
+  # Rides the dev-tooling partial because every merge job already downloads it.
+  DBI::dbExecute(con, "CREATE TABLE failures (repo_id TEXT NOT NULL, query TEXT NOT NULL,
+    error TEXT, failed_at TEXT)")
+  if (!is.null(failures) && nrow(failures) > 0) DBI::dbWriteTable(con, "failures", failures, append = TRUE)
   DBI::dbExecute(con, "VACUUM")
   invisible(path)
 }
@@ -196,6 +200,16 @@ read_dev_tooling <- function(path) {
   if (DBI::dbExistsTable(con, "vcs_dev_tooling")) DBI::dbReadTable(con, "vcs_dev_tooling")
   else .devtool_empty_shard()
 }
+
+read_scan_failures <- function(path) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  if (DBI::dbExistsTable(con, "failures")) DBI::dbReadTable(con, "failures") else .fetch_failed_frame()
+}
+
+#' TRUE when a shard's contents failures say the query itself is broken.
+contents_shard_stops <- function(n_failed, attempted)
+  n_failed >= TREE_DROP_MIN && n_failed >= TREE_DROP_MAX_SHARE * attempted
 
 # ---- cheap pass -------------------------------------------------------------
 #' Cheap Tier-D marker + PR-agent pass over one even mod-N shard of the roster. Batches
@@ -216,6 +230,9 @@ run_cheap <- function(io, out_dir, roster_path, i, N, batch_size = TIER_D_BATCH)
   message(sprintf("ai cheap shard %d/%d: %d of %d repos", i, N, nrow(mine), nrow(roster)))
 
   flagged <- list(); evrows <- list(); dev_rows <- list(); scanned <- 0L
+  failed <- list()
+  # One breaker for the whole shard, so a fault repeated across chunks still trips it.
+  contents_breaker <- new_fetch_breaker()
   today <- format(Sys.Date())
   for (idx in unname(chunk(seq_len(nrow(mine)), batch_size))) {
     rl <- graphql_rate_remaining(io)
@@ -226,16 +243,17 @@ run_cheap <- function(io, out_dir, roster_path, i, N, batch_size = TIER_D_BATCH)
       break
     }
     repos <- mine[idx, , drop = FALSE]
-    trees <- tryCatch(fetch_tree_markers(io, repos, batch_size)$results, error = function(e) NULL)
+    fetched <- tryCatch(fetch_tree_markers(io, repos, batch_size, breaker = contents_breaker),
+      error = function(e) list(results = list(), failed = .fetch_failed_frame(
+        repos$repo_id, "contents", substr(conditionMessage(e), 1L, 200L), .utc_now())))
+    failed[[length(failed) + 1L]] <- fetched$failed
+    trees <- fetched$results
     prs   <- tryCatch(fetch_pr_agents(io, repos, batch_size), error = function(e) NULL)
     for (r in seq_len(nrow(repos))) {
       rid <- repos$repo_id[r]
-      tree <- if (is.null(trees)) NULL else trees[[rid]]
+      tree <- trees[[rid]]
       pr   <- if (is.null(prs)) NULL else prs[[rid]]
-      # Dev-tooling snapshot for EVERY successfully-fetched repo, before the AI-only gate below.
-      # Honest-NA: a repo whose tree channel errored (trees NULL) or whose alias came back null
-      # (parse_tree_markers degrades a gone/private repo to empty entries with is_fork = NA) is
-      # NOT assessed and gets no row - it is deferred, never written as clean all-zeros.
+      # A failed or gone repository gets no row, so its prior row and last_scanned stand.
       if (!is.null(tree) && !is.na(tree$is_fork)) {
         dv <- classify_dev_tooling(tree$root_entries, tree$github_entries)
         dv$repo_id <- rid
@@ -257,13 +275,25 @@ run_cheap <- function(io, out_dir, roster_path, i, N, batch_size = TIER_D_BATCH)
     }
     scanned <- scanned + nrow(repos)
   }
+  failed_df <- if (length(failed)) do.call(rbind, failed) else .fetch_failed_frame()
   flagged_df <- if (length(flagged)) do.call(rbind, flagged) else .ai_empty_flagged()
   ev_df <- if (length(evrows)) do.call(rbind, evrows) else .ai_empty_ev()
   write_flagged_partial(file.path(out_dir, sprintf("vcs-ai-cheap-%d.db", i)), flagged_df, ev_df)
   dev_df <- if (length(dev_rows)) do.call(rbind, dev_rows) else .devtool_empty_shard()
-  write_dev_tooling_partial(file.path(out_dir, sprintf("vcs-dev-tooling-%d.db", i)), dev_df)
+  write_dev_tooling_partial(file.path(out_dir, sprintf("vcs-dev-tooling-%d.db", i)), dev_df, failed_df)
   message(sprintf("ai cheap shard %d/%d: %d flagged repos, %d evidence rows, %d dev-tooling rows",
                   i, N, nrow(flagged_df), nrow(ev_df), nrow(dev_df)))
+  message(sprintf("ai cheap shard %d/%d: %d repositories failed (contents %d), %d not read this week",
+                  i, N, length(unique(failed_df$repo_id)), sum(failed_df$query == "contents"),
+                  nrow(mine) - scanned))
+  n_contents <- sum(failed_df$query == "contents")
+  if (contents_shard_stops(n_contents, scanned)) {
+    first <- failed_df[failed_df$query == "contents", , drop = FALSE]
+    stop(sprintf(paste0("ai cheap shard %d/%d: the contents read failed for %d of %d repositories, ",
+                        "so the query itself is broken. First: %s. First message: %s"),
+                 i, N, n_contents, scanned, paste(utils::head(first$repo_id, 5L), collapse = ", "),
+                 first$error[1]), call. = FALSE)
+  }
 }
 
 # ---- gate -------------------------------------------------------------------
@@ -805,6 +835,7 @@ main <- function(mode, out_dir, io = NULL) {
     graphql        = default_io(token)$graphql,
     search_hit     = function(owner, name, query, delay = SEARCH_DELAY_S)
                        search_earliest_commit_hit(token, owner, name, query, delay),
+    sleep          = function(seconds) Sys.sleep(seconds),
     release_exists = function() gh_release_exists(RELEASE_REPO),
     generation     = function() gh_release_generation(RELEASE_REPO),
     download       = function(pattern, dir) gh_release_download(RELEASE_REPO, pattern, dir),
