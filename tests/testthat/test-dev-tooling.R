@@ -174,6 +174,14 @@ test_that("every subtree a rule names is one the contents query lists", {
                    "docs/_litedown.yml")
 })
 
+test_that("a rule path below a listed subtree's first level is reported, since only that level is listed", {
+  expect_identical(unfetched_rule_paths(c("inst/skills", "inst/skills/SKILL.md"), "root"),
+                   "inst/skills/SKILL.md")
+  expect_identical(unfetched_rule_paths(c("workflows/check.yml", "workflows/sub/x.yml"), "github"),
+                   "workflows/sub/x.yml")
+  expect_identical(unfetched_rule_paths("inst/skills/SKILL.md", "both"), "inst/skills/SKILL.md")
+})
+
 test_that("the community and pkgdown lists are the ones the analyzer shares", {
   expect_identical(COC_TREE_PATHS, c("CODE_OF_CONDUCT.md", "CODE_OF_CONDUCT", "CODE_OF_CONDUCT.Rmd",
     "CODE_OF_CONDUCT.rst", "code_of_conduct.md", "Code_of_conduct.md", "CODE-OF-CONDUCT.md", "CONDUCT.md"))
@@ -210,4 +218,17 @@ test_that("Travis alone is told apart from Travis beside another CI system", {
   expect_equal(both$ci_travis_only, 0L)
   expect_equal(both$has_ci, 1L)
   expect_equal(classify_dev_tooling(c("DESCRIPTION"), character(0))$ci_travis_only, 0L)
+})
+
+test_that("Travis beside any CI system has_ci counts is not Travis alone", {
+  # has_ci reads every ci_ tree rule, so a new one must also clear ci_travis_only.
+  for (m in Filter(function(m) startsWith(m$col, "ci_") && m$col != "ci_travis", DEV_TOOLING_MARKERS)) {
+    other <- m$paths[[1]]
+    in_github <- identical(m$location %||% "root", "github")
+    row <- classify_dev_tooling(c(".travis.yml", if (!in_github) other),
+                                if (in_github) other else character(0))
+    expect_equal(row[[m$col]], 1L, info = m$col)
+    expect_equal(row$has_ci, 1L, info = m$col)
+    expect_equal(row$ci_travis_only, 0L, info = m$col)
+  }
 })

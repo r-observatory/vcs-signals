@@ -25,10 +25,11 @@ tree_derived_columns <- function(root_entries, flags) {
        ci_travis_only = as.integer(flags[["ci_travis"]] == 1L && all(flags[others] == 0L)))
 }
 
-#' Rule paths with a "/" whose first segment is a subtree the contents query does not list there.
+#' Rule paths with a "/" whose folder is not a subtree the contents query lists there. The query
+#' lists one level of each subtree, so a path deeper inside one can never match either.
 unfetched_rule_paths <- function(paths, location, prefixes = tree_subtree_prefixes()) {
   nested <- paths[grepl("/", paths, fixed = TRUE)]
   allowed <- switch(location, root = prefixes$root, github = prefixes$github,
                     both = c(prefixes$root, prefixes$github))
-  nested[!sub("/.*$", "", nested) %in% allowed]
+  nested[!sub("/[^/]*$", "", nested) %in% allowed]
 }
