@@ -839,34 +839,102 @@ search_earliest_commit_hit <- function(token, owner, name, query, delay = SEARCH
   parse_search_commit_hit(paste(out, collapse = "\n"))
 }
 
-#' Cheap Tier-D marker pass over a chunk of repos, batched TIER_D_BATCH at a time. Runs
-#' build_tree_query -> io$graphql -> parse_tree_markers per batch, replicating
-#' collect_batched's halve-and-retry idiom for the aliased-repository shape: a whole-batch
-#' fault (io$graphql throws, null data, or a non-alias-scoped error) halves the batch and
-#' retries; a single-repo batch that still faults is DROPPED (deferred, retried next run),
-#' never recorded as "no markers". A batch whose only errors are alias-scoped NOT_FOUNDs is
-#' parsed - parse_tree_markers already degrades that one repo to empty entries. Returns a
-#' named list keyed by repo_id (a deferred repo is simply absent).
-fetch_tree_markers <- function(io, repos, batch_size = TIER_D_BATCH) {
-  out <- list()
+.utc_now <- function() format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+
+#' The repositories a fetch could not read: repo_id, document, first error (200 characters), when.
+.fetch_failed_frame <- function(repo_id = character(0), query = character(0),
+                                error = character(0), failed_at = character(0)) {
+  n <- length(repo_id)
+  if (n == 0L)
+    return(data.frame(repo_id = character(0), query = character(0), error = character(0),
+                      failed_at = character(0), stringsAsFactors = FALSE))
+  data.frame(repo_id = as.character(repo_id), query = rep(as.character(query), length.out = n),
+             error = rep(as.character(error), length.out = n),
+             failed_at = rep(as.character(failed_at), length.out = n), stringsAsFactors = FALSE)
+}
+
+.fetch_first_error <- function(res) {
+  msg <- if (!is.null(res$.err)) res$.err
+         else if (length(res$errors)) .nn(res$errors[[1]]$message, "GitHub returned an error with no message")
+         else "GitHub returned no data"
+  substr(as.character(msg), 1L, 200L)
+}
+
+#' Breaker state for one document over a whole shard; an environment, so each chunk's call sees the last one's count.
+new_fetch_breaker <- function(limit = AI_BREAKER_LIMIT) {
+  b <- new.env(parent = emptyenv())
+  b$limit <- as.integer(limit)
+  b$count <- 0L
+  b$message <- NA_character_
+  b$key <- NA_character_
+  b$tripped <- FALSE
+  b
+}
+
+#' A GitHub error without its time and request id, which change on every call, so
+#' one fault repeated reads as one message.
+.fetch_error_key <- function(msg) {
+  msg <- gsub("[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z", "<time>", msg)
+  gsub("[0-9A-Fa-f]+(:[0-9A-Fa-f]+){2,}", "<id>", msg)
+}
+
+#' One aliased document over `repos`, halving an unusable batch down to single repositories.
+#' A single repository that still fails is read once more, then reported in `failed`, never dropped.
+fetch_aliased <- function(io, repos, batch_size, build, parse, label, breaker = NULL) {
+  pause <- if (is.function(io$sleep)) io$sleep else Sys.sleep
+  results <- list()
+  failed <- list()
+  report <- function(ids, msg) failed[[length(failed) + 1L]] <<- .fetch_failed_frame(ids, label, msg, .utc_now())
+  done <- function() list(results = results,
+                          failed = if (length(failed)) do.call(rbind, failed) else .fetch_failed_frame())
+  if (!is.null(breaker) && isTRUE(breaker$tripped)) {
+    report(repos$repo_id, breaker$message)
+    return(done())
+  }
+  attempt <- function(idx) {
+    sub <- repos[idx, , drop = FALSE]
+    res <- tryCatch(io$graphql(build(sub)), error = function(e) list(.err = conditionMessage(e)))
+    pause(BATCH_DELAY_S)
+    ok <- is.list(res) && is.null(res$.err) && !is.null(res$data) &&
+      (is.null(res$errors) || errors_are_alias_not_found(res$errors))
+    list(ok = ok, res = res, sub = sub)
+  }
   queue <- unname(chunk(seq_len(nrow(repos)), batch_size))
   while (length(queue) > 0) {
     idx <- queue[[1]]; queue <- queue[-1]
-    sub <- repos[idx, , drop = FALSE]
-    res <- tryCatch(io$graphql(build_tree_query(sub)), error = function(e) list(.err = TRUE))
-    Sys.sleep(BATCH_DELAY_S)
-    ok <- is.list(res) && is.null(res$.err) && !is.null(res$data) &&
-      (is.null(res$errors) || errors_are_alias_not_found(res$errors))
-    if (ok) {
-      parsed <- parse_tree_markers(res, sub)
-      out[names(parsed)] <- parsed
-    } else if (length(idx) > 1) {
-      queue <- c(unname(chunk(idx, ceiling(length(idx) / 2))), queue)   # halve and retry
+    a <- attempt(idx)
+    if (!a$ok && length(idx) == 1L) {
+      pause(AI_BATCH_RETRY_WAIT_S)
+      a <- attempt(idx)
     }
-    # a single-repo batch still faulting is dropped (deferred), never written as clean
+    if (a$ok) {
+      parsed <- parse(a$res, a$sub)
+      results[names(parsed)] <- parsed
+      if (!is.null(breaker)) { breaker$count <- 0L; breaker$message <- NA_character_; breaker$key <- NA_character_ }
+    } else if (length(idx) > 1L) {
+      queue <- c(unname(chunk(idx, ceiling(length(idx) / 2))), queue)
+    } else {
+      msg <- .fetch_first_error(a$res)
+      report(repos$repo_id[idx], msg)
+      if (!is.null(breaker)) {
+        key <- .fetch_error_key(msg)
+        if (identical(key, breaker$key)) breaker$count <- breaker$count + 1L
+        else { breaker$key <- key; breaker$message <- msg; breaker$count <- 1L }
+        if (breaker$count >= breaker$limit) {
+          breaker$tripped <- TRUE
+          rest <- unlist(queue, use.names = FALSE)
+          if (length(rest)) report(repos$repo_id[rest], msg)
+          break
+        }
+      }
+    }
   }
-  out
+  done()
 }
+
+#' The weekly repository contents read (build_tree_query), with failures reported.
+fetch_tree_markers <- function(io, repos, batch_size = TIER_D_BATCH, breaker = NULL)
+  fetch_aliased(io, repos, batch_size, build_tree_query, parse_tree_markers, "contents", breaker)
 
 #' Cheap PR-agent pass over a chunk of repos, batched TIER_D_BATCH at a time. Same
 #' halve-and-retry contract as fetch_tree_markers, over build_pr_agent_query /

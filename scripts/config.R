@@ -417,6 +417,15 @@ AI_PR_CUTOFF <- "2023-01-01"
 # run_cheap and run_deep both check graphql_rate_remaining(io) against this reserve
 # before spending down the shared token, pausing rather than faulting when it is low.
 AI_POINT_RESERVE <- 1500L
+# A repository that still fails alone after halving is read once more after this wait.
+AI_BATCH_RETRY_WAIT_S <- 30
+# Consecutive identical single-repository failures that end one document's reads in a shard.
+AI_BREAKER_LIMIT <- 20L
+# A cheap shard stops when its contents failures reach both the count and the share of repositories it attempted.
+TREE_DROP_MIN <- 5L
+TREE_DROP_MAX_SHARE <- 0.05
+# The merge publishes, then fails the run, when distinct failed repositories exceed this share of the roster.
+AI_SCAN_FAILURE_MAX_SHARE <- 0.02
 
 # Channels known to be silent, each with the evidence someone gathered and the
 # date they gathered it. The canary reports every (tier, tool) that has a rule

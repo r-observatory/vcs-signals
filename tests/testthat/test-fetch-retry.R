@@ -113,3 +113,101 @@ test_that("fetch_views treats an NA body as a failed read", {
                 read = function(u) NA_character_, waits = 0, sleep = no_sleep),
     "VIEWS fetch failed or empty")
 })
+
+# ---- fetch_aliased: failed reads are reported, never dropped ----------------
+
+test_that("a failing batch is halved to single repositories and a survivor is reported", {
+  io <- fake_contents_io(fail = "p03")
+  got <- fetch_tree_markers(io, fake_repos(4), batch_size = 4)
+  expect_setequal(names(got$results), paste0("github.com/o/", c("p01", "p02", "p04")))
+  expect_equal(got$failed$repo_id, "github.com/o/p03")
+  expect_equal(got$failed$query, "contents")
+  expect_equal(got$failed$error, "Something went wrong while executing your query.")
+  expect_match(got$failed$failed_at, "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$")
+})
+
+test_that("a repository that fails alone is read once more after the retry wait", {
+  io <- fake_contents_io(fail = "p01")
+  got <- fetch_tree_markers(io, fake_repos(1), batch_size = 10)
+  expect_equal(sum(io$log$slept == AI_BATCH_RETRY_WAIT_S), 1L)
+  expect_length(contents_queries(io), 2L)
+  expect_equal(nrow(got$failed), 1L)
+})
+
+test_that("a gone repository is neither a result row nor a failure", {
+  io <- list(graphql = function(query) list(
+    data = list(r0 = NULL),
+    errors = list(list(type = "NOT_FOUND", path = list("r0"), message = "Could not resolve"))),
+    sleep = function(s) invisible(NULL))
+  got <- fetch_tree_markers(io, fake_repos(1), batch_size = 10)
+  expect_true(is.na(got$results[["github.com/o/p01"]]$is_fork))
+  expect_equal(nrow(got$failed), 0L)
+})
+
+test_that("with no breaker the fetch reports every failure and never stops early", {
+  io <- fake_contents_io(fail = sprintf("p%02d", 1:25))
+  got <- fetch_tree_markers(io, fake_repos(25), batch_size = 25)
+  expect_equal(nrow(got$failed), 25L)
+})
+
+test_that("nineteen identical failures and then a success reset the breaker", {
+  b <- new_fetch_breaker()
+  io <- fake_contents_io(fail = sprintf("p%02d", 1:19))
+  fetch_tree_markers(io, fake_repos(19), batch_size = 10, breaker = b)
+  expect_equal(b$count, 19L)
+  fetch_tree_markers(io, fake_repos(1, prefix = "q"), batch_size = 10, breaker = b)
+  expect_equal(b$count, 0L)
+  expect_true(is.na(b$message))
+  expect_false(b$tripped)
+})
+
+test_that("failures alternating between two messages never trip the breaker", {
+  b <- new_fetch_breaker()
+  for (k in 1:20) {
+    io <- fake_contents_io(fail = "p01", message = if (k %% 2) "first fault" else "second fault")
+    fetch_tree_markers(io, fake_repos(1), batch_size = 10, breaker = b)
+  }
+  expect_false(b$tripped)
+  expect_equal(b$count, 1L)
+})
+
+test_that("a tripped breaker makes no call and reports every repository with its message", {
+  b <- new_fetch_breaker()
+  b$tripped <- TRUE; b$message <- "Something went wrong while executing your query."
+  io <- fake_contents_io()
+  got <- fetch_tree_markers(io, fake_repos(10), batch_size = 10, breaker = b)
+  expect_length(io$log$queries, 0L)
+  expect_equal(nrow(got$failed), 10L)
+  expect_true(all(got$failed$error == b$message))
+})
+
+test_that("GitHub's fault still trips the breaker when each reply names a new time and request id", {
+  n <- 0L
+  github_says <- function() {
+    n <<- n + 1L
+    sprintf(paste0("Something went wrong while executing your query on 2026-09-27T08:%02d:%02dZ. ",
+                   "Please include `C80C:1D44DB:%06X:1F5EA85:6AB68AE2` when reporting this issue."),
+            n %/% 60L, n %% 60L, n)
+  }
+  b <- new_fetch_breaker()
+  io <- fake_contents_io(fail = sprintf("p%02d", 1:25), message = github_says)
+  got <- fetch_tree_markers(io, fake_repos(25), batch_size = 25, breaker = b)
+  expect_true(b$tripped)
+  expect_equal(nrow(got$failed), 25L)
+  expect_gt(length(unique(got$failed$error)), 1L)
+  expect_match(got$failed$error[1], "^Something went wrong while executing your query on 2026-09-27T")
+})
+
+test_that("a 502, which reaches R as an error, is halved, read again and reported with its message", {
+  slept <- numeric(0)
+  io <- list(graphql = function(query) {
+      if (grepl('name: "p02"', query, fixed = TRUE)) stop("gh api graphql returned no output")
+      fake_contents_io()$graphql(query)
+    },
+    sleep = function(s) slept <<- c(slept, s))
+  got <- fetch_tree_markers(io, fake_repos(4), batch_size = 4)
+  expect_setequal(names(got$results), paste0("github.com/o/", c("p01", "p03", "p04")))
+  expect_equal(got$failed$repo_id, "github.com/o/p02")
+  expect_equal(got$failed$error, "gh api graphql returned no output")
+  expect_equal(sum(slept == AI_BATCH_RETRY_WAIT_S), 1L)
+})

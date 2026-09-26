@@ -226,7 +226,7 @@ run_cheap <- function(io, out_dir, roster_path, i, N, batch_size = TIER_D_BATCH)
       break
     }
     repos <- mine[idx, , drop = FALSE]
-    trees <- tryCatch(fetch_tree_markers(io, repos, batch_size), error = function(e) NULL)
+    trees <- tryCatch(fetch_tree_markers(io, repos, batch_size)$results, error = function(e) NULL)
     prs   <- tryCatch(fetch_pr_agents(io, repos, batch_size), error = function(e) NULL)
     for (r in seq_len(nrow(repos))) {
       rid <- repos$repo_id[r]
