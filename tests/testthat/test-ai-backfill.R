@@ -329,6 +329,10 @@ test_that("run_merge unions vcs-dev-tooling shards into the republished summary"
   expect_setequal(got$repo_id, c("github.com/a/x", "github.com/b/y"))
   expect_equal(got$has_ci[got$repo_id == "github.com/a/x"], 1L)          # workflows -> ci
   expect_equal(got$has_dockerfile[got$repo_id == "github.com/b/y"], 1L)
+  # run_merge is the rules table's only writer, and the gate accepts it empty.
+  rules <- DBI::dbReadTable(scon, "vcs_dev_tooling_rules")
+  expect_setequal(rules$col, dev_tooling_columns())
+  expect_true(all(rules$ruleset_version == DEV_TOOLING_RULESET_VERSION))
 })
 
 test_that("run_merge preserves a prior dev-tooling repo absent from this dispatch's shards", {
