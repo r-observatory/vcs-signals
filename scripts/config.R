@@ -603,7 +603,7 @@ A,openhands,open,"tier A iterates cheap-pass evidence, which openhands can only 
 # anywhere of which repository the package was. A path that dropped it would
 # lose those links for good, because nothing resolves a delisted package again.
 SUMMARY_EXTRA_TABLES <- c("vcs_ai_models", "vcs_ai_rule_inventory",
-                          "vcs_ai_silent_channels", "repo_package_links")
+                          "vcs_ai_silent_channels", "repo_package_links", "vcs_dev_tooling_rules")
 
 # Package-to-repository links this pipeline published before it kept them. Built
 # from every surviving copy of what it published: the vcs_signals_summary in a

@@ -232,3 +232,60 @@ test_that("Travis beside any CI system has_ci counts is not Travis alone", {
     expect_equal(row$ci_travis_only, 0L, info = m$col)
   }
 })
+
+test_that("the rules table states one rule per published column, from config", {
+  rules <- dev_tooling_rules_table("v3 (2026-09-27)")
+  expect_identical(rules$col, dev_tooling_columns())
+  expect_true(all(rules$source %in% c("tree", "graphql", "workflow_text", "derived")))
+  expect_true(all(nzchar(rules$rule)))
+  expect_true(all(rules$ruleset_version == "v3 (2026-09-27)"))
+  expect_equal(rules$rule[rules$col == "has_litedown"], "_litedown.yml|site/_litedown.yml at root")
+  expect_match(rules$rule[rules$col == "coc_source"], "CONDUCT.md", fixed = TRUE)
+  expect_false(any(grepl("\u2014", rules$rule, fixed = TRUE)))
+})
+
+test_that("without the contents read every column the read feeds is NA", {
+  r <- classify_dev_tooling(c("DESCRIPTION", ".Rbuildignore", "README.md"), c("workflows"))
+  read_fed <- vapply(Filter(function(d) d$source %in% c("graphql", "workflow_text"), DEV_TOOLING_DERIVED),
+                     function(d) d$col, "")
+  for (cn in c(read_fed, "rbuildignore_excluded", "pages_url", "site_generator",
+               "cran_version_at_scan", "repo_version_vs_cran",
+               "coc_source", "contributing_source", "pr_template_source"))
+    expect_true(is.na(r[[cn]]), info = cn)
+  expect_equal(r$package_at_root, 1L)
+})
+
+test_that("an older snapshot folds with a v3 shard and writes into an ALTERed table", {
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  v2 <- setdiff(dev_tooling_marker_cols(), c("has_tests_dir", "has_jarl"))
+  DBI::dbExecute(con, sprintf("CREATE TABLE vcs_dev_tooling (repo_id TEXT NOT NULL, last_scanned TEXT, %s,
+    readme_source TEXT, has_ci INTEGER, has_pr_template INTEGER, PRIMARY KEY (repo_id)) WITHOUT ROWID",
+    paste(v2, "INTEGER", collapse = ", ")))
+  DBI::dbExecute(con, "INSERT INTO vcs_dev_tooling (repo_id, last_scanned, has_lintr) VALUES ('github.com/a/old', '2026-09-13', 1)")
+  ensure_series_schema(con)
+  prior <- DBI::dbReadTable(con, "vcs_dev_tooling")
+  fresh <- classify_dev_tooling(c("DESCRIPTION"), character(0), repo = list(
+    name_with_owner = "b/new", coc_url = NA_character_, rbuildignore_text = NA_character_))
+  fresh$repo_id <- "github.com/b/new"; fresh$last_scanned <- "2026-09-27"
+  fresh$ruleset_version <- DEV_TOOLING_RULESET_VERSION
+  wd <- setwd(.repo_root); source(file.path(.repo_root, "scripts", "ai_backfill.R")); setwd(wd)
+  merged <- bind_dev_tooling(prior, fresh)
+  DBI::dbExecute(con, "DELETE FROM vcs_dev_tooling")
+  DBI::dbWriteTable(con, "vcs_dev_tooling", merged, append = TRUE)
+  got <- DBI::dbReadTable(con, "vcs_dev_tooling")
+  old <- got[got$repo_id == "github.com/a/old", , drop = FALSE]
+  expect_true(is.na(old$coc_source)); expect_true(is.na(old$ruleset_version)); expect_equal(old$has_lintr, 1L)
+  expect_equal(got$coc_source[got$repo_id == "github.com/b/new"], "none")
+  expect_equal(DBI::dbGetQuery(con, "SELECT typeof(coc_source) t FROM vcs_dev_tooling WHERE repo_id = 'github.com/b/new'")$t, "text")
+})
+
+test_that("a smaller rules table is a ruleset change, not a regression", {
+  mk <- function(n) {
+    p <- tempfile(fileext = ".db"); con <- DBI::dbConnect(RSQLite::SQLite(), p)
+    ensure_series_schema(con)
+    DBI::dbWriteTable(con, "vcs_dev_tooling_rules", utils::head(dev_tooling_rules_table(), n), append = TRUE)
+    DBI::dbDisconnect(con); p
+  }
+  expect_identical(summary_regressions(mk(60L), mk(10L)), character(0))
+})

@@ -874,6 +874,8 @@ run_merge <- function(io, out_dir, parts_dir) {
   inv$ruleset_version <- AI_RULESET_VERSION
   DBI::dbExecute(con, "DELETE FROM vcs_ai_rule_inventory")
   DBI::dbWriteTable(con, "vcs_ai_rule_inventory", inv, append = TRUE)
+  DBI::dbExecute(con, "DELETE FROM vcs_dev_tooling_rules")
+  DBI::dbWriteTable(con, "vcs_dev_tooling_rules", dev_tooling_rules_table(), append = TRUE)
 
   # Rebuild the summary so ai_* rollups reflect the merged onsets. Non-AI columns come
   # from the seeded series_latest; descriptive + release facts carry forward from the

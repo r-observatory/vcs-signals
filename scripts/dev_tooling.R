@@ -283,3 +283,23 @@ compare_repo_version <- function(repo_desc_package, repo_desc_version, cran_link
   list(cran_version_at_scan = cv[1],
        repo_version_vs_cran = if (is.na(cmp)) NA_character_ else c("behind", "equal", "ahead")[cmp + 2L])
 }
+
+#' One row per vcs_dev_tooling column, where its value comes from and the rule, built from config
+#' so the published statement cannot drift from the classifier.
+dev_tooling_rules_table <- function(version = DEV_TOOLING_RULESET_VERSION) {
+  where <- c(root = "at root", github = "in .github", both = "at root or in .github")
+  tree <- lapply(DEV_TOOLING_MARKERS, function(m) {
+    paths <- paste(m$paths, collapse = "|")
+    if (identical(m$match %||% "exact", "suffix")) paths <- paste("a name ending", paths)
+    data.frame(col = m$col, source = "tree", rule = paste(paths, where[[m$location %||% "root"]]),
+               stringsAsFactors = FALSE)
+  })
+  derived <- lapply(DEV_TOOLING_DERIVED, function(d) {
+    rule <- if (is.null(d$paths)) d$rule
+            else sprintf("repo when %s is at root or in .github, else %s", paste(d$paths, collapse = "|"), d$rule)
+    data.frame(col = d$col, source = d$source, rule = rule, stringsAsFactors = FALSE)
+  })
+  out <- do.call(rbind, c(tree, derived))
+  out$ruleset_version <- version
+  out
+}
