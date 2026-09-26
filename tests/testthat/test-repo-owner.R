@@ -57,13 +57,6 @@ test_that("the first publish that carries the owner table is not compared", {
   expect_equal(summary_regressions(.mk_owner_summary(0), .mk_owner_summary(100)), character(0))
 })
 
-test_that("an owner table that lost 5% of its rows is refused and one that lost 1% is not", {
-  prev <- .mk_owner_summary(100)
-  expect_match(paste(summary_regressions(prev, .mk_owner_summary(95)), collapse = " "),
-               "vcs_repo_owner: 95 rows, was 100", fixed = TRUE)
-  expect_equal(summary_regressions(prev, .mk_owner_summary(99)), character(0))
-})
-
 # ---- write rules ---------------------------------------------------------------
 
 .owner_map <- function(repo_id, node_id)
@@ -265,4 +258,76 @@ test_that("the first run after three weeks without one keeps every repository it
   expect_equal(got$observed_on, c(.today, .today))
   expect_equal(res$not_collected, 1L)
   expect_equal(res$removed, 1L)
+})
+
+# ---- the publish gate's rule for the owner table ----------------------------------
+
+# A summary whose repos table lists r0001 to r0100 as active GitHub repositories with a node
+# id (those in `retired` as retired), and whose owner rows are `owner_ids`, seen on `observed_on`.
+.mk_owner_gate <- function(owner_ids, observed_on, retired = integer(0), with_table = TRUE) {
+  ids <- 1:100
+  path <- tempfile(fileext = ".db")
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con))
+  ensure_repo_schema(con); ensure_series_schema(con)
+  DBI::dbWriteTable(con, "repos", data.frame(
+    repo_id = sprintf("github.com/o/r%04d", ids), node_id = sprintf("R_%d", ids), host = "github",
+    host_domain = "github.com", owner = "o", name = sprintf("r%04d", ids),
+    name_with_owner = sprintf("o/r%04d", ids), supported = 1L, n_packages = 1L,
+    first_seen = "2026-01-01", last_seen = .today,
+    status = ifelse(ids %in% retired, "retired", "active"), stringsAsFactors = FALSE), append = TRUE)
+  if (!with_table) {
+    DBI::dbExecute(con, "DROP TABLE vcs_repo_owner")
+  } else if (length(owner_ids)) {
+    DBI::dbWriteTable(con, "vcs_repo_owner", data.frame(
+      repo_id = sprintf("github.com/o/r%04d", owner_ids), node_id = sprintf("R_%d", owner_ids),
+      owner_login_current = "o", owner_type = "Organization", owner_node_id = "O_1",
+      name_with_owner_current = sprintf("o/r%04d", owner_ids), observed_on = observed_on,
+      stringsAsFactors = FALSE), append = TRUE)
+  }
+  path
+}
+.yesterday <- "2026-09-24"
+.expired <- "2026-09-10"   # 15 days before .today, so the writer's cutoff of 2026-09-11 removed it
+
+test_that("an owner table on one side only is not compared", {
+  with <- .mk_owner_gate(1:100, .yesterday)
+  without <- .mk_owner_gate(integer(0), .today, with_table = FALSE)
+  expect_equal(summary_regressions(without, with), character(0))
+  expect_equal(summary_regressions(with, without), character(0))
+})
+
+test_that("an emptied owner table is refused", {
+  r <- summary_regressions(.mk_owner_gate(1:100, .yesterday), .mk_owner_gate(integer(0), .today))
+  expect_match(paste(r, collapse = " "), "vcs_repo_owner: published empty, was 100 rows", fixed = TRUE)
+})
+
+test_that("an owner row whose observed_on moved back is refused", {
+  prev <- .mk_owner_gate(1:100, .today)
+  r <- summary_regressions(prev, .mk_owner_gate(1:100, rep(c(.today, .yesterday), c(99, 1))))
+  expect_match(paste(r, collapse = " "),
+               "vcs_repo_owner: 1 row(s) had observed_on moved earlier: github.com/o/r0100", fixed = TRUE)
+})
+
+test_that("5% of the owner rows gone, each unseen for more than 14 days, is accepted", {
+  prev <- .mk_owner_gate(1:100, rep(c(.yesterday, .expired), c(95, 5)))
+  expect_equal(summary_regressions(prev, .mk_owner_gate(1:95, .today)), character(0))
+  # The writer keeps a row seen exactly 14 days before, so its loss is not expiry.
+  kept <- .mk_owner_gate(1:100, rep(c(.yesterday, "2026-09-11"), c(95, 5)))
+  expect_match(paste(summary_regressions(kept, .mk_owner_gate(1:95, .today)), collapse = " "),
+               "vcs_repo_owner: 5 row(s) are gone", fixed = TRUE)
+})
+
+test_that("5% of the owner rows gone because their repositories are retired is accepted", {
+  prev <- .mk_owner_gate(1:100, .yesterday)
+  expect_equal(summary_regressions(prev, .mk_owner_gate(1:95, .today, retired = 96:100)), character(0))
+})
+
+test_that("one active owner row seen within 14 days that leaves is refused and named", {
+  prev <- .mk_owner_gate(1:100, .yesterday)
+  r <- paste(summary_regressions(prev, .mk_owner_gate(setdiff(1:100, 7L), .today)), collapse = " ")
+  expect_match(r, paste0("vcs_repo_owner: 1 row(s) are gone while the repository is still active ",
+                         "and was seen within 14 days: github.com/o/r0007"), fixed = TRUE)
+  four <- paste(summary_regressions(prev, .mk_owner_gate(5:100, .today)), collapse = " ")
+  expect_match(four, "github.com/o/r0001, github.com/o/r0002, github.com/o/r0003, and 1 more", fixed = TRUE)
 })

@@ -1765,6 +1765,44 @@ build_release_notes <- function(summary, changed_shards, tag) {
   out
 }
 
+#' The rule for vcs_repo_owner: a row may leave only when write_repo_owner's own deletes explain
+#' it (no longer an active GitHub repository with a node id, or unseen past OWNER_STALE_DAYS).
+.regress_repo_owner <- function(pc, nc) {
+  t <- "vcs_repo_owner"
+  need <- c("repo_id", "observed_on")
+  prev <- .gate_rows(pc, t); nxt <- .gate_rows(nc, t)
+  if (is.null(prev) || nrow(prev) == 0 || !all(need %in% names(prev))) return(character(0))
+  if (is.null(nxt) || !all(need %in% names(nxt)))
+    return(sprintf("%s: published without %s, so the gate cannot tell which owner rows were kept",
+                   t, paste(setdiff(need, names(nxt)), collapse = ", ")))
+  if (nrow(nxt) == 0) return(sprintf("%s: published empty, was %d rows", t, nrow(prev)))
+  show <- function(x) paste(c(utils::head(x, 3), if (length(x) > 3)
+                                sprintf("and %d more", length(x) - 3)), collapse = ", ")
+  out <- character(0)
+  m <- match(prev$repo_id, nxt$repo_id)
+  # Only a build seeded from an older copy moves a date back.
+  back <- (nxt$observed_on[m] < prev$observed_on) %in% TRUE
+  if (any(back))
+    out <- c(out, sprintf("%s: %d row(s) had observed_on moved earlier: %s",
+                          t, sum(back), show(prev$repo_id[back])))
+  # Write rule 4 keeps rows only for active GitHub repositories with a node id. A repos
+  # table the gate cannot read explains nothing.
+  repos <- .gate_rows(nc, "repos")
+  cols <- c("repo_id", "host", "status", "node_id")
+  listed <- if (is.null(repos) || !all(cols %in% names(repos))) rep(TRUE, nrow(prev)) else
+    prev$repo_id %in% repos$repo_id[repos$host %in% "github" & repos$status %in% "active" &
+                                    !is.na(repos$node_id)]
+  # Write rule 5: the cutoff the writer deleted by on the day it wrote the outgoing table.
+  cutoff <- format(as.Date(max(nxt$observed_on)) - OWNER_STALE_DAYS)
+  expired <- (prev$observed_on < cutoff) %in% TRUE
+  lost <- is.na(m) & listed & !expired
+  if (any(lost))
+    out <- c(out, sprintf(paste0("%s: %d row(s) are gone while the repository is still active ",
+                                 "and was seen within %d days: %s"),
+                          t, sum(lost), OWNER_STALE_DAYS, show(prev$repo_id[lost])))
+  out
+}
+
 #' Refuse to publish a summary that lost ground against the one already out.
 #'
 #' The published summary is a single asset, uploaded with --clobber, so a bad
@@ -1813,6 +1851,7 @@ summary_regressions <- function(prev_path, next_path, tol = 0.02) {
       vcs_ai_rule_inventory  = .regress_rule_inventory(pc, nc),
       vcs_ai_models          = .regress_ai_models(pc, nc, tol),
       repo_package_links     = .regress_package_links(pc, nc),
+      vcs_repo_owner         = .regress_repo_owner(pc, nc),
       .regress_row_count(t, pc, nc, tol)))
   }
 
