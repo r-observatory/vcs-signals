@@ -42,3 +42,28 @@ local_fast_batches <- function(env = parent.frame()) {
   assign("BATCH_DELAY_S", 0, envir = globalenv())
   withr::defer(assign("BATCH_DELAY_S", old, envir = globalenv()), envir = env)
 }
+
+# A canary response in which every TREE_QUERY_CANARY floor holds: the own_community
+# repositories point at their own files, the inheritors report their owner's .github template.
+contents_canary_ok <- function() {
+  own <- TREE_QUERY_CANARY$own_community
+  slugs <- c(own, TREE_QUERY_CANARY$inherited_pr_template)
+  alias <- function(s) {
+    base <- list(nameWithOwner = s, isFork = FALSE, parent = NULL, issueTemplates = list(),
+                 rootTree = list(entries = list(list(name = "DESCRIPTION", type = "blob"))))
+    if (s %in% own) c(base, list(
+      pullRequestTemplates = list(),
+      codeOfConduct = list(url = sprintf("https://github.com/%s/blob/main/.github/CODE_OF_CONDUCT.md", s)),
+      contributingGuidelines = list(url = sprintf("https://github.com/%s/blob/main/.github/CONTRIBUTING.md", s))))
+    else c(base, list(
+      pullRequestTemplates = list(list(filename = "pull_request_template.md",
+        repository = list(nameWithOwner = paste0(sub("/.*$", "", s), "/.github")))),
+      codeOfConduct = NULL, contributingGuidelines = NULL))
+  }
+  list(data = stats::setNames(lapply(slugs, alias), sprintf("r%d", seq_along(slugs) - 1L)))
+}
+
+# Wraps a fake graphql so the enumerate step's canary query gets a passing answer.
+with_contents_canary <- function(graphql, canary = contents_canary_ok) function(query) {
+  if (grepl('owner: "tidyverse", name: "forcats"', query, fixed = TRUE)) canary() else graphql(query)
+}

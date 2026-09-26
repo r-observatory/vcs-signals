@@ -403,8 +403,12 @@ TIER_PRIORITY <- c(A = 1L, B = 2L, C = 3L, PR = 4L, D = 5L)
 SEARCH_DELAY_S <- 6
 # Subtrees the contents query lists one level of, alias to path. build_tree_query and
 # parse_tree_markers both iterate this; a path under .github/ lands in github_entries.
-TREE_SUBTREES <- c(claudeTree = ".claude", agentsTree = ".agents", instTree = "inst",
-                   vignettesTree = "vignettes", siteTree = "site")
+TREE_SUBTREES <- c(workflowsTree = ".github/workflows", claudeTree = ".claude", agentsTree = ".agents",
+                   instTree = "inst", vignettesTree = "vignettes", siteTree = "site")
+# The contents query canary: one floor per set, met when any one candidate meets it.
+TREE_QUERY_CANARY <- list(
+  own_community = c("tidyverse/forcats", "tidyverse/dplyr", "r-lib/usethis", "easystats/insight"),
+  inherited_pr_template = c("epiverse-trace/linelist", "epiverse-trace/epiparameter", "ecmwf/eccodes"))
 # Repos per aliased tree-marker / PR-login query in the cheap pass. Both queries are
 # execution-heavy server-side (a tree fetch plus 50 PR nodes per alias), so this is
 # kept small like COMMIT_HISTORY_BATCH rather than the 20-40 a cheap connection page

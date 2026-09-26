@@ -32,7 +32,7 @@ test_that("run_enumerate_ai builds the FULL active github roster from the repos 
       file.copy(f, file.path(dir, basename(f)), overwrite = TRUE); TRUE },
     # No renames to resolve in this fixture; an empty data payload makes the re-resolve
     # step's parse_resolve() see idx-less rows (node_id NA) and leave owner/name as-is.
-    graphql = function(query) list(data = list()))
+    graphql = with_contents_canary(function(query) list(data = list())))
   out <- tempfile("out_"); dir.create(out)
   run_enumerate_ai(io, out)
   roster <- load_ai_roster(file.path(out, "vcs-ai-roster.db"))
@@ -54,11 +54,11 @@ test_that("run_enumerate_ai re-resolves owner/name from node_id for rows that al
       f <- list.files(rel, pattern = utils::glob2rx(pattern), full.names = TRUE)
       if (!length(f)) return(FALSE)
       file.copy(f, file.path(dir, basename(f)), overwrite = TRUE); TRUE },
-    graphql = function(query) {
+    graphql = with_contents_canary(function(query) {
       # build_resolve_query(followRenames: true) reports the current slug for node R_x.
       list(data = list(r0 = list(id = "R_x", nameWithOwner = "new/name", isArchived = FALSE,
                                  isFork = FALSE, isMirror = FALSE, createdAt = "2024-01-01T00:00:00Z")))
-    })
+    }))
   out <- tempfile("out_"); dir.create(out)
   run_enumerate_ai(io, out)
   roster <- load_ai_roster(file.path(out, "vcs-ai-roster.db"))
@@ -84,7 +84,7 @@ test_that("run_enumerate_ai drops a roster row whose re-resolve returns a differ
       f <- list.files(rel, pattern = utils::glob2rx(pattern), full.names = TRUE)
       if (!length(f)) return(FALSE)
       file.copy(f, file.path(dir, basename(f)), overwrite = TRUE); TRUE },
-    graphql = function(query) {
+    graphql = with_contents_canary(function(query) {
       # r0 (old/name, node R_x) genuinely renamed -> same node_id at a new slug.
       # r1 (stale/squatted, node R_y) -> the slug now resolves to an UNRELATED repo's
       # node_id (R_evil): the old repo is gone and something else squatted the slug.
@@ -93,7 +93,7 @@ test_that("run_enumerate_ai drops a roster row whose re-resolve returns a differ
                   isFork = FALSE, isMirror = FALSE, createdAt = "2024-01-01T00:00:00Z"),
         r1 = list(id = "R_evil", nameWithOwner = "squatter/repo", isArchived = FALSE,
                   isFork = FALSE, isMirror = FALSE, createdAt = "2025-06-01T00:00:00Z")))
-    })
+    }))
   out <- tempfile("out_"); dir.create(out)
   run_enumerate_ai(io, out)
   roster <- load_ai_roster(file.path(out, "vcs-ai-roster.db"))

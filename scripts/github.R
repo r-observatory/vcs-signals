@@ -569,19 +569,42 @@ fetch_responsiveness <- function(io, repos, today) {
 #' no .github), so the parser guards it. Alias r<idx> (0-based) maps back to
 #' repo_id by row order. The entry-name vectors feed classify_tree_markers.
 build_tree_query <- function(repos) {
+  # workflowsTree also carries each file's text, for the workflow rules.
+  subtree <- function(alias, path) {
+    sel <- if (identical(alias, "workflowsTree"))
+      "entries { name type object { ... on Blob { byteSize text } } }" else "entries { name type }"
+    sprintf('%s: object(expression: "HEAD:%s") { ... on Tree { %s } }', alias, path, sel)
+  }
+  subtrees <- paste(mapply(subtree, names(TREE_SUBTREES), unname(TREE_SUBTREES)), collapse = "\n      ")
+  # pullRequestTemplates, issueTemplates, codeOfConduct, contributingGuidelines: this order,
+  # with issueTemplates, is the only one GitHub answers for a multi-repository batch.
   parts <- vapply(seq_len(nrow(repos)), function(j) {
     sprintf('r%d: repository(owner: "%s", name: "%s") {
+      nameWithOwner
       isFork parent { nameWithOwner }
+      homepageUrl
+      hasIssuesEnabled
+      hasDiscussionsEnabled
+      discussions { totalCount }
+      fundingLinks { platform url }
+      owner { ... on Sponsorable { hasSponsorsListing } }
+      pullRequestTemplates { filename repository { nameWithOwner } }
+      issueTemplates { name }
+      codeOfConduct { url }
+      contributingGuidelines { url }
+      environments(first: 10) { nodes { name } }
+      pagesDeploy: deployments(environments: ["github-pages"], first: 1, orderBy: {field: CREATED_AT, direction: DESC}) {
+        nodes { createdAt latestStatus { environmentUrl } }
+      }
+      ghPagesPkgdown: object(expression: "gh-pages:pkgdown.yml") { ... on Blob { text } }
       rootTree: object(expression: "HEAD:") { ... on Tree { entries { name type } } }
       githubTree: object(expression: "HEAD:.github") { ... on Tree { entries { name type } } }
-      claudeTree: object(expression: "HEAD:.claude") { ... on Tree { entries { name type } } }
-      agentsTree: object(expression: "HEAD:.agents") { ... on Tree { entries { name type } } }
-      instTree: object(expression: "HEAD:inst") { ... on Tree { entries { name type } } }
-      vignettesTree: object(expression: "HEAD:vignettes") { ... on Tree { entries { name type } } }
-      siteTree: object(expression: "HEAD:site") { ... on Tree { entries { name type } } }
+      %s
+      docsPkgdown: object(expression: "HEAD:docs/pkgdown.yml") { ... on Blob { text } }
+      descBlob: object(expression: "HEAD:DESCRIPTION") { ... on Blob { byteSize text } }
       gitignore: object(expression: "HEAD:.gitignore") { ... on Blob { text } }
       rbuildignore: object(expression: "HEAD:.Rbuildignore") { ... on Blob { text } }
-    }', j - 1L, repos$owner[j], repos$name[j])
+    }', j - 1L, repos$owner[j], repos$name[j], subtrees)
   }, character(1))
   sprintf('query { %s }', paste(parts, collapse = "\n"))
 }
@@ -627,7 +650,7 @@ parse_tree_markers <- function(resp, repos) {
       if (startsWith(path, ".github/")) gh <- c(gh, prefixed(r[[alias]], sub("^\\.github/", "", path)))
       else root <- c(root, prefixed(r[[alias]], path))
     }
-    out[[j]] <- list(
+    el <- list(
       root_entries = root,
       github_entries = gh,
       is_fork = isTRUE(r$isFork),
@@ -635,8 +658,57 @@ parse_tree_markers <- function(resp, repos) {
       gitignore_lines = blob_lines(r$gitignore),
       rbuildignore_lines = blob_lines(r$rbuildignore),
       rbuildignore_text = blob_text(r$rbuildignore))
+    # An element is present only when its field was asked; NA or empty is GitHub's answer.
+    has <- function(field) field %in% names(r)
+    if (has("workflowsTree")) el["workflows"] <- list(workflow_texts(r$workflowsTree))
+    if (has("descBlob")) el$desc_text <- blob_text(r$descBlob)
+    if (has("nameWithOwner")) el$name_with_owner <- .nn(r$nameWithOwner, NA_character_)
+    if (has("ghPagesPkgdown") || has("docsPkgdown"))
+      el$pkgdown_yml <- c(gh_pages = blob_text(r$ghPagesPkgdown), docs = blob_text(r$docsPkgdown))
+    if (has("environments") || has("pagesDeploy")) {
+      dep <- .nn(r$pagesDeploy$nodes, list())
+      newest <- if (length(dep)) dep[[1]] else list()
+      el$pages <- list(
+        environments = vapply(.nn(r$environments$nodes, list()),
+                              function(n) .nn(n$name, NA_character_), character(1)),
+        last_deploy_at = .nn(newest$createdAt, NA_character_),
+        environment_url = .nn(newest$latestStatus$environmentUrl, NA_character_))
+    }
+    if (has("pullRequestTemplates")) {
+      tpl <- .nn(r$pullRequestTemplates, list())
+      el$pr_templates <- data.frame(
+        filename = vapply(tpl, function(t) .nn(t$filename, NA_character_), character(1)),
+        repository = vapply(tpl, function(t) .nn(t$repository$nameWithOwner, NA_character_), character(1)),
+        stringsAsFactors = FALSE)
+    }
+    if (has("codeOfConduct")) el$coc_url <- .nn(r$codeOfConduct$url, NA_character_)
+    if (has("contributingGuidelines")) el$contributing_url <- .nn(r$contributingGuidelines$url, NA_character_)
+    if (has("fundingLinks")) {
+      fl <- .nn(r$fundingLinks, list())
+      el$funding_links <- data.frame(
+        platform = vapply(fl, function(f) .nn(f$platform, NA_character_), character(1)),
+        url = vapply(fl, function(f) .nn(f$url, NA_character_), character(1)),
+        stringsAsFactors = FALSE)
+    }
+    if (has("owner")) el$owner_sponsorable <- .nn(r$owner$hasSponsorsListing, NA)
+    if (has("homepageUrl")) el$homepage_url <- .nn(r$homepageUrl, NA_character_)
+    if (has("hasIssuesEnabled")) el$has_issues_enabled <- .nn(r$hasIssuesEnabled, NA)
+    if (has("hasDiscussionsEnabled")) el$has_discussions <- .nn(r$hasDiscussionsEnabled, NA)
+    if (has("discussions")) el$discussions_total <- as.integer(.nn(r$discussions$totalCount, NA_integer_))
+    out[[j]] <- el
   }
   out
+}
+
+#' Name and text of each workflow file; binary or unreadable blobs are left out, and a
+#' missing .github/workflows directory is NULL.
+workflow_texts <- function(tree) {
+  if (is.null(tree)) return(NULL)
+  ents <- .nn(tree$entries, list())
+  nm <- vapply(ents, function(e) .nn(e$name, NA_character_), character(1))
+  tx <- vapply(ents, function(e) .nn(e$object$text, NA_character_), character(1))
+  keep <- !is.na(nm) & !is.na(tx)
+  data.frame(name = nm[keep], text = tx[keep], stringsAsFactors = FALSE)
 }
 
 #' The subtree prefixes parse_tree_markers adds, split by the entry list they join.

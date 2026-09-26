@@ -224,3 +224,81 @@ test_that("a null alias still reads as not assessed", {
   expect_true(is.na(got$is_fork))
   expect_length(got$root_entries, 0L)
 })
+
+test_that("every repository block asks for the four community fields in the order that passed", {
+  for (n in 2:3) {
+    repos <- data.frame(owner = paste0("o", seq_len(n)), name = paste0("n", seq_len(n)),
+                        repo_id = paste0("github.com/o", seq_len(n), "/n", seq_len(n)),
+                        stringsAsFactors = FALSE)
+    blocks <- strsplit(build_tree_query(repos), "r[0-9]+: repository\\(")[[1]][-1]
+    expect_length(blocks, n)
+    for (b in blocks) {
+      at <- vapply(c("pullRequestTemplates", "issueTemplates", "codeOfConduct", "contributingGuidelines"),
+                   function(f) regexpr(f, b, fixed = TRUE)[[1]], integer(1))
+      expect_true(all(at > 0L), info = b)
+      expect_identical(order(at), 1:4)
+      expect_true(grepl("pullRequestTemplates { filename repository { nameWithOwner } }", b, fixed = TRUE))
+    }
+  }
+})
+
+test_that("the contents query leaves out the four subtrees only the AI rules will read", {
+  q <- build_tree_query(one_repo)
+  for (a in c("githubAgentsTree", "positTree", "positaiTree", "geminiTree")) expect_false(grepl(a, q, fixed = TRUE), info = a)
+})
+
+test_that("the contents query lists every subtree in TREE_SUBTREES", {
+  q <- build_tree_query(one_repo)
+  for (a in names(TREE_SUBTREES))
+    expect_true(grepl(sprintf('%s: object(expression: "HEAD:%s")', a, TREE_SUBTREES[[a]]), q, fixed = TRUE), info = a)
+})
+
+full_alias <- function() list(
+  nameWithOwner = "Owner/pkg", isFork = TRUE, parent = list(nameWithOwner = "up/pkg"),
+  homepageUrl = "https://owner.github.io/pkg/", hasIssuesEnabled = TRUE, hasDiscussionsEnabled = FALSE,
+  discussions = list(totalCount = 0L),
+  fundingLinks = list(list(platform = "GITHUB", url = "https://github.com/sponsors/owner")),
+  owner = list(hasSponsorsListing = TRUE),
+  pullRequestTemplates = list(list(filename = "pull_request_template.md", repository = list(nameWithOwner = "Owner/.github"))),
+  issueTemplates = list(),
+  codeOfConduct = list(url = "https://github.com/Owner/pkg/blob/main/CODE_OF_CONDUCT.md"),
+  contributingGuidelines = NULL,
+  environments = list(nodes = list(list(name = "github-pages"))),
+  pagesDeploy = list(nodes = list(list(createdAt = "2026-06-06T22:20:02Z",
+                                       latestStatus = list(environmentUrl = "https://owner.github.io/pkg/")))),
+  ghPagesPkgdown = list(text = "pkgdown: 2.2.0\n"),
+  rootTree = list(entries = list(list(name = "DESCRIPTION", type = "blob"), list(name = ".github", type = "tree"))),
+  githubTree = list(entries = list(list(name = "workflows", type = "tree"))),
+  workflowsTree = list(entries = list(
+    list(name = "R-CMD-check.yaml", type = "blob", object = list(byteSize = 30L, text = "uses: r-lib/actions/check-r-package@v2")),
+    list(name = "logo.png", type = "blob", object = list(byteSize = 900L, text = NULL)))),
+  docsPkgdown = NULL,
+  descBlob = list(byteSize = 40L, text = "Package: pkg\nVersion: 1.0.0\n"),
+  gitignore = NULL,
+  rbuildignore = list(text = "^\\.github$\n"))
+
+test_that("a full contents alias yields every element under its name", {
+  got <- parse_tree_markers(list(data = list(r0 = full_alias())), one_repo)[[1]]
+  expect_setequal(names(got), c("root_entries", "github_entries", "is_fork", "parent", "gitignore_lines",
+    "rbuildignore_lines", "rbuildignore_text", "workflows", "desc_text", "name_with_owner", "pkgdown_yml",
+    "pages", "pr_templates", "coc_url", "contributing_url", "funding_links", "owner_sponsorable",
+    "homepage_url", "has_issues_enabled", "has_discussions", "discussions_total"))
+  expect_true("workflows/R-CMD-check.yaml" %in% got$github_entries)
+  expect_equal(got$workflows$name, "R-CMD-check.yaml")
+  expect_equal(got$pkgdown_yml, c(gh_pages = "pkgdown: 2.2.0\n", docs = NA_character_))
+  expect_equal(got$pages$environments, "github-pages")
+  expect_equal(got$pages$last_deploy_at, "2026-06-06T22:20:02Z")
+  expect_equal(got$pr_templates$repository, "Owner/.github")
+  expect_true(is.na(got$contributing_url))
+  expect_equal(got$funding_links$platform, "GITHUB")
+  expect_true(got$owner_sponsorable)
+  expect_equal(got$discussions_total, 0L)
+  expect_equal(got$parent, "up/pkg")
+})
+
+test_that("a missing workflows directory is NULL, which says the directory is absent", {
+  a <- full_alias(); a["workflowsTree"] <- list(NULL)
+  got <- parse_tree_markers(list(data = list(r0 = a)), one_repo)[[1]]
+  expect_true("workflows" %in% names(got))
+  expect_null(got$workflows)
+})

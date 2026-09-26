@@ -20,6 +20,7 @@ if (!exists("ensure_series_schema")) source("scripts/helpers.R")
 if (!exists("build_tree_query"))     source("scripts/github.R")
 if (!exists("gh_release_exists"))    source("scripts/update.R")   # default_io, gh_release_*, seed_working_db
 if (!exists("build_ai_detail"))      source("scripts/ai_signals.R")
+if (!exists("url_points_into"))      source("scripts/dev_tooling.R")
 if (!exists("write_roster"))         source("scripts/backfill.R") # shard_rows via helpers, roster idiom
 suppressPackageStartupMessages({ library(DBI); library(RSQLite) })
 
@@ -47,6 +48,61 @@ load_ai_roster <- function(path) {
   DBI::dbReadTable(con, AI_ROSTER_TABLE)
 }
 
+# ---- contents query canary ---------------------------------------------------
+.canary_repos <- function(slugs)
+  data.frame(repo_id = paste0("github.com/", tolower(slugs)), owner = sub("/.*$", "", slugs),
+             name = sub("^[^/]*/", "", slugs), stringsAsFactors = FALSE)
+
+#' One contents document over every TREE_QUERY_CANARY repository, since the community-field
+#' fault shows only on multi-repository batches. Stops the run when a floor has no candidate.
+tree_query_canary <- function(io) {
+  own <- TREE_QUERY_CANARY$own_community
+  inherit <- TREE_QUERY_CANARY$inherited_pr_template
+  slugs <- c(own, inherit)
+  repos <- .canary_repos(slugs)
+  fail <- function(what, values) stop(sprintf(paste0(
+    "contents query canary: %s. %s. Run Rscript scripts/ai_backfill.R canary with a token and ",
+    "read each candidate's value. If GitHub changed, fix the query or the parser before the next ",
+    "pass. If the candidates changed their own files, replace them in TREE_QUERY_CANARY with ",
+    "repositories that meet the floor today and re-run the enumerate job."), what, values),
+    call. = FALSE)
+  ask <- function() tryCatch(io$graphql(build_tree_query(repos)), error = function(e) list(.err = conditionMessage(e)))
+  res <- ask()
+  # Only a request that threw (a 502 or a timeout) is read again. A reply GitHub answered is
+  # final, so the field-order fault stops the pass on its first reply.
+  if (!is.null(res$.err)) {
+    (if (is.function(io$sleep)) io$sleep else Sys.sleep)(AI_BATCH_RETRY_WAIT_S)
+    res <- ask()
+  }
+  if (!is.null(res$.err)) fail("the query did not return", res$.err)
+  if (is.null(res$data)) fail("GitHub returned no data", .fetch_first_error(res))
+  if (length(res$errors) && !errors_are_alias_not_found(res$errors))
+    fail("GitHub rejected the query", .fetch_first_error(res))
+  if (all(vapply(sprintf("r%d", seq_along(slugs) - 1L), function(a) is.null(res$data[[a]]), logical(1))))
+    fail("every candidate came back empty", paste(slugs, collapse = ", "))
+  parsed <- parse_tree_markers(res, repos)
+  el <- function(s) parsed[[paste0("github.com/", tolower(s))]]
+  slug_of <- function(s) { nwo <- el(s)$name_with_owner %||% NA_character_; if (is.na(nwo)) s else nwo }
+  own_ok <- vapply(own, function(s) url_points_into(el(s)$coc_url %||% NA_character_, slug_of(s)) &&
+                     url_points_into(el(s)$contributing_url %||% NA_character_, slug_of(s)), logical(1))
+  inherit_ok <- vapply(inherit, function(s) {
+    held <- tolower(el(s)$pr_templates$repository %||% character(0))
+    any(held == tolower(paste0(sub("/.*$", "", slug_of(s)), "/.github")), na.rm = TRUE)
+  }, logical(1))
+  shown <- function(x) if (is.null(x) || !length(x) || all(is.na(x))) "none" else paste(x, collapse = " ")
+  if (!any(own_ok))
+    fail("no own_community candidate returned a code of conduct and a contributing guide from its own repository",
+         paste(vapply(own, function(s) sprintf("%s code of conduct %s, contributing guide %s", s,
+                 shown(el(s)$coc_url), shown(el(s)$contributing_url)), character(1)), collapse = " | "))
+  if (!any(inherit_ok))
+    fail("no inherited_pr_template candidate reported its owner's .github pull request template",
+         paste(vapply(inherit, function(s) sprintf("%s template from %s", s,
+                 shown(el(s)$pr_templates$repository)), character(1)), collapse = " | "))
+  message(sprintf("contents query canary: passed, own_community %d of %d, inherited_pr_template %d of %d",
+                  sum(own_ok), length(own), sum(inherit_ok), length(inherit)))
+  invisible(TRUE)
+}
+
 # ---- enumerate --------------------------------------------------------------
 #' Build the FULL active github roster from the published summary's embedded repos
 #' table (NOT the star-filtered vcs_signals_summary that run_enumerate uses): the
@@ -62,6 +118,8 @@ load_ai_roster <- function(path) {
 #' so the squatter is never scanned under this row's repo_id. Same download as
 #' backfill.R's enumerate.
 run_enumerate_ai <- function(io, out_dir) {
+  # Before any read: a broken contents query stops the pass here, not twelve shards later.
+  tree_query_canary(io)
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   if (!isTRUE(io$download("vcs-signals-summary.db", out_dir)))
     stop("could not download vcs-signals-summary.db from the published release; nothing to enumerate")
@@ -863,6 +921,8 @@ main <- function(mode, out_dir, io = NULL) {
 
   if (mode == "enumerate") {
     run_enumerate_ai(io, out_dir)
+  } else if (mode == "canary") {
+    tree_query_canary(io)
   } else if (mode == "cheap") {
     i <- suppressWarnings(as.integer(Sys.getenv("VCS_SHARD_I", "0")))
     N <- suppressWarnings(as.integer(Sys.getenv("VCS_SHARD_N", "1")))
@@ -889,7 +949,7 @@ main <- function(mode, out_dir, io = NULL) {
     # repeated.
     retry_on_publish_conflict(io, function() run_merge(io, out_dir, Sys.getenv("VCS_PARTS", "parts")))
   } else {
-    stop("usage: ai_backfill.R [enumerate|cheap|gate|gate-incremental|deep|merge]")
+    stop("usage: ai_backfill.R [enumerate|canary|cheap|gate|gate-incremental|deep|merge]")
   }
 }
 
