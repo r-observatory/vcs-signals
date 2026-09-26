@@ -215,11 +215,11 @@ contents_shard_stops <- function(n_failed, attempted)
 #' Cheap Tier-D marker + PR-agent pass over one even mod-N shard of the roster. Batches
 #' TIER_D_BATCH repos through fetch_tree_markers + fetch_pr_agents, assembles evidence,
 #' and writes only the flagged repos (repo_has_ai_signal) to a two-table partial. A repo
-#' whose whole cheap batch faulted is absent from both fetch results and is skipped
-#' (deferred, retried next run), never written as clean. Before each batch, a
+#' whose contents read fails is listed in the dev-tooling partial's failures table, gets
+#' no dev-tooling row, and enough of them stop the shard. Before each batch, a
 #' graphql_rate_remaining(io) preflight (mirrors update.R:130-137) pauses the shard when
 #' the budget is below AI_POINT_RESERVE, so an exhausted token stops the pass cleanly
-#' instead of faulting batches into silent single-repo drops; the unscanned tail of this
+#' instead of reporting the rest of the shard as failed; the unscanned tail of this
 #' shard is picked up by the next workflow_dispatch (enumerate + cheap re-run
 #' deterministically over the same shard). fetch_tree_markers/fetch_pr_agents already
 #' pace themselves with BATCH_DELAY_S, so this loop does not sleep again per batch.
