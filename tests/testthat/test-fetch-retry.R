@@ -262,3 +262,87 @@ test_that("repositories a paused shard never reached are not failures", {
   expect_message(sh$run(), "20 not read this week")
   expect_equal(nrow(read_scan_failures(file.path(sh$out, "vcs-dev-tooling-0.db"))), 0L)
 })
+
+# ---- run_merge: failures keep prior rows and are counted against the roster ----
+
+publish_prior <- function(rel_io, n, dev = NULL) {
+  out0 <- tempfile("o0_"); dir.create(out0)
+  con0 <- DBI::dbConnect(RSQLite::SQLite(), file.path(out0, "w.db"))
+  on.exit(DBI::dbDisconnect(con0))
+  ensure_repo_schema(con0); ensure_series_schema(con0)
+  r <- fake_repos(n)
+  DBI::dbWriteTable(con0, "repos", data.frame(
+    repo_id = r$repo_id, node_id = NA_character_, host = "github", host_domain = "github.com",
+    owner = r$owner, name = r$name, name_with_owner = paste(r$owner, r$name, sep = "/"),
+    supported = 1L, n_packages = 1L, first_seen = "2026-01-01", last_seen = "2026-09-20",
+    status = "active", stringsAsFactors = FALSE), append = TRUE)
+  if (!is.null(dev)) DBI::dbWriteTable(con0, "vcs_dev_tooling", dev, append = TRUE)
+  publish(rel_io, con0, out0, tag = "current", source_kind = "live", force_full = TRUE,
+          base_generation = "")
+}
+
+published_dev <- function(rel_io) {
+  chk <- tempfile("chk_"); dir.create(chk)
+  rel_io$download("vcs-signals-summary.db", chk)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(chk, "vcs-signals-summary.db"))
+  on.exit(DBI::dbDisconnect(scon))
+  DBI::dbReadTable(scon, "vcs_dev_tooling")
+}
+
+test_that("a repository whose contents read failed keeps its prior row through the merge", {
+  local_fast_batches()
+  rel <- tempfile("rel_"); dir.create(rel)
+  rel_io <- local_release_io(rel)
+  old <- classify_dev_tooling(c(".lintr", "DESCRIPTION"), character(0))
+  old$repo_id <- "github.com/o/p01"; old$last_scanned <- "2026-09-13"
+  publish_prior(rel_io, 60, old[c("repo_id", "last_scanned", dev_tooling_columns())])
+
+  io <- fake_contents_io(fail = "p01")
+  sh <- cheap_over(io, 60)
+  sh$run()
+  run_merge(rel_io, tempfile("m_"), sh$out)
+
+  got <- published_dev(rel_io)
+  kept <- got[got$repo_id == "github.com/o/p01", , drop = FALSE]
+  expect_equal(kept$last_scanned, "2026-09-13")
+  expect_equal(kept$has_lintr, 1L)
+  expect_equal(got$last_scanned[got$repo_id == "github.com/o/p02"], format(Sys.Date()))
+})
+
+test_that("the merge publishes and then fails when failed repositories pass two percent", {
+  rel <- tempfile("rel_"); dir.create(rel)
+  rel_io <- local_release_io(rel)
+  publish_prior(rel_io, 10)
+  parts <- tempfile("parts_"); dir.create(parts)
+  write_dev_tooling_partial(file.path(parts, "vcs-dev-tooling-0.db"), .devtool_empty_shard(),
+    .fetch_failed_frame(c("github.com/o/p01", "github.com/o/p02"), "contents", "Something went wrong", "2026-09-27T08:00:00Z"))
+  before <- length(rel_io$uploaded())
+  expect_error(run_merge(rel_io, tempfile("m_"), parts), "2 of 10 roster repositories failed a read")
+  expect_true("vcs-signals-summary.db" %in% rel_io$uploaded()[-seq_len(before)])
+})
+
+test_that("failures at or under two percent of the roster do not stop the merge", {
+  expect_null(scan_failure_stop_message(.fetch_failed_frame("a", "contents", "x", "t"), 50L))
+  expect_null(scan_failure_stop_message(.fetch_failed_frame(), 0L))
+  expect_match(scan_failure_stop_message(.fetch_failed_frame(c("a", "b"), "contents", "x", "t"), 50L),
+               "2 of 50")
+})
+
+test_that("a merge rerun over partials written before the failures table existed folds them and does not stop", {
+  rel <- tempfile("rel_"); dir.create(rel)
+  rel_io <- local_release_io(rel)
+  publish_prior(rel_io, 10)
+  parts <- tempfile("parts_"); dir.create(parts)
+  old <- classify_dev_tooling(c(".lintr", "DESCRIPTION"), character(0))
+  old$repo_id <- "github.com/o/p01"; old$last_scanned <- "2026-09-20"
+  pcon <- DBI::dbConnect(RSQLite::SQLite(), file.path(parts, "vcs-dev-tooling-0.db"))
+  DBI::dbExecute(pcon, dev_tooling_create_sql())
+  DBI::dbWriteTable(pcon, "vcs_dev_tooling", old[c("repo_id", "last_scanned", dev_tooling_columns())],
+                    append = TRUE)
+  DBI::dbDisconnect(pcon)
+  expect_equal(nrow(read_scan_failures(file.path(parts, "vcs-dev-tooling-0.db"))), 0L)
+  expect_no_error(run_merge(rel_io, tempfile("m_"), parts))
+  got <- published_dev(rel_io)
+  expect_equal(got$has_lintr[got$repo_id == "github.com/o/p01"], 1L)
+  expect_equal(got$last_scanned[got$repo_id == "github.com/o/p01"], "2026-09-20")
+})

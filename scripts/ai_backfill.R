@@ -207,6 +207,17 @@ read_scan_failures <- function(path) {
   if (DBI::dbExistsTable(con, "failures")) DBI::dbReadTable(con, "failures") else .fetch_failed_frame()
 }
 
+#' The merge's stop message when distinct failed repositories exceed the roster share, else NULL.
+scan_failure_stop_message <- function(fails, roster_n) {
+  n <- length(unique(fails$repo_id))
+  denom <- if (is.na(roster_n) || roster_n < 1L) 1L else as.integer(roster_n)
+  if (n == 0L || n <= AI_SCAN_FAILURE_MAX_SHARE * denom) return(NULL)
+  sprintf(paste0("ai merge: %d of %d roster repositories failed a read this week, above the %s%% ",
+                 "the merge accepts. First: %s. First message: %s"),
+          n, denom, format(100 * AI_SCAN_FAILURE_MAX_SHARE),
+          paste(utils::head(unique(fails$repo_id), 5L), collapse = ", "), fails$error[1])
+}
+
 #' TRUE when a shard's contents failures say the query itself is broken.
 contents_shard_stops <- function(n_failed, attempted)
   n_failed >= TREE_DROP_MIN && n_failed >= TREE_DROP_MAX_SHARE * attempted
@@ -807,6 +818,16 @@ run_merge <- function(io, out_dir, parts_dir) {
   message(sprintf("ai merge: %d dev-tooling rows (%d incoming across %d shard(s))",
                   nrow(merged_dev), nrow(dev_df), length(dev_parts)))
 
+  fail_list <- lapply(dev_parts, read_scan_failures)
+  fails <- if (length(fail_list)) do.call(rbind, fail_list) else .fetch_failed_frame()
+  active_n <- tryCatch(DBI::dbGetQuery(con,
+    "SELECT COUNT(*) n FROM repos WHERE host = 'github' AND status = 'active'")$n[1],
+    error = function(e) NA_integer_)
+  message(sprintf("ai merge: %d repositories failed a read this week (contents %d) of %s on the roster",
+                  length(unique(fails$repo_id)), length(unique(fails$repo_id[fails$query == "contents"])),
+                  active_n))
+  failure_stop <- scan_failure_stop_message(fails, active_n)
+
   message(sprintf("ai merge: %d prior, %d incoming, %d reduced onset rows",
                   nrow(prior), nrow(incoming), nrow(reduced)))
   out <- publish(io, con, out_dir, tag = "current", source_kind = "live",
@@ -814,15 +835,14 @@ run_merge <- function(io, out_dir, parts_dir) {
 
   # Raised after the data is out, so the alarm costs a red build and not a
   # week of stale dev-tooling rows.
-  if (nrow(canary_unexplained) > 0) {
-    stop(sprintf(paste0("AI detection canary: %d channel(s) detected nothing on the whole roster ",
-                        "and are not recorded in AI_SILENT_CHANNELS_KNOWN: %s. ",
-                        "Either the rule is broken or the zero is real; record which, with a date."),
-                 nrow(canary_unexplained),
-                 paste(canary_unexplained$tier, canary_unexplained$tool,
-                       sep = "/", collapse = ", ")),
-         call. = FALSE)
-  }
+  canary_stop <- if (nrow(canary_unexplained) > 0)
+    sprintf(paste0("AI detection canary: %d channel(s) detected nothing on the whole roster ",
+                   "and are not recorded in AI_SILENT_CHANNELS_KNOWN: %s. ",
+                   "Either the rule is broken or the zero is real; record which, with a date."),
+            nrow(canary_unexplained),
+            paste(canary_unexplained$tier, canary_unexplained$tool, sep = "/", collapse = ", "))
+  stops <- c(failure_stop, canary_stop)
+  if (length(stops)) stop(paste(stops, collapse = " "), call. = FALSE)
   invisible(out)
 }
 
