@@ -351,7 +351,7 @@ DEV_TOOLING_DERIVED <- list(
   list(col = "pages_last_deploy", type = "TEXT", source = "graphql",
        rule = "createdAt of the newest github-pages deployment"),
   list(col = "pages_url", type = "TEXT", source = "derived",
-       rule = "the deployment's url when its host is not github.io, else built from the repository's current name"),
+       rule = "the deployment's http(s) url when its host does not end in .github.io, else built from the repository's current name"),
   list(col = "site_generator", type = "TEXT", source = "derived",
        rule = "pkgdown when a built pkgdown.yml is found, else altdoc, litedown, pkgdown or quarto from their config, else unknown"),
   list(col = "site_pkgdown_source", type = "TEXT", source = "graphql",
