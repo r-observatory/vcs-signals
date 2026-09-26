@@ -255,6 +255,7 @@ run_update <- function(io, out_dir, opts = list()) {
   # publish() heartbeat, rather than rebuild from an empty snapshot and
   # publish an all-NA dataset over the top of good accumulated history.
   if (!is.null(gauges$snapshot) && nrow(gauges$snapshot) > 0) {
+    write_repo_owner(con, gauges$snapshot, repo_map, today_s)
     prev_latest <- DBI::dbGetQuery(con, "SELECT repo_id, metric, value FROM series_latest")
     mat <- materialize_series(prev_latest, snapshot_long, today_s)
 

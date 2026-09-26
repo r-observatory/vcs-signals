@@ -1,5 +1,6 @@
 { "data": { "nodes": [
   { "id": "R_a", "nameWithOwner": "tidyverse/ggplot2", "stargazerCount": 6959, "forkCount": 2132,
+    "owner": { "__typename": "Organization", "login": "tidyverse", "id": "O_1" },
     "watchers": { "totalCount": 295 },
     "issues_open": { "totalCount": 88 }, "issues_closed": { "totalCount": 3500 },
     "prs_open": { "totalCount": 12 }, "prs_closed": { "totalCount": 400 }, "mergedPRs": { "totalCount": 1885 },

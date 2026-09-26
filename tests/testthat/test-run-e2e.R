@@ -137,3 +137,166 @@ test_that("run_update carries last_release_date/median_days_between_releases for
   expect_equal(facts$last_release_date, "2023-05-05")
   expect_equal(facts$median_days_between_releases, 30L)
 })
+
+.e2e_acquire <- function() data.frame(package = "ggplot2", origin = "cran",
+  url_raw = "https://github.com/tidyverse/ggplot2", bugreports_raw = NA, stringsAsFactors = FALSE)
+
+.e2e_fixture <- function(query) {
+  f <- if (grepl("followRenames", query)) "resolve_one.json"
+       else if (grepl("history \\{ totalCount", query)) "commits.json" else "gauges_one.json"
+  jsonlite::fromJSON(readLines(file.path("fixtures", f), warn = FALSE), simplifyVector = FALSE)
+}
+
+.owner_table <- function(path) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con))
+  list(rows = DBI::dbReadTable(con, "vcs_repo_owner"),
+       sql = DBI::dbGetQuery(con,
+         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'vcs_repo_owner'")$sql,
+       indexes = sort(DBI::dbGetQuery(con,
+         "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'vcs_repo_owner'")$name))
+}
+
+test_that("the daily run publishes each repository's owner, and a later run seeded from it keeps the row", {
+  out <- tempfile("out_owner"); dir.create(out)
+  rel <- tempfile("rel_owner"); dir.create(rel)
+  suppressMessages(capture.output(
+    run_update(local_release_io(rel, acquire = .e2e_acquire, graphql = .e2e_fixture), out,
+               list(force_full = TRUE))))
+
+  for (f in c("vcs-signals-summary.db", "vcs-signals-recent.db")) {
+    t <- .owner_table(file.path(rel, f))
+    expect_equal(nrow(t$rows), 1L, info = f)
+    expect_equal(t$rows$repo_id, "github.com/tidyverse/ggplot2", info = f)
+    expect_equal(t$rows$node_id, "R_a", info = f)
+    expect_equal(t$rows$owner_login_current, "tidyverse", info = f)
+    expect_equal(t$rows$owner_type, "Organization", info = f)
+    expect_equal(t$rows$owner_node_id, "O_1", info = f)
+    expect_equal(t$rows$name_with_owner_current, "tidyverse/ggplot2", info = f)
+    expect_equal(t$rows$observed_on, format(Sys.Date()), info = f)
+    expect_match(t$sql, "WITHOUT ROWID", fixed = TRUE, info = f)
+    expect_equal(t$indexes, c("idx_vro_login", "idx_vro_node", "idx_vro_owner_node"), info = f)
+  }
+
+  # The second run's gauge answer does not include R_a, so its row can only
+  # come from the seed.
+  other <- function(query) {
+    if (grepl("followRenames|history \\{ totalCount", query)) return(.e2e_fixture(query))
+    list(data = list(nodes = list(list(id = "R_other", nameWithOwner = "x/y",
+      owner = list(`__typename` = "User", login = "x", id = "U_x")))))
+  }
+  suppressMessages(capture.output(
+    run_update(local_release_io(rel, acquire = .e2e_acquire, graphql = other), out, list())))
+  t2 <- .owner_table(file.path(rel, "vcs-signals-recent.db"))
+  expect_equal(t2$rows$repo_id, "github.com/tidyverse/ggplot2")
+  expect_equal(t2$rows$owner_login_current, "tidyverse")
+})
+
+test_that("a run that collected nothing, or stopped at the rate-limit reserve, leaves the owner table as seeded", {
+  out <- tempfile("out_owner_floor"); dir.create(out)
+  rel <- tempfile("rel_owner_floor"); dir.create(rel)
+  rid <- repo_slug("github.com", "tidyverse", "ggplot2")
+  # Dated three days back, so a run that rewrote the row would change it.
+  seen <- format(Sys.Date() - 3)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel, "vcs-signals-recent.db"))
+  ensure_repo_schema(scon); ensure_series_schema(scon)
+  DBI::dbExecute(scon, "INSERT INTO repos
+    (repo_id,node_id,host,host_domain,owner,name,name_with_owner,supported,n_packages,first_seen,last_seen,status)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+    params = list(rid, "R_a", "github", "github.com", "tidyverse", "ggplot2", "tidyverse/ggplot2",
+                  1L, 1L, "2020-01-01", "2020-01-01", "active"))
+  DBI::dbExecute(scon, "INSERT INTO repo_packages (repo_id,package,origin,resolved_from) VALUES (?,?,?,?)",
+    params = list(rid, "ggplot2", "cran", "url"))
+  DBI::dbExecute(scon, "INSERT INTO vcs_repo_owner
+    (repo_id, node_id, owner_login_current, owner_type, owner_node_id, name_with_owner_current, observed_on)
+    VALUES (?,?,?,?,?,?,?)",
+    params = list(rid, "R_a", "tidyverse", "Organization", "O_1", "tidyverse/ggplot2", seen))
+  seeded <- DBI::dbReadTable(scon, "vcs_repo_owner")
+  DBI::dbDisconnect(scon)
+  writeLines('{"summary":{"years":[]}}', file.path(rel, "manifest.json"))
+
+  failing <- function(query) {
+    if (grepl("rateLimit", query)) return(list(data = list(nodes = list())))
+    list(data = NULL, errors = list(list(message = "SERVICE_UNAVAILABLE")))
+  }
+  suppressMessages(capture.output(
+    run_update(local_release_io(rel, acquire = .e2e_acquire, graphql = failing), out, list())))
+  expect_identical(.owner_table(file.path(rel, "vcs-signals-recent.db"))$rows, seeded)
+  expect_identical(.owner_table(file.path(rel, "vcs-signals-summary.db"))$rows, seeded)
+
+  spent <- function(query) {
+    if (grepl("rateLimit", query)) return(list(data = list(rateLimit = list(remaining = 0L))))
+    .e2e_fixture(query)
+  }
+  suppressMessages(capture.output(
+    run_update(local_release_io(rel, acquire = .e2e_acquire, graphql = spent), out, list())))
+  expect_identical(.owner_table(file.path(rel, "vcs-signals-recent.db"))$rows, seeded)
+  expect_identical(.owner_table(file.path(rel, "vcs-signals-summary.db"))$rows, seeded)
+})
+
+test_that("the first daily run over a release that never carried the owner table publishes it", {
+  out <- tempfile("out_owner_first"); dir.create(out)
+  rel <- tempfile("rel_owner_first"); dir.create(rel)
+  io <- local_release_io(rel, acquire = .e2e_acquire, graphql = .e2e_fixture)
+  suppressMessages(capture.output(run_update(io, out, list(force_full = TRUE))))
+  # What code from before the table publishes: neither shard has it.
+  for (f in c("vcs-signals-summary.db", "vcs-signals-recent.db")) {
+    con <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel, f))
+    DBI::dbExecute(con, "DROP TABLE vcs_repo_owner")
+    DBI::dbDisconnect(con)
+  }
+
+  suppressMessages(capture.output(run_update(io, out, list())))
+  for (f in c("vcs-signals-summary.db", "vcs-signals-recent.db")) {
+    t <- .owner_table(file.path(rel, f))
+    expect_equal(t$rows$owner_login_current, "tidyverse", info = f)
+    expect_equal(t$indexes, c("idx_vro_login", "idx_vro_node", "idx_vro_owner_node"), info = f)
+  }
+})
+
+test_that("a repository deleted on GitHub keeps its owner row while the rest of its batch is written", {
+  out <- tempfile("out_owner_gone"); dir.create(out)
+  rel <- tempfile("rel_owner_gone"); dir.create(rel)
+  ids <- c(repo_slug("github.com", "someone", "gone"), repo_slug("github.com", "tidyverse", "ggplot2"))
+  seen <- format(Sys.Date() - 3)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel, "vcs-signals-recent.db"))
+  ensure_repo_schema(scon); ensure_series_schema(scon)
+  DBI::dbExecute(scon, "INSERT INTO repos
+    (repo_id,node_id,host,host_domain,owner,name,name_with_owner,supported,n_packages,first_seen,last_seen,status)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+    params = list(ids, c("R_gone", "R_a"), rep("github", 2), rep("github.com", 2),
+                  c("someone", "tidyverse"), c("gone", "ggplot2"), c("someone/gone", "tidyverse/ggplot2"),
+                  rep(1L, 2), rep(1L, 2), rep("2020-01-01", 2), rep("2020-01-01", 2), rep("active", 2)))
+  DBI::dbExecute(scon, "INSERT INTO repo_packages (repo_id,package,origin,resolved_from) VALUES (?,?,?,?)",
+    params = list(ids, c("gonepkg", "ggplot2"), rep("cran", 2), rep("url", 2)))
+  DBI::dbExecute(scon, "INSERT INTO vcs_repo_owner
+    (repo_id, node_id, owner_login_current, owner_type, owner_node_id, name_with_owner_current, observed_on)
+    VALUES (?,?,?,?,?,?,?)",
+    params = list(ids[1], "R_gone", "someone", "User", "U_1", "someone/gone", seen))
+  DBI::dbDisconnect(scon)
+  writeLines('{"summary":{"years":[]}}', file.path(rel, "manifest.json"))
+
+  acquire_two <- function() data.frame(package = c("gonepkg", "ggplot2"), origin = "cran",
+    url_raw = c("https://github.com/someone/gone", "https://github.com/tidyverse/ggplot2"),
+    bugreports_raw = NA, stringsAsFactors = FALSE)
+  # GitHub answers a deleted node with null plus a NOT_FOUND error, which fails the
+  # whole batch, so the collector splits it until the deleted node is alone.
+  one <- .e2e_fixture("gauges")$data$nodes[[1]]
+  graphql <- function(query) {
+    if (grepl("rateLimit", query)) return(list(data = list(nodes = list())))
+    if (grepl("R_gone", query, fixed = TRUE))
+      return(list(data = list(nodes = if (grepl("R_a", query, fixed = TRUE)) list(NULL, one) else list(NULL)),
+                  errors = list(list(type = "NOT_FOUND", path = list("nodes", 0L),
+                                     message = "Could not resolve to a node with the global id of 'R_gone'"))))
+    .e2e_fixture(query)
+  }
+  suppressMessages(capture.output(
+    run_update(local_release_io(rel, acquire = acquire_two, graphql = graphql), out, list())))
+
+  for (f in c("vcs-signals-summary.db", "vcs-signals-recent.db")) {
+    rows <- .owner_table(file.path(rel, f))$rows
+    expect_equal(rows$repo_id, ids, info = f)
+    expect_equal(rows$owner_login_current, c("someone", "tidyverse"), info = f)
+    expect_equal(rows$observed_on, c(seen, format(Sys.Date())), info = f)
+  }
+})

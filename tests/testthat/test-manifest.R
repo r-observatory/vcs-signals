@@ -54,6 +54,7 @@ test_that("summary_integrity_core reports filename, bytes, sha256, tables, compl
     vcs_ai_silent_channels = 0L,
     vcs_dev_tooling     = 0L,
     vcs_dev_tooling_rules = 0L,
+    vcs_repo_owner      = 0L,
     vcs_signals_summary = 3L))
   expect_true(core$complete)
 })
@@ -161,6 +162,9 @@ test_that("every table the pipeline writes reaches the published summary with it
     VALUES ('github.com/o/gone','delisted','cran','2026-08-01','2026-08-21')")
   DBI::dbExecute(con, "INSERT INTO vcs_dev_tooling_rules (col, source, rule, ruleset_version)
     VALUES ('has_litedown','tree','_litedown.yml|site/_litedown.yml at root','v3 (2026-09-27)')")
+  DBI::dbExecute(con, "INSERT INTO vcs_repo_owner (repo_id, node_id, owner_login_current, owner_type,
+    owner_node_id, name_with_owner_current, observed_on)
+    VALUES ('github.com/o/r', 'R_1', 'o', 'Organization', 'O_1', 'o/r', '2026-09-25')")
 
   out <- tempfile("pub_"); dir.create(out)
   rel <- tempfile("rel_"); dir.create(rel)
@@ -176,6 +180,8 @@ test_that("every table the pipeline writes reaches the published summary with it
   expect_equal(DBI::dbGetQuery(scon, "SELECT family FROM vcs_ai_models")$family, "Opus")
   expect_equal(DBI::dbGetQuery(scon, "SELECT last_seen FROM repo_package_links")$last_seen,
                "2026-08-21")
+  expect_equal(DBI::dbGetQuery(scon, "SELECT owner_login_current FROM vcs_repo_owner")$owner_login_current,
+               "o")
 })
 
 test_that("the repository practices rules table follows the package links", {
@@ -763,6 +769,9 @@ test_that("a publish and a reseed keep the extra tables, both ways round", {
     VALUES ('github.com/o/gone','delisted','cran','2026-08-01','2026-08-21')")
   DBI::dbExecute(con, "INSERT INTO vcs_dev_tooling_rules (col, source, rule, ruleset_version)
     VALUES ('has_litedown','tree','_litedown.yml|site/_litedown.yml at root','v3 (2026-09-27)')")
+  DBI::dbExecute(con, "INSERT INTO vcs_repo_owner (repo_id, node_id, owner_login_current, owner_type,
+    owner_node_id, name_with_owner_current, observed_on)
+    VALUES ('github.com/o/r', 'R_1', 'o', 'Organization', 'O_1', 'o/r', '2026-09-25')")
 
   io <- local_release_io(remote)
   publish(io, con, out, "v1", "live", force_full = TRUE, base_generation = "")
@@ -782,6 +791,8 @@ test_that("a publish and a reseed keep the extra tables, both ways round", {
   expect_equal(DBI::dbGetQuery(wc, "SELECT COUNT(*) AS n FROM vcs_ai_rule_inventory")$n, 3L)
   expect_equal(DBI::dbGetQuery(wc, "SELECT last_seen FROM repo_package_links")$last_seen,
                "2026-08-21")
+  expect_equal(DBI::dbGetQuery(wc, "SELECT observed_on FROM vcs_repo_owner")$observed_on,
+               "2026-09-25")
 })
 
 # ---------------------------------------------------------------------------

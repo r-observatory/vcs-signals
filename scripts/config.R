@@ -81,6 +81,7 @@ RECENT_WINDOW  <- 400L   # days of series kept in the recent shard
 REVISION_WINDOW<- 10L    # trailing days re-materialized each run (must be < RECENT_WINDOW)
 POINT_RESERVE  <- 1500L  # GraphQL points left unspent as headroom
 BATCH_DELAY_S  <- 0.35   # pause between GraphQL batches, to stay well under secondary rate limits
+OWNER_STALE_DAYS <- 14L  # days an owner row outlives the last gauge query that returned it
 
 # ---- historical cumulative-series backfill (stars, forks, releases) ----
 STARGAZER_PAGE   <- 100L  # items per GraphQL connection page (all metrics share one page size)
@@ -611,8 +612,10 @@ PR,openhands,genuine,"No pull request among each repository's newest 50 was open
 # seeded, and once a package has left CRAN or moved its URL it is the only record
 # anywhere of which repository the package was. A path that dropped it would
 # lose those links for good, because nothing resolves a delisted package again.
+# vcs_repo_owner stays the last entry; tables added later go before it.
 SUMMARY_EXTRA_TABLES <- c("vcs_ai_models", "vcs_ai_rule_inventory",
-                          "vcs_ai_silent_channels", "repo_package_links", "vcs_dev_tooling_rules")
+                          "vcs_ai_silent_channels", "repo_package_links",
+                          "vcs_dev_tooling_rules", "vcs_repo_owner")
 
 # Package-to-repository links this pipeline published before it kept them. Built
 # from every surviving copy of what it published: the vcs_signals_summary in a
