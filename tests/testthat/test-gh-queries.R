@@ -7,6 +7,16 @@ test_that("build_gauge_query embeds ids and the metric fields", {
   expect_match(q, "repositoryTopics\\(first: 20\\)")
 })
 
+test_that("the gauge query asks each repository for its current owner", {
+  q <- build_gauge_query(c("R_a"))
+  open <- regexpr("... on Repository {", q, fixed = TRUE)
+  owner <- regexpr("owner { __typename login id }", q, fixed = TRUE)
+  close <- regexpr("} } }", q, fixed = TRUE)
+  expect_gt(open, 0L)
+  expect_gt(owner, open)
+  expect_lt(owner, close)
+})
+
 test_that("build_commit_query asks for history totalCount and latest committedDate", {
   q <- build_commit_query("R_9")
   expect_match(q, 'nodes\\(ids: \\["R_9"\\]\\)')

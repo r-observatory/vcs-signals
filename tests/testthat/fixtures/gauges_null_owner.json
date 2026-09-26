@@ -1,0 +1,11 @@
+{ "data": { "nodes": [
+  { "id": "R_n", "nameWithOwner": "someone/orphan", "owner": null, "stargazerCount": 3, "forkCount": 1,
+    "watchers": { "totalCount": 1 },
+    "issues_open": { "totalCount": 0 }, "issues_closed": { "totalCount": 2 },
+    "prs_open": { "totalCount": 0 }, "prs_closed": { "totalCount": 0 }, "mergedPRs": { "totalCount": 1 },
+    "releases": { "totalCount": 0 }, "latestRelease": null, "licenseInfo": null,
+    "repositoryTopics": { "nodes": [] },
+    "isArchived": false, "isFork": false, "isMirror": false, "isDisabled": false,
+    "createdAt": "2021-03-01T00:00:00Z", "pushedAt": "2025-11-02T00:00:00Z", "updatedAt": "2025-11-02T00:00:00Z",
+    "diskUsage": 120, "primaryLanguage": { "name": "R" } }
+] } }

@@ -7,6 +7,7 @@ build_gauge_query <- function(node_ids) {
   ids <- paste(sprintf('"%s"', node_ids), collapse = ", ")
   sprintf('query { nodes(ids: [%s]) { ... on Repository {
     id nameWithOwner stargazerCount forkCount
+    owner { __typename login id }
     watchers { totalCount }
     issues_open: issues(states: OPEN) { totalCount }
     issues_closed: issues(states: CLOSED) { totalCount }
@@ -121,6 +122,9 @@ parse_gauges <- function(nodes) {
                      function(t) .nn(t$topic$name, ""), "")
     data.frame(
       node_id = n$id, name_with_owner = n$nameWithOwner,
+      owner_login = .nn(n$owner$login, NA_character_),
+      owner_type = .nn(n$owner[["__typename"]], NA_character_),
+      owner_node_id = .nn(n$owner$id, NA_character_),
       stars = .nn(n$stargazerCount, NA_integer_), forks = .nn(n$forkCount, NA_integer_),
       watchers = .nn(n$watchers$totalCount, NA_integer_),
       issues_open = .nn(n[["issues_open"]]$totalCount, NA_integer_),
@@ -146,7 +150,8 @@ parse_gauges <- function(nodes) {
 }
 
 rows_df_empty_gauges <- function() {
-  data.frame(node_id = character(), name_with_owner = character(), stars = integer(),
+  data.frame(node_id = character(), name_with_owner = character(), owner_login = character(),
+    owner_type = character(), owner_node_id = character(), stars = integer(),
     forks = integer(), watchers = integer(), issues_open = integer(), issues_closed = integer(),
     prs_open = integer(), prs_closed = integer(), prs_merged = integer(), releases_total = integer(),
     size_kb = integer(), license = character(), topics = character(), is_archived = integer(),
