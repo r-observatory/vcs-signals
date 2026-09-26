@@ -300,7 +300,7 @@ run_cheap <- function(io, out_dir, roster_path, i, N, batch_size = TIER_D_BATCH)
   message(sprintf("ai cheap shard %d/%d: %d of %d repos", i, N, nrow(mine), nrow(roster)))
 
   flagged <- list(); evrows <- list(); dev_rows <- list(); scanned <- 0L
-  failed <- list()
+  failed <- list(); bad_rbi_lines <- 0L
   # One breaker for the whole shard, so a fault repeated across chunks still trips it.
   contents_breaker <- new_fetch_breaker()
   today <- format(Sys.Date())
@@ -326,6 +326,7 @@ run_cheap <- function(io, out_dir, roster_path, i, N, batch_size = TIER_D_BATCH)
       # A failed or gone repository gets no row, so its prior row and last_scanned stand.
       if (!is.null(tree) && !is.na(tree$is_fork)) {
         dv <- classify_dev_tooling(tree$root_entries, tree$github_entries, repo = tree)
+        bad_rbi_lines <- bad_rbi_lines + attr(dv, "rbuildignore_bad_lines")
         dv$repo_id <- rid
         dv$last_scanned <- today
         dv$ruleset_version <- DEV_TOOLING_RULESET_VERSION
@@ -357,6 +358,9 @@ run_cheap <- function(io, out_dir, roster_path, i, N, batch_size = TIER_D_BATCH)
   message(sprintf("ai cheap shard %d/%d: %d repositories failed (contents %d), %d not read this week",
                   i, N, length(unique(failed_df$repo_id)), sum(failed_df$query == "contents"),
                   nrow(mine) - scanned))
+  if (bad_rbi_lines > 0L)
+    message(sprintf("ai cheap shard %d/%d: %d .Rbuildignore line(s) did not compile and were skipped",
+                    i, N, bad_rbi_lines))
   n_contents <- sum(failed_df$query == "contents")
   if (contents_shard_stops(n_contents, scanned)) {
     first <- failed_df[failed_df$query == "contents", , drop = FALSE]

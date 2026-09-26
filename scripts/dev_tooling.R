@@ -15,6 +15,9 @@ url_points_into <- function(url, slug) {
 dev_tooling_derive <- function(root_entries, github_entries, flags, repo) {
   out <- tree_derived_columns(root_entries, flags)
   out <- c(out, community_columns(root_entries, github_entries, repo))
+  rbi <- rbuildignore_columns(root_entries, repo)
+  out <- c(out, rbi)
+  attr(out, "rbuildignore_bad_lines") <- attr(rbi, "bad_lines")
   out
 }
 
@@ -71,4 +74,63 @@ community_columns <- function(root_entries, github_entries, repo) {
   list(has_code_of_conduct = .presence(coc), coc_source = coc,
        has_contributing = .presence(con), contributing_source = con,
        has_pr_template = .presence(prt), pr_template_source = prt)
+}
+
+#' Which `paths` a .Rbuildignore text leaves out, as tools:::inRbuildignore reads it: split like
+#' readLines, not trimmed, empty lines dropped, each line a Perl pattern without case.
+rbuildignore_path_matches <- function(text, paths) {
+  lines <- strsplit(text, "\r\n|\r|\n")[[1]]
+  lines <- lines[nzchar(lines)]
+  hit <- rep(FALSE, length(paths))
+  bad <- 0L
+  for (line in lines) {
+    # R CMD build stops on a line that does not compile; the scan skips it and counts it.
+    m <- tryCatch(suppressWarnings(grepl(line, paths, perl = TRUE, ignore.case = TRUE)),
+                  error = function(e) NULL)
+    if (is.null(m)) { bad <- bad + 1L; next }
+    hit <- hit | m
+  }
+  list(hit = hit, bad_lines = bad)
+}
+
+#' The RBUILDIGNORE_ITEMS the repository holds and R CMD build would leave out, as a JSON array;
+#' NA when the package is not at the root or the file is present but its text was not returned.
+rbuildignore_excluded <- function(text, root_entries) {
+  if (!("DESCRIPTION" %in% root_entries)) return(structure(NA_character_, bad_lines = 0L))
+  if (!(".Rbuildignore" %in% root_entries)) return(structure("[]", bad_lines = 0L))
+  if (is.na(text)) return(structure(NA_character_, bad_lines = 0L))
+  present <- function(item) switch(item,
+    "_pkgdown.yml"       = intersect(PKGDOWN_CONFIG_TREE_PATHS, root_entries),
+    "CODE_OF_CONDUCT.md" = intersect(COC_TREE_PATHS, root_entries),
+    "CONTRIBUTING.md"    = intersect(CONTRIBUTING_TREE_PATHS, root_entries),
+    intersect(item, root_entries))
+  item_paths <- lapply(stats::setNames(RBUILDIGNORE_ITEMS, RBUILDIGNORE_ITEMS), present)
+  sources <- root_entries[startsWith(root_entries, "vignettes/") &
+                          grepl(VIGNETTE_SOURCE_PATTERN, root_entries, ignore.case = TRUE)]
+  # A path is left out when it or a directory above it matches: R CMD build drops the directory.
+  above <- function(p) { parts <- strsplit(p, "/", fixed = TRUE)[[1]]
+    if (length(parts) < 2L) character(0) else vapply(seq_len(length(parts) - 1L),
+      function(k) paste(parts[seq_len(k)], collapse = "/"), character(1)) }
+  tested <- unique(c(unlist(item_paths), sources, unlist(lapply(c(unlist(item_paths), sources), above))))
+  m <- rbuildignore_path_matches(text, tested)
+  gone <- function(p) any(m$hit[tested %in% c(p, above(p))])
+  out <- vapply(RBUILDIGNORE_ITEMS, function(item) {
+    ps <- item_paths[[item]]
+    if (!length(ps)) return(FALSE)
+    if (any(vapply(ps, gone, logical(1)))) return(TRUE)
+    # vignettes also counts when every vignette source is left out, even if a .bib survives.
+    identical(item, "vignettes") && length(sources) > 0L && all(vapply(sources, gone, logical(1)))
+  }, logical(1))
+  structure(as.character(jsonlite::toJSON(unname(RBUILDIGNORE_ITEMS[out]))), bad_lines = m$bad_lines)
+}
+
+rbuildignore_columns <- function(root_entries, repo) {
+  if (!.dev_has(repo, "rbuildignore_text"))
+    return(structure(list(rbuildignore_excluded = NA_character_, rbuildignore_text = NA_character_),
+                     bad_lines = 0L))
+  txt <- repo$rbuildignore_text
+  ex <- rbuildignore_excluded(txt, root_entries)
+  keep <- if (!is.na(txt) && nchar(txt, type = "bytes") <= RBUILDIGNORE_TEXT_MAX_BYTES) txt else NA_character_
+  structure(list(rbuildignore_excluded = as.vector(ex), rbuildignore_text = keep),
+            bad_lines = attr(ex, "bad_lines"))
 }

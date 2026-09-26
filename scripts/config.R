@@ -280,6 +280,16 @@ PR_TEMPLATE_TREE_PATHS <- c("pull_request_template.md", "PULL_REQUEST_TEMPLATE.m
 # pkgdown 2.2.0's config paths the scan can list; the pkgdown/ directory stands for the other two.
 PKGDOWN_CONFIG_TREE_PATHS <- c("_pkgdown.yml", "_pkgdown.yaml", "inst/_pkgdown.yml", "inst/_pkgdown.yaml")
 
+# Release items rbuildignore_excluded reports, in output order. The analyzer's build_ignored
+# uses the same names, so the viewer reads both with one lookup.
+RBUILDIGNORE_ITEMS <- c("README.md", "README.Rmd", "README.qmd", "NEWS.md", "NEWS", "tests", "vignettes",
+                        "vignettes/articles", "_pkgdown.yml", "pkgdown", "docs", "CODE_OF_CONDUCT.md",
+                        "CONTRIBUTING.md", "data-raw", ".github")
+# A vignette source one level under vignettes/, as the scan sees names only.
+VIGNETTE_SOURCE_PATTERN <- "\\.(Rmd|Rnw|qmd|Rtex|Rhtml|asis)$"
+# rbuildignore_text keeps a .Rbuildignore up to this many bytes (the largest in the sweep is 10,739).
+RBUILDIGNORE_TEXT_MAX_BYTES <- 65536L
+
 # Every vcs_dev_tooling column not in DEV_TOOLING_MARKERS: its SQLite type, where the value
 # comes from (tree, graphql, workflow_text or derived) and the rule vcs_dev_tooling_rules publishes.
 DEV_TOOLING_DERIVED <- list(
@@ -301,7 +311,11 @@ DEV_TOOLING_DERIVED <- list(
   list(col = "has_pr_template", type = "INTEGER", source = "derived",
        rule = "1 when pr_template_source is repo or account_default, 0 when none"),
   list(col = "pr_template_source", type = "TEXT", source = "derived", paths = PR_TEMPLATE_TREE_PATHS,
-       rule = "from GitHub's pull request templates: repo when one belongs to the repository, account_default when one belongs to the owner's .github repository, none when there are none"))
+       rule = "from GitHub's pull request templates: repo when one belongs to the repository, account_default when one belongs to the owner's .github repository, none when there are none"),
+  list(col = "rbuildignore_excluded", type = "TEXT", source = "derived",
+       rule = "items present in the repository that .Rbuildignore leaves out of the release, read as R CMD build reads it"),
+  list(col = "rbuildignore_text", type = "TEXT", source = "graphql",
+       rule = ".Rbuildignore text up to 65536 bytes"))
 # v1 first scan 2026-07-18 (d115e2d), v2 00312fe, b903376, f861918 (2026-07-29 to 08-02), v3 this change.
 DEV_TOOLING_RULESET_VERSION <- "v3 (2026-09-26)"
 
