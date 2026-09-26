@@ -208,7 +208,8 @@ read_flagged <- function(path) {
 # A stateless presence snapshot, written as a SEPARATE shard from the AI flagged/evidence
 # partials (those are scoped to the AI-flagged subset by the downstream gate/deep pipeline).
 .devtool_empty_shard <- function() {
-  out <- data.frame(repo_id = character(0), last_scanned = character(0), stringsAsFactors = FALSE)
+  out <- data.frame(repo_id = character(0), last_scanned = character(0), ruleset_version = character(0),
+                    stringsAsFactors = FALSE)
   cbind(out, .devtool_empty())
 }
 
@@ -228,7 +229,7 @@ read_flagged <- function(path) {
 bind_dev_tooling <- function(prior, incoming) {
   if (is.null(prior) || !nrow(prior)) return(incoming)
   if (is.null(incoming) || !nrow(incoming)) return(prior)
-  want <- c("repo_id", "last_scanned", dev_tooling_columns())
+  want <- c("repo_id", "last_scanned", "ruleset_version", dev_tooling_columns())
   cols <- c(want, setdiff(c(names(prior), names(incoming)), want))
   fill <- function(d) {
     for (cn in setdiff(cols, names(d))) d[[cn]] <- NA
@@ -324,10 +325,11 @@ run_cheap <- function(io, out_dir, roster_path, i, N, batch_size = TIER_D_BATCH)
       pr   <- if (is.null(prs)) NULL else prs[[rid]]
       # A failed or gone repository gets no row, so its prior row and last_scanned stand.
       if (!is.null(tree) && !is.na(tree$is_fork)) {
-        dv <- classify_dev_tooling(tree$root_entries, tree$github_entries)
+        dv <- classify_dev_tooling(tree$root_entries, tree$github_entries, repo = tree)
         dv$repo_id <- rid
         dv$last_scanned <- today
-        dev_rows[[length(dev_rows) + 1L]] <- dv[c("repo_id", "last_scanned", dev_tooling_columns())]
+        dv$ruleset_version <- DEV_TOOLING_RULESET_VERSION
+        dev_rows[[length(dev_rows) + 1L]] <- dv[c("repo_id", "last_scanned", "ruleset_version", dev_tooling_columns())]
       }
       if (is.null(tree) && is.null(pr)) next            # both channels errored -> deferred
       ev <- assemble_repo_evidence(tree, pr)

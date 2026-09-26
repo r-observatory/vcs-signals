@@ -9,3 +9,10 @@ url_points_into <- function(url, slug) {
   path <- sub("^[A-Za-z][A-Za-z0-9+.-]*://[^/]*", "", url)
   startsWith(tolower(path), paste0("/", tolower(slug), "/"))
 }
+
+#' Every derived vcs_dev_tooling column classify_dev_tooling does not compute itself.
+#' `flags` is the named vector of tree-rule columns; `repo` the parsed contents read or NULL.
+dev_tooling_derive <- function(root_entries, github_entries, flags, repo) {
+  out <- list()
+  out
+}

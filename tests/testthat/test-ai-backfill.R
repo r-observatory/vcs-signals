@@ -556,7 +556,7 @@ test_that("write_dev_tooling_partial / read_dev_tooling round-trip a stamped sna
   expect_equal(got$has_renv, 1L)
   expect_equal(got$has_dockerfile, 1L)
   expect_equal(got$has_ci, 1L)
-  expect_identical(names(got), c("repo_id", "last_scanned", dev_tooling_columns()))
+  expect_identical(names(got), c("repo_id", "last_scanned", "ruleset_version", dev_tooling_columns()))
 })
 
 test_that("read_dev_tooling degrades to a typed empty frame when the table is absent", {
@@ -564,7 +564,7 @@ test_that("read_dev_tooling degrades to a typed empty frame when the table is ab
   con <- DBI::dbConnect(RSQLite::SQLite(), p); DBI::dbDisconnect(con)  # empty db, no table
   got <- read_dev_tooling(p)
   expect_equal(nrow(got), 0)
-  expect_identical(names(got), c("repo_id", "last_scanned", dev_tooling_columns()))
+  expect_identical(names(got), c("repo_id", "last_scanned", "ruleset_version", dev_tooling_columns()))
 })
 
 test_that("run_cheap writes a vcs_dev_tooling row for every fetched repo, including non-AI ones", {
@@ -600,6 +600,7 @@ test_that("run_cheap writes a vcs_dev_tooling row for every fetched repo, includ
   expect_equal(dev$ci_github_actions, 1L)
   expect_equal(dev$has_ci, 1L)
   expect_equal(dev$readme_source, "rmd")
+  expect_equal(dev$ruleset_version, DEV_TOOLING_RULESET_VERSION)
   expect_false("github.com/b/gone" %in% dev$repo_id)  # null alias -> honest-NA, no row
 
   # r0 has no AI marker, so it is NOT in the AI flagged shard: this proves dev tooling is

@@ -80,7 +80,13 @@ test_that("classifier, empty helper, and DDL share one config-derived column set
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   DBI::dbExecute(con, dev_tooling_create_sql())
   expect_identical(DBI::dbListFields(con, "vcs_dev_tooling"),
-                   c("repo_id", "last_scanned", dev_tooling_columns()))
+                   c("repo_id", "last_scanned", "ruleset_version", dev_tooling_columns()))
+  info <- DBI::dbGetQuery(con, "PRAGMA table_info(vcs_dev_tooling)")
+  expect_identical(stats::setNames(info$type, info$name)[dev_tooling_columns()], dev_tooling_column_types())
+  expect_identical(vapply(.devtool_empty(), class, ""),
+                   ifelse(dev_tooling_column_types() == "TEXT", "character", "integer"))
+  row <- classify_dev_tooling(character(0), character(0))
+  expect_identical(vapply(row, class, ""), vapply(.devtool_empty(), class, ""))
   # WITHOUT ROWID is a deliberate departure; assert it survives in the stored DDL so the
   # merger (which copies the CREATE TABLE text verbatim) reproduces it downstream.
   sql <- DBI::dbGetQuery(con, "SELECT sql FROM sqlite_master WHERE name = 'vcs_dev_tooling'")$sql
@@ -92,7 +98,7 @@ test_that("ensure_series_schema creates vcs_dev_tooling with the config-derived 
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   expect_true(DBI::dbExistsTable(con, "vcs_dev_tooling"))
   expect_identical(DBI::dbListFields(con, "vcs_dev_tooling"),
-                   c("repo_id", "last_scanned", dev_tooling_columns()))
+                   c("repo_id", "last_scanned", "ruleset_version", dev_tooling_columns()))
 })
 
 test_that("ai-weekly.yml uploads and downloads the dev-tooling shards", {
@@ -135,4 +141,25 @@ test_that("skills a package ships are a practice, and skills used to build it ar
 test_that("a directory named skills anywhere else is not a shipped skill", {
   expect_equal(classify_dev_tooling(c("skills"), character(0))$has_agent_skills, 0L)
   expect_equal(classify_dev_tooling(c("dev/skills"), character(0))$has_agent_skills, 0L)
+})
+
+test_that("a published table gains every new column with its declared type", {
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  DBI::dbExecute(con, "CREATE TABLE vcs_dev_tooling (repo_id TEXT PRIMARY KEY, last_scanned TEXT, has_lintr INTEGER)")
+  ensure_series_schema(con)
+  info <- DBI::dbGetQuery(con, "PRAGMA table_info(vcs_dev_tooling)")
+  types <- stats::setNames(info$type, info$name)
+  expect_equal(types[["ruleset_version"]], "TEXT")
+  expect_identical(types[dev_tooling_columns()], dev_tooling_column_types())
+})
+
+test_that("the ruleset version names v3 and the day it landed", {
+  expect_match(DEV_TOOLING_RULESET_VERSION, "^v3 \\(\\d{4}-\\d{2}-\\d{2}\\)$")
+  for (d in DEV_TOOLING_DERIVED) {
+    expect_true(d$type %in% c("INTEGER", "TEXT"), info = d$col)
+    expect_true(d$source %in% c("tree", "graphql", "workflow_text", "derived"), info = d$col)
+    expect_true(nzchar(d$rule), info = d$col)
+  }
+  expect_false(any(duplicated(dev_tooling_columns())))
 })

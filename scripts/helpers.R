@@ -723,9 +723,9 @@ ensure_series_schema <- function(con) {
   dt_have <- tryCatch(DBI::dbGetQuery(con, "PRAGMA table_info(vcs_dev_tooling)")$name,
                       error = function(e) character(0))
   if (length(dt_have)) {
-    for (col in setdiff(dev_tooling_columns(), dt_have)) {
-      DBI::dbExecute(con, sprintf("ALTER TABLE vcs_dev_tooling ADD COLUMN %s %s",
-                                  col, if (identical(col, "readme_source")) "TEXT" else "INTEGER"))
+    types <- c(ruleset_version = "TEXT", dev_tooling_column_types())
+    for (col in setdiff(names(types), dt_have)) {
+      DBI::dbExecute(con, sprintf("ALTER TABLE vcs_dev_tooling ADD COLUMN %s %s", col, types[[col]]))
     }
   }
   # The rule inventory, republished on every merge. A tier's breadth is a fact

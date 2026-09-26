@@ -178,8 +178,8 @@ AI_MARKERS <- list(
 # *.Rproj case. Detection is existence-of-entry-name only; nothing reads file contents. The
 # classifier (classify_dev_tooling), the DDL (dev_tooling_create_sql), and the empty helper
 # (.devtool_empty) are all derived from these col names, so the column set cannot drift.
-# readme_source (TEXT enum) and has_ci (the OR of the ci_* systems) are COMPUTED additions,
-# not entries here. repo_id / last_scanned are stamped by the cheap pass, not by the classifier.
+# readme_source (TEXT enum) and has_ci (the OR of the ci_* systems) are declared in
+# DEV_TOOLING_DERIVED. repo_id, last_scanned and ruleset_version are stamped by the cheap pass.
 DEV_TOOLING_MARKERS <- list(
   # CI / CD: one distinct system per column; has_ci is the producer-computed OR of these.
   list(col = "ci_github_actions", paths = c("workflows"),          location = "github"),
@@ -267,6 +267,16 @@ DEV_TOOLING_MARKERS <- list(
   list(col = "has_gitmodules",     paths = c(".gitmodules"),            location = "root"),
   list(col = "has_blame_ignore",   paths = c(".git-blame-ignore-revs"), location = "root")
 )
+
+# Every vcs_dev_tooling column not in DEV_TOOLING_MARKERS: its SQLite type, where the value
+# comes from (tree, graphql, workflow_text or derived) and the rule vcs_dev_tooling_rules publishes.
+DEV_TOOLING_DERIVED <- list(
+  list(col = "readme_source", type = "TEXT", source = "tree",
+       rule = "README.qmd, else README.Rmd, else README.md at root, else none"),
+  list(col = "has_ci", type = "INTEGER", source = "derived",
+       rule = "any of ci_github_actions to ci_drone is 1"))
+# v1 first scan 2026-07-18 (d115e2d), v2 00312fe, b903376, f861918 (2026-07-29 to 08-02), v3 this change.
+DEV_TOOLING_RULESET_VERSION <- "v3 (2026-09-26)"
 
 # Tier A bot identities: exact, case-normalized email/login match only.
 AI_BOT_ALLOWLIST <- c(
