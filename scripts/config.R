@@ -79,6 +79,7 @@ RECENT_WINDOW  <- 400L   # days of series kept in the recent shard
 REVISION_WINDOW<- 10L    # trailing days re-materialized each run (must be < RECENT_WINDOW)
 POINT_RESERVE  <- 1500L  # GraphQL points left unspent as headroom
 BATCH_DELAY_S  <- 0.35   # pause between GraphQL batches, to stay well under secondary rate limits
+OWNER_STALE_DAYS <- 14L  # days an owner row outlives the last gauge query that returned it
 
 # ---- historical cumulative-series backfill (stars, forks, releases) ----
 STARGAZER_PAGE   <- 100L  # items per GraphQL connection page (all metrics share one page size)

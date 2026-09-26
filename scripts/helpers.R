@@ -773,6 +773,46 @@ ensure_series_schema <- function(con) {
   invisible(TRUE)
 }
 
+#' Rewrite vcs_repo_owner from today's gauge snapshot in one transaction. A row the
+#' snapshot missed stays for OWNER_STALE_DAYS; a repo_id no longer in repo_map goes.
+write_repo_owner <- function(con, snapshot, repo_map, today) {
+  today <- as.Date(today)
+  cols <- c("node_id", "name_with_owner", "owner_login", "owner_type", "owner_node_id")
+  # Two active repo_ids on one node put that node in the query twice.
+  sn <- snapshot[!duplicated(snapshot$node_id), cols, drop = FALSE]
+  m <- merge(repo_map[, c("repo_id", "node_id")], sn, by = "node_id")
+  has_owner <- !is.na(m$owner_login) & !is.na(m$owner_node_id) & !is.na(m$name_with_owner)
+  known_type <- m$owner_type %in% c("Organization", "User")
+  keep <- m[has_owner & known_type, , drop = FALSE]
+  counts <- list(written = nrow(keep), no_owner = sum(!has_owner),
+                 other_type = sum(has_owner & !known_type),
+                 not_collected = sum(!(repo_map$node_id %in% sn$node_id)), removed = 0L)
+
+  DBI::dbBegin(con)
+  ok <- FALSE
+  on.exit(if (!ok) tryCatch(DBI::dbRollback(con), error = function(e) NULL), add = TRUE)
+  if (nrow(keep) > 0)
+    DBI::dbExecute(con, "INSERT OR REPLACE INTO vcs_repo_owner
+      (repo_id, node_id, owner_login_current, owner_type, owner_node_id,
+       name_with_owner_current, observed_on) VALUES (?,?,?,?,?,?,?)",
+      params = list(keep$repo_id, keep$node_id, keep$owner_login, keep$owner_type,
+                    keep$owner_node_id, keep$name_with_owner, rep(format(today), nrow(keep))))
+  held <- DBI::dbGetQuery(con, "SELECT repo_id FROM vcs_repo_owner")$repo_id
+  unlisted <- setdiff(held, repo_map$repo_id)
+  if (length(unlisted) > 0)
+    counts$removed <- DBI::dbExecute(con, "DELETE FROM vcs_repo_owner WHERE repo_id = ?",
+                                     params = list(unlisted))
+  counts$removed <- counts$removed + DBI::dbExecute(con,
+    "DELETE FROM vcs_repo_owner WHERE observed_on < ?",
+    params = list(format(today - OWNER_STALE_DAYS)))
+  DBI::dbCommit(con); ok <- TRUE
+
+  cat(sprintf(paste0("repo owners: %d written, %d with no owner returned, %d with another owner type, ",
+                     "%d not collected this run, %d removed\n"),
+              counts$written, counts$no_owner, counts$other_type, counts$not_collected, counts$removed))
+  invisible(counts)
+}
+
 gauges_to_long <- function(snapshot, repo_map) {
   if (is.null(snapshot) || nrow(snapshot) == 0)
     return(data.frame(repo_id = character(), metric = character(), value = integer(), stringsAsFactors = FALSE))

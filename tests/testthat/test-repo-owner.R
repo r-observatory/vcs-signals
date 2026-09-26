@@ -63,3 +63,205 @@ test_that("an owner table that lost 5% of its rows is refused and one that lost 
                "vcs_repo_owner: 95 rows, was 100", fixed = TRUE)
   expect_equal(summary_regressions(prev, .mk_owner_summary(99)), character(0))
 })
+
+# ---- write rules ---------------------------------------------------------------
+
+.owner_map <- function(repo_id, node_id)
+  data.frame(repo_id = repo_id, node_id = node_id, stringsAsFactors = FALSE)
+
+.owner_snapshot <- function(node_id, name_with_owner, owner_login, owner_type, owner_node_id)
+  data.frame(node_id = node_id, name_with_owner = name_with_owner, owner_login = owner_login,
+             owner_type = owner_type, owner_node_id = owner_node_id, stars = 1L,
+             stringsAsFactors = FALSE)
+
+.quiet_write <- function(...) {
+  res <- NULL
+  utils::capture.output(res <- write_repo_owner(...))
+  res
+}
+
+test_that("a repository's owner is written with the day it was seen", {
+  con <- new_test_db(); on.exit(DBI::dbDisconnect(con))
+  res <- .quiet_write(con,
+    .owner_snapshot("R_a", "tidyverse/ggplot2", "tidyverse", "Organization", "O_1"),
+    .owner_map("github.com/tidyverse/ggplot2", "R_a"), .today)
+  got <- .owner_rows(con)
+  expect_equal(nrow(got), 1L)
+  expect_equal(got$repo_id, "github.com/tidyverse/ggplot2")
+  expect_equal(got$node_id, "R_a")
+  expect_equal(got$owner_login_current, "tidyverse")
+  expect_equal(got$owner_type, "Organization")
+  expect_equal(got$owner_node_id, "O_1")
+  expect_equal(got$name_with_owner_current, "tidyverse/ggplot2")
+  expect_equal(got$observed_on, .today)
+  expect_equal(res$written, 1L)
+})
+
+test_that("a transferred repository keeps its repo_id and is stored under its new owner", {
+  # sbfnk/rbi now resolves to epiforecasts/rbi, while the DESCRIPTION URL still names sbfnk.
+  con <- new_test_db(); on.exit(DBI::dbDisconnect(con))
+  rid <- "github.com/sbfnk/rbi"; node <- "MDEwOlJlcG9zaXRvcnkxMDI0MzMwOA=="
+  .put_owner(con, rid, node, "sbfnk", "User", "U_sbfnk", "sbfnk/rbi", "2026-09-20")
+  .quiet_write(con,
+    .owner_snapshot(node, "epiforecasts/rbi", "epiforecasts", "Organization",
+                    "MDEyOk9yZ2FuaXphdGlvbjU0Njc1MDk0"),
+    .owner_map(rid, node), .today)
+  got <- .owner_rows(con)
+  expect_equal(nrow(got), 1L)
+  expect_equal(got$repo_id, rid)
+  expect_equal(got$owner_login_current, "epiforecasts")
+  expect_equal(got$owner_type, "Organization")
+  expect_equal(got$owner_node_id, "MDEyOk9yZ2FuaXphdGlvbjU0Njc1MDk0")
+  expect_equal(got$name_with_owner_current, "epiforecasts/rbi")
+  expect_equal(got$observed_on, .today)
+})
+
+test_that("the login and the name are stored in GitHub's case, not the repo_id's", {
+  con <- new_test_db(); on.exit(DBI::dbDisconnect(con))
+  .quiet_write(con,
+    .owner_snapshot("R_d", "DOI-USGS/dataRetrieval", "DOI-USGS", "Organization", "O_usgs"),
+    .owner_map("github.com/usgs-r/dataretrieval", "R_d"), .today)
+  got <- .owner_rows(con)
+  expect_equal(got$repo_id, "github.com/usgs-r/dataretrieval")
+  expect_equal(got$owner_login_current, "DOI-USGS")
+  expect_equal(got$name_with_owner_current, "DOI-USGS/dataRetrieval")
+  expect_equal(DBI::dbGetQuery(con, "SELECT repo_id FROM vcs_repo_owner
+    WHERE owner_login_current = 'doi-usgs' COLLATE NOCASE")$repo_id, got$repo_id)
+})
+
+test_that("two repo_ids on one repository both get a row, even when the query returns the node twice", {
+  con <- new_test_db(); on.exit(DBI::dbDisconnect(con))
+  node <- "MDEwOlJlcG9zaXRvcnk4NjA1Njc="
+  sn <- .owner_snapshot(node, "r-lib/log4r", "r-lib", "Organization", "O_rlib")
+  .quiet_write(con, rbind(sn, sn),
+    .owner_map(c("github.com/johnmyleswhite/log4r", "github.com/r-lib/log4r"), c(node, node)),
+    .today)
+  got <- .owner_rows(con)
+  expect_equal(got$repo_id, c("github.com/johnmyleswhite/log4r", "github.com/r-lib/log4r"))
+  expect_equal(unique(got$node_id), node)
+  expect_equal(unique(got$owner_login_current), "r-lib")
+  expect_equal(unique(got$name_with_owner_current), "r-lib/log4r")
+})
+
+test_that("a null owner or an unknown owner type is not written, and both are counted", {
+  con <- new_test_db(); on.exit(DBI::dbDisconnect(con))
+  .put_owner(con, "github.com/o/a", "R_a", "o", "Organization", "O_1", "o/a", "2026-09-22")
+  sn <- rbind(.owner_snapshot("R_a", "o/a", NA_character_, NA_character_, NA_character_),
+              .owner_snapshot("R_b", "o/b", "o", "Enterprise", "E_1"))
+  expect_output(res <- write_repo_owner(con, sn,
+    .owner_map(c("github.com/o/a", "github.com/o/b"), c("R_a", "R_b")), .today),
+    "1 with no owner returned, 1 with another owner type")
+  got <- .owner_rows(con)
+  expect_equal(got$repo_id, "github.com/o/a")
+  expect_equal(got$observed_on, "2026-09-22")
+  expect_equal(res$written, 0L)
+  expect_equal(res$no_owner, 1L)
+  expect_equal(res$other_type, 1L)
+})
+
+test_that("a repo_id that is no longer an active GitHub repository loses its row", {
+  con <- new_test_db(); on.exit(DBI::dbDisconnect(con))
+  .put_owner(con, "github.com/o/gone", "R_g", "o", "Organization", "O_1", "o/gone", "2026-09-24")
+  res <- .quiet_write(con, .owner_snapshot("R_a", "o/a", "o", "Organization", "O_1"),
+                      .owner_map("github.com/o/a", "R_a"), .today)
+  expect_equal(.owner_rows(con)$repo_id, "github.com/o/a")
+  expect_equal(res$removed, 1L)
+})
+
+test_that("a repository the gauge query missed keeps its row and is counted", {
+  con <- new_test_db(); on.exit(DBI::dbDisconnect(con))
+  .put_owner(con, "github.com/o/kept", "R_k", "o", "Organization", "O_1", "o/kept", "2026-09-23")
+  expect_output(res <- write_repo_owner(con,
+    .owner_snapshot("R_a", "o/a", "o", "Organization", "O_1"),
+    .owner_map(c("github.com/o/a", "github.com/o/kept"), c("R_a", "R_k")), .today),
+    "1 not collected this run")
+  got <- .owner_rows(con)
+  expect_equal(got$repo_id, c("github.com/o/a", "github.com/o/kept"))
+  expect_equal(got$observed_on[got$repo_id == "github.com/o/kept"], "2026-09-23")
+  expect_equal(res$not_collected, 1L)
+})
+
+test_that("an owner row outlives its last sighting by 14 days and no more", {
+  con <- new_test_db(); on.exit(DBI::dbDisconnect(con))
+  expect_equal(OWNER_STALE_DAYS, 14L)
+  .put_owner(con, "github.com/o/d14", "R_14", "o", "Organization", "O_1", "o/d14", "2026-09-11")
+  .put_owner(con, "github.com/o/d15", "R_15", "o", "Organization", "O_1", "o/d15", "2026-09-10")
+  res <- .quiet_write(con, .owner_snapshot("R_a", "o/a", "o", "Organization", "O_1"),
+    .owner_map(c("github.com/o/a", "github.com/o/d14", "github.com/o/d15"), c("R_a", "R_14", "R_15")),
+    .today)
+  expect_equal(.owner_rows(con)$repo_id, c("github.com/o/a", "github.com/o/d14"))
+  expect_equal(res$removed, 1L)
+})
+
+test_that("an error part way through leaves the prior rows exactly as they were", {
+  con <- new_test_db(); on.exit(DBI::dbDisconnect(con))
+  .put_owner(con, "github.com/o/a", "R_a", "o", "Organization", "O_1", "o/a", "2026-09-20")
+  .put_owner(con, "github.com/o/gone", "R_g", "o", "Organization", "O_1", "o/gone", "2026-09-20")
+  before <- .owner_rows(con)
+  # The upsert succeeds; the delete of the retired repo_id then fails.
+  DBI::dbExecute(con, "CREATE TRIGGER vro_refuse BEFORE DELETE ON vcs_repo_owner
+    BEGIN SELECT RAISE(ABORT, 'delete refused'); END")
+  expect_error(utils::capture.output(write_repo_owner(con,
+    rbind(.owner_snapshot("R_a", "o2/a", "o2", "User", "U_2"),
+          .owner_snapshot("R_n", "o/new", "o", "Organization", "O_1")),
+    .owner_map(c("github.com/o/a", "github.com/o/new"), c("R_a", "R_n")), .today)),
+    "delete refused")
+  expect_equal(.owner_rows(con), before)
+  expect_no_error({ DBI::dbBegin(con); DBI::dbRollback(con) })
+})
+
+test_that("an organization rename rewrites the repositories the query returned, and a missed one keeps the old login on the same owner node", {
+  con <- new_test_db(); on.exit(DBI::dbDisconnect(con))
+  .put_owner(con, "github.com/oldorg/a", "R_a", "oldorg", "Organization", "O_9", "oldorg/a", "2026-09-24")
+  .put_owner(con, "github.com/oldorg/b", "R_b", "oldorg", "Organization", "O_9", "oldorg/b", "2026-09-24")
+  .quiet_write(con, .owner_snapshot("R_a", "neworg/a", "neworg", "Organization", "O_9"),
+    .owner_map(c("github.com/oldorg/a", "github.com/oldorg/b"), c("R_a", "R_b")), .today)
+  got <- .owner_rows(con)
+  expect_equal(got$owner_login_current, c("neworg", "oldorg"))
+  expect_equal(got$name_with_owner_current, c("neworg/a", "oldorg/b"))
+  expect_equal(got$observed_on, c(.today, "2026-09-24"))
+  expect_equal(unique(got$owner_node_id), "O_9")
+})
+
+test_that("an account converted to an organization is stored with its new type and node, and a missed repository keeps the old ones", {
+  con <- new_test_db(); on.exit(DBI::dbDisconnect(con))
+  .put_owner(con, "github.com/lab/a", "R_a", "lab", "User", "U_lab", "lab/a", "2026-09-24")
+  .put_owner(con, "github.com/lab/b", "R_b", "lab", "User", "U_lab", "lab/b", "2026-09-24")
+  .quiet_write(con, .owner_snapshot("R_a", "lab/a", "lab", "Organization", "O_lab"),
+    .owner_map(c("github.com/lab/a", "github.com/lab/b"), c("R_a", "R_b")), .today)
+  got <- .owner_rows(con)
+  expect_equal(got$owner_type, c("Organization", "User"))
+  expect_equal(got$owner_node_id, c("O_lab", "U_lab"))
+  expect_equal(got$owner_login_current, c("lab", "lab"))
+  expect_equal(got$observed_on, c(.today, "2026-09-24"))
+})
+
+test_that("a second run on the same day with the same answer leaves the table as it was", {
+  con <- new_test_db(); on.exit(DBI::dbDisconnect(con))
+  sn <- .owner_snapshot(c("R_a", "R_b"), c("o/a", "u/b"), c("o", "u"), c("Organization", "User"),
+                        c("O_1", "U_1"))
+  map <- .owner_map(c("github.com/o/a", "github.com/u/b"), c("R_a", "R_b"))
+  .quiet_write(con, sn, map, .today)
+  first <- .owner_rows(con)
+  res <- .quiet_write(con, sn, map, .today)
+  expect_identical(.owner_rows(con), first)
+  expect_equal(res$written, 2L)
+  expect_equal(res$removed, 0L)
+})
+
+test_that("the first run after three weeks without one keeps every repository it reached", {
+  con <- new_test_db(); on.exit(DBI::dbDisconnect(con))
+  old <- format(as.Date(.today) - 21)
+  for (x in c("a", "b", "c"))
+    .put_owner(con, paste0("github.com/o/", x), paste0("R_", x), "o", "Organization", "O_1",
+               paste0("o/", x), old)
+  res <- .quiet_write(con,
+    .owner_snapshot(c("R_a", "R_b"), c("o/a", "o/b"), "o", "Organization", "O_1"),
+    .owner_map(c("github.com/o/a", "github.com/o/b", "github.com/o/c"), c("R_a", "R_b", "R_c")),
+    .today)
+  got <- .owner_rows(con)
+  expect_equal(got$repo_id, c("github.com/o/a", "github.com/o/b"))
+  expect_equal(got$observed_on, c(.today, .today))
+  expect_equal(res$not_collected, 1L)
+  expect_equal(res$removed, 1L)
+})
