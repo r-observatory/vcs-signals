@@ -449,19 +449,24 @@ AI_SEARCH_PAGE <- 100L
 
 AI_CANARY_MIN_ROSTER <- 200L
 
-AI_SILENT_CHANNELS_KNOWN <- read.csv(text = trimws('
+# Vendor facts in these reasons, each checked on 2026-09-26 at the page named.
+# Kiro CLI replaced the Amazon Q Developer CLI in November 2025: https://kiro.dev/docs/upgrade-guides/migrating-from-q/
+# Windsurf became Devin Desktop on 2026-06-02, rules in .devin/rules: https://docs.devin.ai/desktop/devin-desktop-faq
+# Grok Build reads AGENTS.md, CLAUDE.md and .grok/rules, not GROK.md: https://github.com/xai-org/grok-build/blob/HEAD/crates/codegen/xai-grok-tools/src/types/compat.rs
+# Junie reads AGENTS.md first, .junie/guidelines.md is its legacy format: https://junie.jetbrains.com/docs/guidelines-and-memory.html
+# The Roo Code extension shut down on 2026-05-15, the day its repository was archived: https://github.com/RooCodeInc/Roo-Code (README)
+AI_SILENT_CHANNELS_KNOWN <- read.csv(text = trimws(r"(
 tier,tool,status,reason,recorded_on
-D,amazonq,genuine,".amazonq is scanned on every shard and no roster repo has it",2026-08-01
-D,grok,genuine,"GROK.md/.grok/.xai scanned on every shard, absent from the roster",2026-08-01
-D,junie,genuine,".junie is scanned on every shard and no roster repo has it",2026-08-01
-D,roo,genuine,".roo/.roomodes scanned on every shard, absent from the roster",2026-08-01
-B,aider,open,"rule on main since 2026-07-15 but every trailer search was malformed until 2026-07-30; needs one clean scan",2026-08-01
-B,replit,open,"only Replit-Commit-Author remains after the prose rule was deleted; unseen in any sampled commit",2026-08-01
-B,windsurf,open,"rule on main since 2026-07-15 but every trailer search was malformed until 2026-07-30; needs one clean scan",2026-08-01
-A,cursor,open,"not the gate: 52 marker repos issued author:cursor[bot] and got nothing. Likely the wrong identity, since the coding agent commits as cursoragent@cursor.com (a tier-B rule); settle with a probe",2026-08-01
-A,devin,open,"tier A iterates cheap-pass evidence, which devin can only enter via the PR channel; that channel matched nothing until the login-shape fix, still unscanned",2026-08-01
-A,openhands,open,"tier A iterates cheap-pass evidence, which openhands can only enter via the PR channel; that channel matched nothing until the login-shape fix, still unscanned",2026-08-01
-'), stringsAsFactors = FALSE)
+A,cursor,open,"We search for commits by cursor[bot], the account the Cursor app uses to review and merge pull requests. Cursor's coding agent commits under another account, cursoragent (cursoragent@cursor.com), which had made 120 commits in 11 repositories, 6 of them with no Cursor finding here. The search also runs only where a file, a line in an ignore file or a pull request already named Cursor. This is settled once commits by cursoragent are counted in every repository.",2026-09-25
+A,devin,genuine,"No repository has a commit by Devin's account (devin-ai-integration[bot]) on its default branch, checked across 15,875. The search itself runs only in xsdm-devel, where Devin's account opened pull requests, and that repository has no commits by the account and 29 commits crediting Devin. Devin also appears in pull requests that maintainers opened from a Devin session in sobol and maxentcpp, which this page does not count yet.",2026-09-25
+A,openhands,open,"The account we look for is right (openhands-agent, openhands@all-hands.dev), but the search runs only where a pull request opened by OpenHands's account was found, and none has been. One commit by that account exists, in kuzuR, which this page counts only through a commit crediting OpenHands. This is settled once commits by the account are counted in every repository.",2026-09-25
+B,replit,genuine,"Searched on 2026-07-31 in the 1,964 repositories found by then, with no match. Other checks agree: no repository has a .replit, replit.nix or replit.md file, no default branch has a commit by Replit Agent's account (agent@replit.com), and the newest 100 commits of 600 sampled repositories have no Replit-Commit-Author line.",2026-09-25
+B,windsurf,genuine,"Searches for commits crediting Windsurf began on 2026-08-02 and no full search of every repository has finished since, so every public commit crediting Windsurf was listed instead: 963 naming Windsurf, 552 naming its bot account (windsurf-bot) and 76 at codeium.com. None is in a repository we scan. Windsurf became Devin Desktop on 2026-06-02 and now keeps its rules in .devin/rules.",2026-09-25
+D,amazonq,genuine,"No repository has an .amazonq folder, checked across 15,875. Amazon Q itself is present in one repository: its account opened a pull request in ss3sim, merged in May 2025, and made 2 commits there, which this page does not count yet. Its command-line tool has been Kiro since November 2025. One repository has a .kiro folder and 5 more name .kiro in an ignore file.",2026-09-25
+D,grok,genuine,"No GROK.md, .grok or .xai in any repository, checked across 15,875. xAI's Grok Build reads AGENTS.md, CLAUDE.md and .grok/rules rather than GROK.md, so a repository using it may show only as AGENTS.md or CLAUDE.md.",2026-09-25
+D,junie,genuine,"No .junie folder in any repository, no commit by Junie's account (junie@jetbrains.com) on any default branch, and no pull request by it among each repository's newest 50, checked across 15,875. Junie now reads AGENTS.md first, so a repository using it may show only as AGENTS.md.",2026-09-25
+D,roo,genuine,"No .roo, .roomodes, .roorules or .rooignore in any repository, checked across 15,875, and none of the 218 public commits by Roo's cloud agent account (roomote[bot]) is in a repository we scan. The Roo Code extension was shut down on 2026-05-15, so this will not change.",2026-09-25
+)"), stringsAsFactors = FALSE)
 
 # Tables the summary shard carries beyond the five it takes as named arguments.
 # Declared in one place because the export step used to name every table
