@@ -417,6 +417,30 @@ test_that("a silent-channel row nobody recorded and nothing marked unexplained i
   expect_match(paste(summary_regressions(prev, nxt), collapse = " "), "nosuchtool")
 })
 
+test_that("the week the silent-search reasons are rewritten publishes, daily and weekly", {
+  # The table and inventory as published before the rewrite. The gate keys on
+  # the search, the tool and the status, so the reason here is a stand-in.
+  was <- data.frame(
+    tier   = c("A", "A", "A", "B", "B", "D", "D", "D", "D"),
+    tool   = c("cursor", "devin", "openhands", "replit", "windsurf",
+               "amazonq", "grok", "junie", "roo"),
+    status = c("open", "open", "open", "open", "open",
+               "genuine", "genuine", "genuine", "genuine"),
+    reason = "recorded before the rewrite", recorded_on = "2026-08-01",
+    stringsAsFactors = FALSE)
+  inv_now <- ai_rule_inventory()
+  inv_was <- inv_now[inv_now$tier != "PR", , drop = FALSE]
+  prev <- .mk_extra(tempfile(fileext = ".db"), silent = was, inventory = inv_was)
+  # Daily runs before the next weekly merge republish both tables as they were.
+  daily <- .mk_extra(tempfile(fileext = ".db"), silent = was, inventory = inv_was)
+  expect_equal(summary_regressions(prev, daily), character(0))
+  # The weekly merge writes the new list, where three statuses moved from open to
+  # genuine and two pull request rows are new, beside the larger inventory.
+  weekly <- .mk_extra(tempfile(fileext = ".db"), silent = AI_SILENT_CHANNELS_KNOWN,
+                      inventory = inv_now)
+  expect_equal(summary_regressions(prev, weekly), character(0))
+})
+
 test_that("retiring a rule shrinks the published inventory without refusing the build", {
   # The inventory is a catalogue derived from the ruleset in source, republished
   # whole on every merge, and this project retires rules on purpose: .positai

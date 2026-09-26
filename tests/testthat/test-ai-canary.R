@@ -59,6 +59,80 @@ test_that("every allowlist entry carries a reason, a status and a date", {
   expect_true(all(nchar(kn$reason[kn$status == "open"]) > 30))
 })
 
+test_that("the silent-search list parses into one row per search and tool", {
+  # A reason missing a CSV double quote still parses: read.csv spills the rest of
+  # the text into rows whose search and tool are fragments of a sentence.
+  kn <- AI_SILENT_CHANNELS_KNOWN
+  expect_equal(names(kn), c("tier", "tool", "status", "reason", "recorded_on"))
+  expect_false(anyNA(kn))
+  expect_true(all(kn$tier %in% c("A", "B", "C", "D", "PR", "PB")),
+              info = paste(unique(kn$tier), collapse = ", "))
+  expect_false(any(grepl("[\r\n]", unlist(kn))))
+  # The published table is keyed on the search and the tool, so a repeat fails the merge's write.
+  expect_equal(anyDuplicated(paste(kn$tier, kn$tool)), 0L)
+})
+
+test_that("silent-search reasons are written in the page's words", {
+  # The page prints each reason as written, so these are the words a reader sees.
+  kn <- AI_SILENT_CHANNELS_KNOWN
+  key <- paste(kn$tier, kn$tool, sep = "/")
+  which_rows <- function(bad) paste(key[bad], collapse = ", ")
+  internal <- grepl(paste0("\\b(tiers?|evidence|markers?|traces?|channels?|flagged|",
+                           "roster|shards?|gate|cheap|deep)\\b"), kn$reason, ignore.case = TRUE)
+  expect_false(any(internal), info = which_rows(internal))
+  letter <- grepl(paste0("\\btier[- ]?(A|B|C|D|PR|PB)\\b|\\((A|B|C|D|PR|PB)\\)|",
+                         "\\b(A|B|C|D|PR|PB) (search|rule)\\b"), kn$reason)
+  expect_false(any(letter), info = which_rows(letter))
+  dash <- grepl("\u2014", kn$reason, fixed = TRUE)
+  expect_false(any(dash), info = which_rows(dash))
+  semi <- grepl(";", kn$reason, fixed = TRUE)
+  expect_false(any(semi), info = which_rows(semi))
+  quote <- grepl("\"", kn$reason, fixed = TRUE)
+  expect_false(any(quote), info = which_rows(quote))
+  long <- nchar(kn$reason) > 800
+  expect_false(any(long), info = which_rows(long))
+  unended <- !grepl("\\.$", kn$reason)
+  expect_false(any(unended), info = which_rows(unended))
+  # The page shows an open question as unresolved, so its last sentence says what settles it.
+  unsettled <- kn$status == "open" & !grepl("\\bsettled?\\b", sub("^.*[.] ", "", kn$reason))
+  expect_false(any(unsettled), info = which_rows(unsettled))
+})
+
+test_that("a vendor fact in a reason has its source written above the list", {
+  # A rename, shutdown or successor told to readers needs a page someone can check,
+  # and a source left behind after its sentence was dropped cites nothing.
+  src <- readLines(file.path(.repo_root, "scripts", "config.R"), warn = FALSE)
+  at <- grep("^AI_SILENT_CHANNELS_KNOWN <- read.csv", src)
+  expect_length(at, 1L)
+  top <- at
+  while (top > 1L && startsWith(src[top - 1L], "#")) top <- top - 1L
+  above <- src[seq_len(at - top) + top - 1L]
+  sources <- c("Kiro since" = "kiro.dev/docs/upgrade-guides/migrating-from-q",
+               "Devin Desktop" = "docs.devin.ai/desktop/devin-desktop-faq",
+               "Grok Build" = "github.com/xai-org/grok-build",
+               "Junie now reads" = "junie.jetbrains.com/docs/guidelines-and-memory",
+               "Roo Code extension was shut down" = "github.com/RooCodeInc/Roo-Code")
+  said <- vapply(names(sources), function(p)
+    any(grepl(p, AI_SILENT_CHANNELS_KNOWN$reason, fixed = TRUE)), logical(1))
+  cited <- vapply(sources, function(u) any(grepl(u, above, fixed = TRUE)), logical(1))
+  expect_equal(unname(cited), unname(said),
+               info = paste(names(sources)[cited != said], collapse = ", "))
+})
+
+test_that("pull requests opened by a tool's account are in the rule inventory", {
+  inv <- ai_rule_inventory()
+  expect_setequal(inv$tool[inv$tier == "PR"], unique(unname(AI_PR_AGENT_LOGINS)))
+  # Copilot, Devin and Jules accounts have opened pull requests in scanned
+  # repositories. Cursor and OpenHands have not, and both zeros must reach the check.
+  rows <- data.frame(repo_id = c("a", "b", "c"), tool = c("copilot", "devin", "jules"),
+                     evidence_tiers = c("PR", "D,PR", "A,PR"), stringsAsFactors = FALSE)
+  measured <- ai_silent_channels(rows, known = NULL)
+  expect_setequal(measured$tool[measured$tier == "PR"], c("cursor", "openhands"))
+  # With the recorded list, ai_silent_channels() returns only the unexplained rows.
+  out <- ai_silent_channels(rows)
+  expect_false(any(out$tier == "PR"), info = paste(out$tool[out$tier == "PR"], collapse = ", "))
+})
+
 test_that("the canary stands down on a roster too small to mean anything", {
   # A fixture merges a handful of repos. Every channel is zero there, and none
   # of those zeros is evidence.
