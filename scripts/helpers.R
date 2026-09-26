@@ -1785,14 +1785,14 @@ build_release_notes <- function(summary, changed_shards, tag) {
   if (any(back))
     out <- c(out, sprintf("%s: %d row(s) had observed_on moved earlier: %s",
                           t, sum(back), show(prev$repo_id[back])))
-  # Write rule 4 keeps rows only for active GitHub repositories with a node id. A repos
-  # table the gate cannot read explains nothing.
+  # write_repo_owner keeps rows only for active GitHub repositories with a node id.
+  # A repos table the gate cannot read explains nothing.
   repos <- .gate_rows(nc, "repos")
   cols <- c("repo_id", "host", "status", "node_id")
   listed <- if (is.null(repos) || !all(cols %in% names(repos))) rep(TRUE, nrow(prev)) else
     prev$repo_id %in% repos$repo_id[repos$host %in% "github" & repos$status %in% "active" &
                                     !is.na(repos$node_id)]
-  # Write rule 5: the cutoff the writer deleted by on the day it wrote the outgoing table.
+  # The cutoff write_repo_owner deleted by on the day it wrote the outgoing table.
   cutoff <- format(as.Date(max(nxt$observed_on)) - OWNER_STALE_DAYS)
   expired <- (prev$observed_on < cutoff) %in% TRUE
   lost <- is.na(m) & listed & !expired

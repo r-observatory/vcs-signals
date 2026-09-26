@@ -331,3 +331,38 @@ test_that("one active owner row seen within 14 days that leaves is refused and n
   four <- paste(summary_regressions(prev, .mk_owner_gate(5:100, .today)), collapse = " ")
   expect_match(four, "github.com/o/r0001, github.com/o/r0002, github.com/o/r0003, and 1 more", fixed = TRUE)
 })
+
+# Runs the statements against a gate summary in place and returns its path.
+.alter_gate <- function(path, ...) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con))
+  for (q in c(...)) DBI::dbExecute(con, q)
+  path
+}
+.owner_reasons <- function(prev, nxt)
+  grep("^vcs_repo_owner:", summary_regressions(prev, nxt), value = TRUE)
+
+test_that("an owner row may leave when its repository has no node id, is not on GitHub or is not in repos", {
+  prev <- .mk_owner_gate(1:100, .yesterday)
+  for (q in c("UPDATE repos SET node_id = NULL WHERE repo_id = 'github.com/o/r0007'",
+              "UPDATE repos SET host = 'gitlab' WHERE repo_id = 'github.com/o/r0007'",
+              "DELETE FROM repos WHERE repo_id = 'github.com/o/r0007'"))
+    expect_equal(.owner_reasons(prev, .alter_gate(.mk_owner_gate(setdiff(1:100, 7L), .today), q)),
+                 character(0), info = q)
+})
+
+test_that("a repos table without status explains no lost row, and an owner table without observed_on is refused", {
+  prev <- .mk_owner_gate(1:100, .yesterday)
+  no_status <- .alter_gate(.mk_owner_gate(1:95, .today, retired = 96:100),
+                           "ALTER TABLE repos DROP COLUMN status")
+  expect_match(paste(.owner_reasons(prev, no_status), collapse = " "),
+               paste0("vcs_repo_owner: 5 row(s) are gone while the repository is still active ",
+                      "and was seen within 14 days: github.com/o/r0096, github.com/o/r0097, ",
+                      "github.com/o/r0098, and 2 more"), fixed = TRUE)
+  no_date <- .alter_gate(.mk_owner_gate(1:100, .today), "DROP TABLE vcs_repo_owner",
+                         "CREATE TABLE vcs_repo_owner (repo_id TEXT)",
+                         "INSERT INTO vcs_repo_owner VALUES ('github.com/o/r0001')")
+  expect_equal(.owner_reasons(prev, no_date),
+               paste0("vcs_repo_owner: published without observed_on, so the gate cannot tell ",
+                      "which owner rows were kept"))
+})
