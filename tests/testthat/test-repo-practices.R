@@ -159,3 +159,33 @@ test_that("each alternative of each workflow rule matches, and case matters", {
   expect_equal(one("rcmdcheck\nr: devel")$ci_r_devel, 1L)
   expect_equal(one("rcmdcheck on windows-2022")$ci_platforms, '["windows"]')
 })
+
+test_that("the parser's workflow texts reach the flags, and a file GitHub returns no text for counts by its name", {
+  blob <- function(name, text) list(name = name, type = "blob", object = list(byteSize = 1L, text = text))
+  alias <- function(nwo, ...) list(nameWithOwner = nwo,
+    rootTree = list(entries = list(list(name = "DESCRIPTION", type = "blob"))),
+    githubTree = list(entries = list(list(name = "workflows", type = "tree"))),
+    workflowsTree = list(entries = list(...)))
+  roster <- data.frame(repo_id = c("github.com/o/a", "github.com/o/b"), owner = "o", name = c("a", "b"),
+                       stringsAsFactors = FALSE)
+  resp <- list(data = list(
+    r0 = alias("o/a", blob("R-CMD-check.yaml", wf_file("R-CMD-check.yaml")),
+               blob("lint.yaml", wf_file("lint.yaml")), blob("notes.md", "codecov")),
+    r1 = alias("o/b", blob("R-CMD-check.yaml", NULL),
+               blob("test-coverage.yaml", wf_file("test-coverage.yaml")), blob("logo.png", NULL))))
+  p <- parse_tree_markers(resp, roster)
+  row_of <- function(id) classify_dev_tooling(p[[id]]$root_entries, p[[id]]$github_entries, repo = p[[id]])
+  a <- row_of("github.com/o/a")
+  expect_equal(a$ci_workflow_files, '["R-CMD-check.yaml","lint.yaml"]')
+  expect_equal(a$ci_rcmdcheck, 1L)
+  expect_equal(a$ci_platforms, '["linux","macos","windows"]')
+  expect_equal(a$ci_r_devel, 1L)
+  expect_equal(a$ci_coverage, 0L)
+  expect_equal(a$ci_lint, 1L)
+  b <- row_of("github.com/o/b")
+  expect_equal(b$ci_workflow_files, '["R-CMD-check.yaml","test-coverage.yaml"]')
+  expect_equal(b$ci_rcmdcheck, 1L)
+  expect_true(is.na(b$ci_platforms))
+  expect_equal(b$ci_r_devel, 0L)
+  expect_equal(b$ci_coverage, 1L)
+})
