@@ -32,7 +32,7 @@ test_that("run_enumerate_ai builds the FULL active github roster from the repos 
       file.copy(f, file.path(dir, basename(f)), overwrite = TRUE); TRUE },
     # No renames to resolve in this fixture; an empty data payload makes the re-resolve
     # step's parse_resolve() see idx-less rows (node_id NA) and leave owner/name as-is.
-    graphql = function(query) list(data = list()))
+    graphql = with_contents_canary(function(query) list(data = list())))
   out <- tempfile("out_"); dir.create(out)
   run_enumerate_ai(io, out)
   roster <- load_ai_roster(file.path(out, "vcs-ai-roster.db"))
@@ -54,11 +54,11 @@ test_that("run_enumerate_ai re-resolves owner/name from node_id for rows that al
       f <- list.files(rel, pattern = utils::glob2rx(pattern), full.names = TRUE)
       if (!length(f)) return(FALSE)
       file.copy(f, file.path(dir, basename(f)), overwrite = TRUE); TRUE },
-    graphql = function(query) {
+    graphql = with_contents_canary(function(query) {
       # build_resolve_query(followRenames: true) reports the current slug for node R_x.
       list(data = list(r0 = list(id = "R_x", nameWithOwner = "new/name", isArchived = FALSE,
                                  isFork = FALSE, isMirror = FALSE, createdAt = "2024-01-01T00:00:00Z")))
-    })
+    }))
   out <- tempfile("out_"); dir.create(out)
   run_enumerate_ai(io, out)
   roster <- load_ai_roster(file.path(out, "vcs-ai-roster.db"))
@@ -84,7 +84,7 @@ test_that("run_enumerate_ai drops a roster row whose re-resolve returns a differ
       f <- list.files(rel, pattern = utils::glob2rx(pattern), full.names = TRUE)
       if (!length(f)) return(FALSE)
       file.copy(f, file.path(dir, basename(f)), overwrite = TRUE); TRUE },
-    graphql = function(query) {
+    graphql = with_contents_canary(function(query) {
       # r0 (old/name, node R_x) genuinely renamed -> same node_id at a new slug.
       # r1 (stale/squatted, node R_y) -> the slug now resolves to an UNRELATED repo's
       # node_id (R_evil): the old repo is gone and something else squatted the slug.
@@ -93,7 +93,7 @@ test_that("run_enumerate_ai drops a roster row whose re-resolve returns a differ
                   isFork = FALSE, isMirror = FALSE, createdAt = "2024-01-01T00:00:00Z"),
         r1 = list(id = "R_evil", nameWithOwner = "squatter/repo", isArchived = FALSE,
                   isFork = FALSE, isMirror = FALSE, createdAt = "2025-06-01T00:00:00Z")))
-    })
+    }))
   out <- tempfile("out_"); dir.create(out)
   run_enumerate_ai(io, out)
   roster <- load_ai_roster(file.path(out, "vcs-ai-roster.db"))
@@ -329,6 +329,10 @@ test_that("run_merge unions vcs-dev-tooling shards into the republished summary"
   expect_setequal(got$repo_id, c("github.com/a/x", "github.com/b/y"))
   expect_equal(got$has_ci[got$repo_id == "github.com/a/x"], 1L)          # workflows -> ci
   expect_equal(got$has_dockerfile[got$repo_id == "github.com/b/y"], 1L)
+  # run_merge is the rules table's only writer, and the gate accepts it empty.
+  rules <- DBI::dbReadTable(scon, "vcs_dev_tooling_rules")
+  expect_setequal(rules$col, dev_tooling_columns())
+  expect_true(all(rules$ruleset_version == DEV_TOOLING_RULESET_VERSION))
 })
 
 test_that("run_merge preserves a prior dev-tooling repo absent from this dispatch's shards", {
@@ -556,7 +560,7 @@ test_that("write_dev_tooling_partial / read_dev_tooling round-trip a stamped sna
   expect_equal(got$has_renv, 1L)
   expect_equal(got$has_dockerfile, 1L)
   expect_equal(got$has_ci, 1L)
-  expect_identical(names(got), c("repo_id", "last_scanned", dev_tooling_columns()))
+  expect_identical(names(got), c("repo_id", "last_scanned", "ruleset_version", dev_tooling_columns()))
 })
 
 test_that("read_dev_tooling degrades to a typed empty frame when the table is absent", {
@@ -564,7 +568,7 @@ test_that("read_dev_tooling degrades to a typed empty frame when the table is ab
   con <- DBI::dbConnect(RSQLite::SQLite(), p); DBI::dbDisconnect(con)  # empty db, no table
   got <- read_dev_tooling(p)
   expect_equal(nrow(got), 0)
-  expect_identical(names(got), c("repo_id", "last_scanned", dev_tooling_columns()))
+  expect_identical(names(got), c("repo_id", "last_scanned", "ruleset_version", dev_tooling_columns()))
 })
 
 test_that("run_cheap writes a vcs_dev_tooling row for every fetched repo, including non-AI ones", {
@@ -600,6 +604,7 @@ test_that("run_cheap writes a vcs_dev_tooling row for every fetched repo, includ
   expect_equal(dev$ci_github_actions, 1L)
   expect_equal(dev$has_ci, 1L)
   expect_equal(dev$readme_source, "rmd")
+  expect_equal(dev$ruleset_version, DEV_TOOLING_RULESET_VERSION)
   expect_false("github.com/b/gone" %in% dev$repo_id)  # null alias -> honest-NA, no row
 
   # r0 has no AI marker, so it is NOT in the AI flagged shard: this proves dev tooling is
@@ -1281,4 +1286,48 @@ test_that("the retry merges and does not scan", {
   # One job. A matrix here would mean it is scanning something.
   expect_false(grepl("strategy:", txt, fixed = TRUE),
                info = "no fan-out, so nothing is being scanned")
+})
+
+test_that("enumerate records each roster repository's CRAN versions, and a failed CRAN read records none", {
+  rel <- tempfile("rel_"); dir.create(rel)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel, "vcs-signals-summary.db"))
+  ensure_repo_schema(scon)
+  DBI::dbExecute(scon, "INSERT INTO repos (repo_id,node_id,host,host_domain,owner,name,name_with_owner,supported,n_packages,first_seen,last_seen,status) VALUES
+    ('github.com/a/prova',NULL,'github','github.com','a','prova','a/prova',1,1,'2024-01-01','2026-07-01','active')")
+  DBI::dbExecute(scon, "INSERT INTO repo_packages (repo_id, package, origin, resolved_from) VALUES
+    ('github.com/a/prova','prova','cran','url'), ('github.com/a/prova','provaBioc','bioc','url')")
+  DBI::dbDisconnect(scon)
+  dl <- function(pattern, dir) {
+    f <- list.files(rel, pattern = utils::glob2rx(pattern), full.names = TRUE)
+    if (!length(f)) return(FALSE)
+    file.copy(f, file.path(dir, basename(f)), overwrite = TRUE); TRUE }
+  gq <- with_contents_canary(function(query) list(data = list()))
+  out <- tempfile("out_"); dir.create(out)
+  run_enumerate_ai(list(download = dl, graphql = gq,
+                        cran_packages = function() data.frame(Package = "prova", Version = "0.4.5")), out)
+  got <- load_roster_cran(file.path(out, "vcs-ai-roster.db"))
+  expect_equal(got$package, "prova"); expect_equal(got$cran_version, "0.4.5")
+
+  out2 <- tempfile("out_"); dir.create(out2)
+  expect_message(run_enumerate_ai(list(download = dl, graphql = gq,
+                                       cran_packages = function() stop("503")), out2),
+                 "could not be read")
+  expect_equal(nrow(load_roster_cran(file.path(out2, "vcs-ai-roster.db"))), 0L)
+})
+
+test_that("the cheap pass compares the default branch's version with CRAN", {
+  out <- tempfile("out_"); dir.create(out)
+  roster <- data.frame(repo_id = "github.com/a/prova", owner = "a", name = "prova", node_id = NA_character_,
+                       done = 0L, stringsAsFactors = FALSE)
+  roster_path <- file.path(out, "vcs-ai-roster.db")
+  write_ai_roster(roster_path, roster, data.frame(repo_id = "github.com/a/prova", package = "prova",
+                                                  cran_version = "0.4.5"))
+  io <- fake_contents_io(alias = function(name) list(nameWithOwner = "a/prova", isFork = FALSE, parent = NULL,
+    rootTree = list(entries = list(list(name = "DESCRIPTION", type = "blob"))),
+    descBlob = list(byteSize = 40L, text = "Package: prova\nVersion: 0.4.4.9000\n")))
+  local_fast_batches()
+  run_cheap(io, out, roster_path, 0, 1)
+  dev <- read_dev_tooling(file.path(out, "vcs-dev-tooling-0.db"))
+  expect_equal(dev$cran_version_at_scan, "0.4.5")
+  expect_equal(dev$repo_version_vs_cran, "behind")
 })

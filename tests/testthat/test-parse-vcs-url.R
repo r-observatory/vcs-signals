@@ -42,3 +42,9 @@ test_that("parse_vcs_url rejects non-repo and malformed inputs", {
   expect_null(parse_vcs_url("README"))
   expect_null(parse_vcs_url(NA_character_))
 })
+
+test_that("parse_vcs_url reads forgemia.inra.fr as a GitLab host", {
+  expect_equal(parse_vcs_url("https://forgemia.inra.fr/pappso/metaprotr"),
+               list(host = "gitlab", host_domain = "forgemia.inra.fr", owner = "pappso", name = "metaprotr"))
+  expect_equal(parse_vcs_url("https://forgemia.inra.fr/genotoul-bioinfo/mixKernel/-/issues")$name, "mixKernel")
+})

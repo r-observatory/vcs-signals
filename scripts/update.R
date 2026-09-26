@@ -14,6 +14,7 @@ source("scripts/config.R")
 source("scripts/helpers.R")
 source("scripts/github.R")
 if (!exists("build_ai_rollups")) source("scripts/ai_signals.R")
+if (!exists("url_points_into")) source("scripts/dev_tooling.R")
 suppressPackageStartupMessages({ library(DBI); library(RSQLite) })
 
 # ---- acquisition ------------------------------------------------------------

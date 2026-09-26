@@ -1,0 +1,993 @@
+{
+ "_source": "GitHub GraphQL answers for seven repositories, recorded read-only on 2026-09-25 and trimmed to the fields the rules read. A field with no recorded answer is left out, which the classifier reads as not read. linelist's contributing guide url takes the form of its recorded code of conduct url.",
+ "repos": [
+  {
+   "repo_id": "github.com/epiverse-trace/linelist",
+   "owner": "epiverse-trace",
+   "name": "linelist"
+  },
+  {
+   "repo_id": "github.com/epiverse-trace/cfr",
+   "owner": "epiverse-trace",
+   "name": "cfr"
+  },
+  {
+   "repo_id": "github.com/tidyverse/forcats",
+   "owner": "tidyverse",
+   "name": "forcats"
+  },
+  {
+   "repo_id": "github.com/acoppock/ri2",
+   "owner": "acoppock",
+   "name": "ri2"
+  },
+  {
+   "repo_id": "github.com/kvenkita/bqmm",
+   "owner": "kvenkita",
+   "name": "bqmm"
+  },
+  {
+   "repo_id": "github.com/johncoene/tippy",
+   "owner": "JohnCoene",
+   "name": "tippy"
+  },
+  {
+   "repo_id": "github.com/ropensci-review-tools/goodpractice",
+   "owner": "ropensci-review-tools",
+   "name": "goodpractice"
+  }
+ ],
+ "data": {
+  "r0": {
+   "nameWithOwner": "epiverse-trace/linelist",
+   "isFork": false,
+   "parent": null,
+   "pullRequestTemplates": [
+    {
+     "filename": "pull_request_template.md",
+     "repository": {
+      "nameWithOwner": "epiverse-trace/.github"
+     }
+    }
+   ],
+   "issueTemplates": [],
+   "codeOfConduct": {
+    "url": "https://github.com/epiverse-trace/.github/blob/main/CODE_OF_CONDUCT.md"
+   },
+   "contributingGuidelines": {
+    "url": "https://github.com/epiverse-trace/.github/blob/main/CONTRIBUTING.md"
+   },
+   "rootTree": {
+    "entries": [
+     {
+      "name": ".Rbuildignore",
+      "type": "blob"
+     },
+     {
+      "name": ".gitattributes",
+      "type": "blob"
+     },
+     {
+      "name": ".github",
+      "type": "tree"
+     },
+     {
+      "name": ".gitignore",
+      "type": "blob"
+     },
+     {
+      "name": ".lintr",
+      "type": "blob"
+     },
+     {
+      "name": ".pre-commit-config.yaml",
+      "type": "blob"
+     },
+     {
+      "name": "CITATION.cff",
+      "type": "blob"
+     },
+     {
+      "name": "DESCRIPTION",
+      "type": "blob"
+     },
+     {
+      "name": "LICENSE",
+      "type": "blob"
+     },
+     {
+      "name": "LICENSE.md",
+      "type": "blob"
+     },
+     {
+      "name": "NAMESPACE",
+      "type": "blob"
+     },
+     {
+      "name": "NEWS.md",
+      "type": "blob"
+     },
+     {
+      "name": "R",
+      "type": "tree"
+     },
+     {
+      "name": "README.Rmd",
+      "type": "blob"
+     },
+     {
+      "name": "README.md",
+      "type": "blob"
+     },
+     {
+      "name": "codecov.yml",
+      "type": "blob"
+     },
+     {
+      "name": "cran-comments.md",
+      "type": "blob"
+     },
+     {
+      "name": "inst",
+      "type": "tree"
+     },
+     {
+      "name": "linelist.Rproj",
+      "type": "blob"
+     },
+     {
+      "name": "man",
+      "type": "tree"
+     },
+     {
+      "name": "pkgdown",
+      "type": "tree"
+     },
+     {
+      "name": "tests",
+      "type": "tree"
+     },
+     {
+      "name": "tools",
+      "type": "tree"
+     },
+     {
+      "name": "vignettes",
+      "type": "tree"
+     }
+    ]
+   },
+   "githubTree": {
+    "entries": [
+     {
+      "name": ".gitignore",
+      "type": "blob"
+     },
+     {
+      "name": "workflows",
+      "type": "tree"
+     }
+    ]
+   },
+   "rbuildignore": {
+    "text": "^.*\\.Rproj$\n^CITATION\\.cff$\n^CRAN-RELEASE$\n^LICENSE\\.md$\n^Meta$\n^README\\.Rmd$\n^\\.Rproj\\.user$\n^\\.github$\n^\\.lintr$\n^\\.pre-commit-config\\.yaml$\n^_pkgdown\\.yml$\n^codecov\\.yml$\n^cran-comments\\.md$\n^doc$\n^docs$\n^pkgdown$\n^revdep$\n^tools$\n"
+   }
+  },
+  "r1": {
+   "nameWithOwner": "epiverse-trace/cfr",
+   "isFork": false,
+   "parent": null,
+   "pullRequestTemplates": [
+    {
+     "filename": null,
+     "repository": {
+      "nameWithOwner": "epiverse-trace/cfr"
+     }
+    }
+   ],
+   "issueTemplates": [],
+   "codeOfConduct": {
+    "url": "https://github.com/epiverse-trace/.github/blob/main/CODE_OF_CONDUCT.md"
+   },
+   "contributingGuidelines": {
+    "url": "https://github.com/epiverse-trace/cfr/blob/main/.github/CONTRIBUTING.md"
+   },
+   "rootTree": {
+    "entries": [
+     {
+      "name": ".Rbuildignore",
+      "type": "blob"
+     },
+     {
+      "name": ".github",
+      "type": "tree"
+     },
+     {
+      "name": ".gitignore",
+      "type": "blob"
+     },
+     {
+      "name": ".lintr",
+      "type": "blob"
+     },
+     {
+      "name": "CITATION.cff",
+      "type": "blob"
+     },
+     {
+      "name": "CRAN-SUBMISSION",
+      "type": "blob"
+     },
+     {
+      "name": "DESCRIPTION",
+      "type": "blob"
+     },
+     {
+      "name": "LICENSE",
+      "type": "blob"
+     },
+     {
+      "name": "LICENSE.md",
+      "type": "blob"
+     },
+     {
+      "name": "NAMESPACE",
+      "type": "blob"
+     },
+     {
+      "name": "NEWS.md",
+      "type": "blob"
+     },
+     {
+      "name": "R",
+      "type": "tree"
+     },
+     {
+      "name": "README.Rmd",
+      "type": "blob"
+     },
+     {
+      "name": "README.md",
+      "type": "blob"
+     },
+     {
+      "name": "_pkgdown.yml",
+      "type": "blob"
+     },
+     {
+      "name": "cfr.Rproj",
+      "type": "blob"
+     },
+     {
+      "name": "codecov.yml",
+      "type": "blob"
+     },
+     {
+      "name": "cran-comments.md",
+      "type": "blob"
+     },
+     {
+      "name": "data-raw",
+      "type": "tree"
+     },
+     {
+      "name": "data",
+      "type": "tree"
+     },
+     {
+      "name": "inst",
+      "type": "tree"
+     },
+     {
+      "name": "man",
+      "type": "tree"
+     },
+     {
+      "name": "pkgdown",
+      "type": "tree"
+     },
+     {
+      "name": "revdep",
+      "type": "tree"
+     },
+     {
+      "name": "tests",
+      "type": "tree"
+     },
+     {
+      "name": "tools",
+      "type": "tree"
+     },
+     {
+      "name": "vignettes",
+      "type": "tree"
+     }
+    ]
+   },
+   "githubTree": {
+    "entries": [
+     {
+      "name": ".gitignore",
+      "type": "blob"
+     },
+     {
+      "name": "CONTRIBUTING.md",
+      "type": "blob"
+     },
+     {
+      "name": "ISSUE_TEMPLATE",
+      "type": "tree"
+     },
+     {
+      "name": "PULL_REQUEST_TEMPLATE",
+      "type": "tree"
+     },
+     {
+      "name": "workflows",
+      "type": "tree"
+     }
+    ]
+   },
+   "rbuildignore": {
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^\\.github$\n^codecov\\.yml$\n^README\\.Rmd$\n^\\.lintr$\n^\\_pkgdown.yml$\n^cran-comments\\.md$\n^doc$\n^docs$\n^Meta$\n^pkgdown$\n^data-raw$\n^revdep$\n^CRAN-SUBMISSION$\n^_pkgdown\\.yml$\n^CITATION\\.cff$\n"
+   }
+  },
+  "r2": {
+   "nameWithOwner": "tidyverse/forcats",
+   "isFork": false,
+   "parent": null,
+   "pullRequestTemplates": [],
+   "issueTemplates": [],
+   "codeOfConduct": {
+    "url": "https://github.com/tidyverse/forcats/blob/main/.github/CODE_OF_CONDUCT.md"
+   },
+   "contributingGuidelines": {
+    "url": "https://github.com/tidyverse/forcats/blob/main/.github/CONTRIBUTING.md"
+   },
+   "rootTree": {
+    "entries": [
+     {
+      "name": ".Rbuildignore",
+      "type": "blob"
+     },
+     {
+      "name": ".covrignore",
+      "type": "blob"
+     },
+     {
+      "name": ".github",
+      "type": "tree"
+     },
+     {
+      "name": ".gitignore",
+      "type": "blob"
+     },
+     {
+      "name": ".vscode",
+      "type": "tree"
+     },
+     {
+      "name": "DESCRIPTION",
+      "type": "blob"
+     },
+     {
+      "name": "LICENSE",
+      "type": "blob"
+     },
+     {
+      "name": "LICENSE.md",
+      "type": "blob"
+     },
+     {
+      "name": "NAMESPACE",
+      "type": "blob"
+     },
+     {
+      "name": "NEWS.md",
+      "type": "blob"
+     },
+     {
+      "name": "R",
+      "type": "tree"
+     },
+     {
+      "name": "README.Rmd",
+      "type": "blob"
+     },
+     {
+      "name": "README.md",
+      "type": "blob"
+     },
+     {
+      "name": "_pkgdown.yml",
+      "type": "blob"
+     },
+     {
+      "name": "air.toml",
+      "type": "blob"
+     },
+     {
+      "name": "codecov.yml",
+      "type": "blob"
+     },
+     {
+      "name": "cran-comments.md",
+      "type": "blob"
+     },
+     {
+      "name": "data-raw",
+      "type": "tree"
+     },
+     {
+      "name": "data",
+      "type": "tree"
+     },
+     {
+      "name": "forcats.Rproj",
+      "type": "blob"
+     },
+     {
+      "name": "man",
+      "type": "tree"
+     },
+     {
+      "name": "pkgdown",
+      "type": "tree"
+     },
+     {
+      "name": "revdep",
+      "type": "tree"
+     },
+     {
+      "name": "tests",
+      "type": "tree"
+     },
+     {
+      "name": "vignettes",
+      "type": "tree"
+     }
+    ]
+   },
+   "githubTree": {
+    "entries": [
+     {
+      "name": ".gitignore",
+      "type": "blob"
+     },
+     {
+      "name": "CODEOWNERS",
+      "type": "blob"
+     },
+     {
+      "name": "CODE_OF_CONDUCT.md",
+      "type": "blob"
+     },
+     {
+      "name": "CONTRIBUTING.md",
+      "type": "blob"
+     },
+     {
+      "name": "ISSUE_TEMPLATE",
+      "type": "tree"
+     },
+     {
+      "name": "SUPPORT.md",
+      "type": "blob"
+     },
+     {
+      "name": "move.yml",
+      "type": "blob"
+     },
+     {
+      "name": "workflows",
+      "type": "tree"
+     }
+    ]
+   },
+   "rbuildignore": {
+    "text": "^CRAN-RELEASE$\n^Meta$\n^doc$\n^pkgdown$\n^\\.covrignore$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^\\.travis\\.yml$\n^codecov\\.yml$\n^data-raw$\n^cran-comments\\.md$\n^docs$\n^README\\.Rmd$\n^README-.*\\.png$\n^_pkgdown\\.yml$\n^revdep$\n^\\.github$\n^LICENSE\\.md$\n^\\.github/workflows/R-CMD-check\\.yaml$\n^\\.github/workflows/pr-commands\\.yaml$\n^\\.github/workflows/pkgdown\\.yaml$\n^CRAN-SUBMISSION$\n^[\\.]?air\\.toml$\n^\\.vscode$\n^[.]?air[.]toml$\n"
+   }
+  },
+  "r3": {
+   "nameWithOwner": "acoppock/ri2",
+   "isFork": false,
+   "parent": null,
+   "pullRequestTemplates": [],
+   "issueTemplates": [],
+   "codeOfConduct": null,
+   "contributingGuidelines": null,
+   "rootTree": {
+    "entries": [
+     {
+      "name": ".Rbuildignore",
+      "type": "blob"
+     },
+     {
+      "name": ".github",
+      "type": "tree"
+     },
+     {
+      "name": ".gitignore",
+      "type": "blob"
+     },
+     {
+      "name": "CONDUCT.md",
+      "type": "blob"
+     },
+     {
+      "name": "DESCRIPTION",
+      "type": "blob"
+     },
+     {
+      "name": "LICENSE",
+      "type": "blob"
+     },
+     {
+      "name": "NAMESPACE",
+      "type": "blob"
+     },
+     {
+      "name": "NEWS.md",
+      "type": "blob"
+     },
+     {
+      "name": "R",
+      "type": "tree"
+     },
+     {
+      "name": "README.Rmd",
+      "type": "blob"
+     },
+     {
+      "name": "README.md",
+      "type": "blob"
+     },
+     {
+      "name": "_pkgdown.yml",
+      "type": "blob"
+     },
+     {
+      "name": "cran-comments.md",
+      "type": "blob"
+     },
+     {
+      "name": "man",
+      "type": "tree"
+     },
+     {
+      "name": "pkgdown",
+      "type": "tree"
+     },
+     {
+      "name": "ri2.Rproj",
+      "type": "blob"
+     },
+     {
+      "name": "tests",
+      "type": "tree"
+     },
+     {
+      "name": "vignettes",
+      "type": "tree"
+     }
+    ]
+   },
+   "githubTree": {
+    "entries": [
+     {
+      "name": "workflows",
+      "type": "tree"
+     }
+    ]
+   },
+   "rbuildignore": {
+    "text": "^CRAN-RELEASE$\n^CRAN-SUBMISSION$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^README\\.Rmd$\n^README\\.md$\n^README-.*\\.png$\n^index\\.Rmd$\n^index\\.md$\n^cran-comments\\.md$\n^docs$\n^_pkgdown\\.yml$\n^pkgdown$\n^CONDUCT\\.md$\n^notes$\n^\\.github$\n^codecov\\.yml$\n^\\.DS_Store$\n^.*\\.Rcheck$\n^.*\\.tar\\.gz$\n"
+   }
+  },
+  "r4": {
+   "nameWithOwner": "kvenkita/bqmm",
+   "isFork": false,
+   "parent": null,
+   "homepageUrl": "https://kvenkita.github.io/bqmm/",
+   "environments": {
+    "nodes": [
+     {
+      "name": "github-pages"
+     }
+    ]
+   },
+   "pagesDeploy": {
+    "nodes": [
+     {
+      "createdAt": "2026-06-06T22:20:02Z",
+      "latestStatus": {
+       "environmentUrl": "https://kvenkita.github.io/bqmm/"
+      }
+     }
+    ]
+   },
+   "ghPagesPkgdown": {
+    "text": "pandoc: 3.8.3\npkgdown: 2.2.0\npkgdown_sha: ~\narticles:\n  bqmm-inference: bqmm-inference.html\n  bqmm-intro: bqmm-intro.html\n  bqmm-multilevel: bqmm-multilevel.html\n  bqmm-primer: bqmm-primer.html\n  articles/bqmm-review: bqmm-review.html\nlast_built: 2026-06-06T22:18Z\nurls:\n  reference: https://kvenkita.github.io/bqmm/reference\n  article: https://kvenkita.github.io/bqmm/articles\n"
+   },
+   "rootTree": {
+    "entries": [
+     {
+      "name": ".Rbuildignore",
+      "type": "blob"
+     },
+     {
+      "name": ".gitattributes",
+      "type": "blob"
+     },
+     {
+      "name": ".github",
+      "type": "tree"
+     },
+     {
+      "name": ".gitignore",
+      "type": "blob"
+     },
+     {
+      "name": "DESCRIPTION",
+      "type": "blob"
+     },
+     {
+      "name": "LICENSE",
+      "type": "blob"
+     },
+     {
+      "name": "LICENSE.md",
+      "type": "blob"
+     },
+     {
+      "name": "NAMESPACE",
+      "type": "blob"
+     },
+     {
+      "name": "NEWS.md",
+      "type": "blob"
+     },
+     {
+      "name": "R",
+      "type": "tree"
+     },
+     {
+      "name": "README.md",
+      "type": "blob"
+     },
+     {
+      "name": "REVIEW.md",
+      "type": "blob"
+     },
+     {
+      "name": "SETUP.md",
+      "type": "blob"
+     },
+     {
+      "name": "_pkgdown.yml",
+      "type": "blob"
+     },
+     {
+      "name": "configure",
+      "type": "blob"
+     },
+     {
+      "name": "configure.win",
+      "type": "blob"
+     },
+     {
+      "name": "cran-comments.md",
+      "type": "blob"
+     },
+     {
+      "name": "inst",
+      "type": "tree"
+     },
+     {
+      "name": "man",
+      "type": "tree"
+     },
+     {
+      "name": "src",
+      "type": "tree"
+     },
+     {
+      "name": "tests",
+      "type": "tree"
+     },
+     {
+      "name": "tools",
+      "type": "tree"
+     },
+     {
+      "name": "vignettes",
+      "type": "tree"
+     }
+    ]
+   },
+   "githubTree": {
+    "entries": [
+     {
+      "name": "workflows",
+      "type": "tree"
+     }
+    ]
+   },
+   "rbuildignore": {
+    "text": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^SETUP\\.md$\n^REVIEW\\.md$\n^tools$\n^paper$\n^paper-notes$\n^README\\.Rmd$\n^\\.github$\n^cran-comments\\.md$\n^_pkgdown\\.yml$\n^docs$\n^pkgdown$\n^vignettes/articles$\n^doc$\n^Meta$\n^\\.gitignore$\n^LICENSE\\.md$\n"
+   }
+  },
+  "r5": {
+   "nameWithOwner": "JohnCoene/tippy",
+   "isFork": false,
+   "parent": null,
+   "homepageUrl": "http://tippy.john-coene.com/",
+   "environments": {
+    "nodes": [
+     {
+      "name": "github-pages"
+     }
+    ]
+   },
+   "pagesDeploy": {
+    "nodes": [
+     {
+      "createdAt": "2023-04-13T21:27:19Z",
+      "latestStatus": {
+       "environmentUrl": "http://tippy.john-coene.com/"
+      }
+     }
+    ]
+   },
+   "rootTree": {
+    "entries": [
+     {
+      "name": ".Rbuildignore",
+      "type": "blob"
+     },
+     {
+      "name": ".gitignore",
+      "type": "blob"
+     },
+     {
+      "name": ".travis.yml",
+      "type": "blob"
+     },
+     {
+      "name": "CRAN-RELEASE",
+      "type": "blob"
+     },
+     {
+      "name": "CRAN-SUBMISSION",
+      "type": "blob"
+     },
+     {
+      "name": "DESCRIPTION",
+      "type": "blob"
+     },
+     {
+      "name": "LICENSE",
+      "type": "blob"
+     },
+     {
+      "name": "NAMESPACE",
+      "type": "blob"
+     },
+     {
+      "name": "NEWS.md",
+      "type": "blob"
+     },
+     {
+      "name": "R",
+      "type": "tree"
+     },
+     {
+      "name": "README.md",
+      "type": "blob"
+     },
+     {
+      "name": "_pkgdown.yml",
+      "type": "blob"
+     },
+     {
+      "name": "cran-comments.md",
+      "type": "blob"
+     },
+     {
+      "name": "docs",
+      "type": "tree"
+     },
+     {
+      "name": "index.md",
+      "type": "blob"
+     },
+     {
+      "name": "inst",
+      "type": "tree"
+     },
+     {
+      "name": "man",
+      "type": "tree"
+     },
+     {
+      "name": "package-lock.json",
+      "type": "blob"
+     },
+     {
+      "name": "package.json",
+      "type": "blob"
+     },
+     {
+      "name": "pkgdown",
+      "type": "tree"
+     },
+     {
+      "name": "srcjs",
+      "type": "tree"
+     },
+     {
+      "name": "webpack.common.js",
+      "type": "blob"
+     },
+     {
+      "name": "webpack.dev.js",
+      "type": "blob"
+     },
+     {
+      "name": "webpack.prod.js",
+      "type": "blob"
+     }
+    ]
+   },
+   "githubTree": null,
+   "rbuildignore": {
+    "text": ".travis.yml\n_pkgdown.yml\ncran-comments.md\ndocs\nindex.rmd\ntest.R\n^cran-comments\\.md$\n^CRAN-RELEASE$\n^srcjs$\n^node_modules$\n^package\\.json$\n^package-lock\\.json$\n^webpack\\.dev\\.js$\n^webpack\\.prod\\.js$\n^webpack\\.common\\.js$\n^index\\.md$\n^pkgdown$\n^CRAN-SUBMISSION$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n"
+   }
+  },
+  "r6": {
+   "nameWithOwner": "ropensci-review-tools/goodpractice",
+   "isFork": false,
+   "parent": null,
+   "homepageUrl": "https://docs.ropensci.org/goodpractice/",
+   "environments": {
+    "nodes": [
+     {
+      "name": "github-pages"
+     }
+    ]
+   },
+   "pagesDeploy": {
+    "nodes": [
+     {
+      "createdAt": "2022-07-13T15:03:37Z",
+      "latestStatus": {
+       "environmentUrl": "http://mangothecat.github.io/goodpractice/"
+      }
+     }
+    ]
+   },
+   "ghPagesPkgdown": {
+    "text": "pandoc: 3.1.11\npkgdown: 2.0.9\npkgdown_sha: ~\narticles:\n  custom_checks: custom_checks.html\n  goodpractice: goodpractice.html\nlast_built: 2024-05-29T10:45Z\n\n"
+   },
+   "rootTree": {
+    "entries": [
+     {
+      "name": ".Rbuildignore",
+      "type": "blob"
+     },
+     {
+      "name": ".Rprofile",
+      "type": "blob"
+     },
+     {
+      "name": ".github",
+      "type": "tree"
+     },
+     {
+      "name": ".gitignore",
+      "type": "blob"
+     },
+     {
+      "name": "AGENT.md",
+      "type": "blob"
+     },
+     {
+      "name": "DESCRIPTION",
+      "type": "blob"
+     },
+     {
+      "name": "LICENSE",
+      "type": "blob"
+     },
+     {
+      "name": "LICENSE.md",
+      "type": "blob"
+     },
+     {
+      "name": "Makefile",
+      "type": "blob"
+     },
+     {
+      "name": "NAMESPACE",
+      "type": "blob"
+     },
+     {
+      "name": "NEWS.md",
+      "type": "blob"
+     },
+     {
+      "name": "R",
+      "type": "tree"
+     },
+     {
+      "name": "README.Rmd",
+      "type": "blob"
+     },
+     {
+      "name": "README.md",
+      "type": "blob"
+     },
+     {
+      "name": "_pkgdown.yml",
+      "type": "blob"
+     },
+     {
+      "name": "codemeta.json",
+      "type": "blob"
+     },
+     {
+      "name": "cran-comments.md",
+      "type": "blob"
+     },
+     {
+      "name": "inst",
+      "type": "tree"
+     },
+     {
+      "name": "man",
+      "type": "tree"
+     },
+     {
+      "name": "tests",
+      "type": "tree"
+     },
+     {
+      "name": "vignettes",
+      "type": "tree"
+     }
+    ]
+   },
+   "githubTree": {
+    "entries": [
+     {
+      "name": ".gitignore",
+      "type": "blob"
+     },
+     {
+      "name": "CONTRIBUTING.md",
+      "type": "blob"
+     },
+     {
+      "name": "ISSUE_TEMPLATE",
+      "type": "tree"
+     },
+     {
+      "name": "r-check-hash.txt",
+      "type": "blob"
+     },
+     {
+      "name": "scripts",
+      "type": "tree"
+     },
+     {
+      "name": "workflows",
+      "type": "tree"
+     }
+    ]
+   },
+   "rbuildignore": {
+    "text": "^.*\\.Rproj$\n^LICENSE\\.md$\n^README.Rmd$\n^\\.Rproj\\.user$\n^\\.github$\n^_pkgdown\\.yml$\n^aaa\n^codecov\\.yml$\n^codemeta\\.json$\n^cran-comments\\.md$\n^docs$\n^pkgdown\n^goodpractice\\.Rproj$\n^revdep$\n^AGENT\\.md$\n^\\.git$\n^\\.Rprofile$\n^\\.claude$\n^makefile$\n"
+   }
+  }
+ }
+}

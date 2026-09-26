@@ -568,31 +568,52 @@ fetch_responsiveness <- function(io, repos, today) {
 # build_responsiveness_query / parse_responsiveness above. The two impure
 # transports at the end (marked) are not unit-tested, like fetch_contributor_count.
 
-#' One aliased multi-repo query returning, per repo: the root-tree entry names
-#' (expression "HEAD:"), the .github-tree entry names ("HEAD:.github"), isFork,
-#' and parent.nameWithOwner. object() is null when a tree is absent (empty repo,
-#' no .github), so the parser guards it. Alias r<idx> (0-based) maps back to
-#' repo_id by row order. The entry-name vectors feed classify_tree_markers.
+#' One aliased multi-repo query; alias r<idx> (0-based) maps back to repo_id by row order.
+#' Asks for tree listings, community files, Pages, workflow text, DESCRIPTION and the ignore files.
 build_tree_query <- function(repos) {
+  # workflowsTree also carries each file's text, for the workflow rules.
+  subtree <- function(alias, path) {
+    sel <- if (identical(alias, "workflowsTree"))
+      "entries { name type object { ... on Blob { byteSize text } } }" else "entries { name type }"
+    sprintf('%s: object(expression: "HEAD:%s") { ... on Tree { %s } }', alias, path, sel)
+  }
+  subtrees <- paste(mapply(subtree, names(TREE_SUBTREES), unname(TREE_SUBTREES)), collapse = "\n      ")
+  # pullRequestTemplates, issueTemplates, codeOfConduct, contributingGuidelines: this order,
+  # with issueTemplates, is the only one GitHub answers for a multi-repository batch.
   parts <- vapply(seq_len(nrow(repos)), function(j) {
     sprintf('r%d: repository(owner: "%s", name: "%s") {
+      nameWithOwner
       isFork parent { nameWithOwner }
+      homepageUrl
+      hasIssuesEnabled
+      hasDiscussionsEnabled
+      discussions { totalCount }
+      fundingLinks { platform url }
+      owner { ... on Sponsorable { hasSponsorsListing } }
+      pullRequestTemplates { filename repository { nameWithOwner } }
+      issueTemplates { name }
+      codeOfConduct { url }
+      contributingGuidelines { url }
+      environments(first: 10) { nodes { name } }
+      pagesDeploy: deployments(environments: ["github-pages"], first: 1, orderBy: {field: CREATED_AT, direction: DESC}) {
+        nodes { createdAt latestStatus { environmentUrl } }
+      }
+      ghPagesPkgdown: object(expression: "gh-pages:pkgdown.yml") { ... on Blob { text } }
       rootTree: object(expression: "HEAD:") { ... on Tree { entries { name type } } }
       githubTree: object(expression: "HEAD:.github") { ... on Tree { entries { name type } } }
-      claudeTree: object(expression: "HEAD:.claude") { ... on Tree { entries { name type } } }
-      agentsTree: object(expression: "HEAD:.agents") { ... on Tree { entries { name type } } }
-      instTree: object(expression: "HEAD:inst") { ... on Tree { entries { name type } } }
-      vignettesTree: object(expression: "HEAD:vignettes") { ... on Tree { entries { name type } } }
-      siteTree: object(expression: "HEAD:site") { ... on Tree { entries { name type } } }
+      %s
+      docsPkgdown: object(expression: "HEAD:docs/pkgdown.yml") { ... on Blob { text } }
+      descBlob: object(expression: "HEAD:DESCRIPTION") { ... on Blob { byteSize text } }
       gitignore: object(expression: "HEAD:.gitignore") { ... on Blob { text } }
       rbuildignore: object(expression: "HEAD:.Rbuildignore") { ... on Blob { text } }
-    }', j - 1L, repos$owner[j], repos$name[j])
+    }', j - 1L, repos$owner[j], repos$name[j], subtrees)
   }, character(1))
   sprintf('query { %s }', paste(parts, collapse = "\n"))
 }
 
-#' Demux a build_tree_query response into a named list keyed by repo_id, each
-#' value list(root_entries, github_entries, is_fork, parent). A null alias (repo
+#' Demux a build_tree_query response into a named list keyed by repo_id. Each value
+#' always holds root_entries, github_entries, is_fork, parent, gitignore_lines,
+#' rbuildignore_lines and rbuildignore_text. A null alias (repo
 #' gone) or a null object() (absent tree) degrades to empty entries, so the cheap
 #' pass never reads "could not fetch the tree" as "no markers".
 parse_tree_markers <- function(resp, repos) {
@@ -600,10 +621,17 @@ parse_tree_markers <- function(resp, repos) {
     ns <- vapply(.nn(tree$entries, list()), function(e) .nn(e$name, ""), character(1))
     ns[nzchar(ns)]
   }
+  blob_text <- function(blob) .nn(blob$text, NA_character_)
+  # \r\n, \r or \n: the three line endings readLines accepts.
   blob_lines <- function(blob) {
-    txt <- .nn(blob$text, NA_character_)
+    txt <- blob_text(blob)
     if (is.na(txt) || !nzchar(txt)) return(character(0))
-    strsplit(txt, "\n", fixed = TRUE)[[1]]
+    strsplit(txt, "\r\n|\r|\n")[[1]]
+  }
+  prefixed <- function(tree, prefix) {
+    ns <- entry_names(tree)
+    if (!length(ns)) return(character(0))
+    paste0(prefix, "/", ns)
   }
   out <- vector("list", nrow(repos))
   names(out) <- repos$repo_id
@@ -612,36 +640,83 @@ parse_tree_markers <- function(resp, repos) {
     if (is.null(r)) {
       out[[j]] <- list(root_entries = character(0), github_entries = character(0),
                        is_fork = NA, parent = NA_character_,
-                       gitignore_lines = character(0), rbuildignore_lines = character(0))
+                       gitignore_lines = character(0), rbuildignore_lines = character(0),
+                       rbuildignore_text = NA_character_)
       next
     }
-    # Subtree entries join root_entries under their own prefix ("\u002eclaude/skills"),
-    # so a marker names the path it actually occupies and neither classifier needs a
-    # new argument or a new location keyword. An absent subtree contributes nothing,
-    # which is the same as the tree being empty: no marker, never a false absence
-    # recorded as a negative.
-    prefixed <- function(tree, prefix) {
-      ns <- entry_names(tree)
-      if (!length(ns)) return(character(0))
-      paste0(prefix, "/", ns)
+    # Subtree entries join root_entries or github_entries under their own prefix.
+    root <- entry_names(r$rootTree)
+    gh <- entry_names(r$githubTree)
+    for (alias in names(TREE_SUBTREES)) {
+      path <- TREE_SUBTREES[[alias]]
+      if (startsWith(path, ".github/")) gh <- c(gh, prefixed(r[[alias]], sub("^\\.github/", "", path)))
+      else root <- c(root, prefixed(r[[alias]], path))
     }
-    out[[j]] <- list(
-      root_entries = c(entry_names(r$rootTree),
-                       prefixed(r$claudeTree, ".claude"),
-                       prefixed(r$agentsTree, ".agents"),
-                       prefixed(r$instTree, "inst"),
-                       # vignettes/ carries the source kind, which the extension
-                       # names and the root listing cannot. site/ is where every
-                       # observed _litedown.yml actually lives.
-                       prefixed(r$vignettesTree, "vignettes"),
-                       prefixed(r$siteTree, "site")),
-      github_entries = entry_names(r$githubTree),
+    el <- list(
+      root_entries = root,
+      github_entries = gh,
       is_fork = isTRUE(r$isFork),
       parent = .nn(r$parent$nameWithOwner, NA_character_),
       gitignore_lines = blob_lines(r$gitignore),
-      rbuildignore_lines = blob_lines(r$rbuildignore))
+      rbuildignore_lines = blob_lines(r$rbuildignore),
+      rbuildignore_text = blob_text(r$rbuildignore))
+    # An element is present only when its field was asked; NA or empty is GitHub's answer.
+    has <- function(field) field %in% names(r)
+    if (has("workflowsTree")) el["workflows"] <- list(workflow_texts(r$workflowsTree))
+    if (has("descBlob")) el$desc_text <- blob_text(r$descBlob)
+    if (has("nameWithOwner")) el$name_with_owner <- .nn(r$nameWithOwner, NA_character_)
+    if (has("ghPagesPkgdown") || has("docsPkgdown"))
+      el$pkgdown_yml <- c(gh_pages = blob_text(r$ghPagesPkgdown), docs = blob_text(r$docsPkgdown))
+    if (has("environments") || has("pagesDeploy")) {
+      dep <- .nn(r$pagesDeploy$nodes, list())
+      newest <- if (length(dep)) dep[[1]] else list()
+      el$pages <- list(
+        environments = vapply(.nn(r$environments$nodes, list()),
+                              function(n) .nn(n$name, NA_character_), character(1)),
+        last_deploy_at = .nn(newest$createdAt, NA_character_),
+        environment_url = .nn(newest$latestStatus$environmentUrl, NA_character_))
+    }
+    if (has("pullRequestTemplates")) {
+      tpl <- .nn(r$pullRequestTemplates, list())
+      el$pr_templates <- data.frame(
+        filename = vapply(tpl, function(t) .nn(t$filename, NA_character_), character(1)),
+        repository = vapply(tpl, function(t) .nn(t$repository$nameWithOwner, NA_character_), character(1)),
+        stringsAsFactors = FALSE)
+    }
+    if (has("codeOfConduct")) el$coc_url <- .nn(r$codeOfConduct$url, NA_character_)
+    if (has("contributingGuidelines")) el$contributing_url <- .nn(r$contributingGuidelines$url, NA_character_)
+    if (has("fundingLinks")) {
+      fl <- .nn(r$fundingLinks, list())
+      el$funding_links <- data.frame(
+        platform = vapply(fl, function(f) .nn(f$platform, NA_character_), character(1)),
+        url = vapply(fl, function(f) .nn(f$url, NA_character_), character(1)),
+        stringsAsFactors = FALSE)
+    }
+    if (has("owner")) el$owner_sponsorable <- .nn(r$owner$hasSponsorsListing, NA)
+    if (has("homepageUrl")) el$homepage_url <- .nn(r$homepageUrl, NA_character_)
+    if (has("hasIssuesEnabled")) el$has_issues_enabled <- .nn(r$hasIssuesEnabled, NA)
+    if (has("hasDiscussionsEnabled")) el$has_discussions <- .nn(r$hasDiscussionsEnabled, NA)
+    if (has("discussions")) el$discussions_total <- as.integer(.nn(r$discussions$totalCount, NA_integer_))
+    out[[j]] <- el
   }
   out
+}
+
+#' Name and text of each workflow file; binary or unreadable blobs are left out, and a
+#' missing .github/workflows directory is NULL.
+workflow_texts <- function(tree) {
+  if (is.null(tree)) return(NULL)
+  ents <- .nn(tree$entries, list())
+  nm <- vapply(ents, function(e) .nn(e$name, NA_character_), character(1))
+  tx <- vapply(ents, function(e) .nn(e$object$text, NA_character_), character(1))
+  keep <- !is.na(nm) & !is.na(tx)
+  data.frame(name = nm[keep], text = tx[keep], stringsAsFactors = FALSE)
+}
+
+#' The subtree prefixes parse_tree_markers adds, split by the entry list they join.
+tree_subtree_prefixes <- function(subtrees = TREE_SUBTREES) {
+  gh <- startsWith(subtrees, ".github/")
+  list(root = unname(subtrees[!gh]), github = sub("^\\.github/", "", unname(subtrees[gh])))
 }
 
 #' One aliased multi-repo query for the newest 50 PRs per repo (CREATED_AT DESC),
@@ -844,34 +919,105 @@ search_earliest_commit_hit <- function(token, owner, name, query, delay = SEARCH
   parse_search_commit_hit(paste(out, collapse = "\n"))
 }
 
-#' Cheap Tier-D marker pass over a chunk of repos, batched TIER_D_BATCH at a time. Runs
-#' build_tree_query -> io$graphql -> parse_tree_markers per batch, replicating
-#' collect_batched's halve-and-retry idiom for the aliased-repository shape: a whole-batch
-#' fault (io$graphql throws, null data, or a non-alias-scoped error) halves the batch and
-#' retries; a single-repo batch that still faults is DROPPED (deferred, retried next run),
-#' never recorded as "no markers". A batch whose only errors are alias-scoped NOT_FOUNDs is
-#' parsed - parse_tree_markers already degrades that one repo to empty entries. Returns a
-#' named list keyed by repo_id (a deferred repo is simply absent).
-fetch_tree_markers <- function(io, repos, batch_size = TIER_D_BATCH) {
-  out <- list()
+.utc_now <- function() format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+
+#' The repositories a fetch could not read: repo_id, document, first error (200 characters), when.
+.fetch_failed_frame <- function(repo_id = character(0), query = character(0),
+                                error = character(0), failed_at = character(0)) {
+  n <- length(repo_id)
+  if (n == 0L)
+    return(data.frame(repo_id = character(0), query = character(0), error = character(0),
+                      failed_at = character(0), stringsAsFactors = FALSE))
+  data.frame(repo_id = as.character(repo_id), query = rep(as.character(query), length.out = n),
+             error = rep(as.character(error), length.out = n),
+             failed_at = rep(as.character(failed_at), length.out = n), stringsAsFactors = FALSE)
+}
+
+.fetch_first_error <- function(res) {
+  msg <- if (!is.null(res$.err)) res$.err
+         else if (length(res$errors)) .nn(res$errors[[1]]$message, "GitHub returned an error with no message")
+         # A request GitHub refused whole (bad credentials, a rate limit) carries only a top-level message.
+         else if (is.character(res[["message"]]) && length(res[["message"]]))
+           paste0(res[["message"]][[1]], if (length(res[["status"]])) sprintf(" (HTTP %s)", res[["status"]][[1]]))
+         else "GitHub returned no data"
+  substr(as.character(msg), 1L, 200L)
+}
+
+#' Breaker state for one document over a whole shard; an environment, so each chunk's call sees the last one's count.
+new_fetch_breaker <- function(limit = AI_BREAKER_LIMIT) {
+  b <- new.env(parent = emptyenv())
+  b$limit <- as.integer(limit)
+  b$count <- 0L
+  b$message <- NA_character_
+  b$key <- NA_character_
+  b$tripped <- FALSE
+  b
+}
+
+#' A GitHub error without its time and request id, which change on every call, so
+#' one fault repeated reads as one message.
+.fetch_error_key <- function(msg) {
+  msg <- gsub("[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z", "<time>", msg)
+  gsub("[0-9A-Fa-f]+(:[0-9A-Fa-f]+){2,}", "<id>", msg)
+}
+
+#' One aliased document over `repos`, halving an unusable batch down to single repositories.
+#' A single repository that still fails is read once more, then reported in `failed`, never dropped.
+fetch_aliased <- function(io, repos, batch_size, build, parse, label, breaker = NULL) {
+  pause <- if (is.function(io$sleep)) io$sleep else Sys.sleep
+  results <- list()
+  failed <- list()
+  report <- function(ids, msg) failed[[length(failed) + 1L]] <<- .fetch_failed_frame(ids, label, msg, .utc_now())
+  done <- function() list(results = results,
+                          failed = if (length(failed)) do.call(rbind, failed) else .fetch_failed_frame())
+  if (!is.null(breaker) && isTRUE(breaker$tripped)) {
+    report(repos$repo_id, breaker$message)
+    return(done())
+  }
+  attempt <- function(idx) {
+    sub <- repos[idx, , drop = FALSE]
+    res <- tryCatch(io$graphql(build(sub)), error = function(e) list(.err = conditionMessage(e)))
+    pause(BATCH_DELAY_S)
+    ok <- is.list(res) && is.null(res$.err) && !is.null(res$data) &&
+      (is.null(res$errors) || errors_are_alias_not_found(res$errors))
+    list(ok = ok, res = res, sub = sub)
+  }
   queue <- unname(chunk(seq_len(nrow(repos)), batch_size))
   while (length(queue) > 0) {
     idx <- queue[[1]]; queue <- queue[-1]
-    sub <- repos[idx, , drop = FALSE]
-    res <- tryCatch(io$graphql(build_tree_query(sub)), error = function(e) list(.err = TRUE))
-    Sys.sleep(BATCH_DELAY_S)
-    ok <- is.list(res) && is.null(res$.err) && !is.null(res$data) &&
-      (is.null(res$errors) || errors_are_alias_not_found(res$errors))
-    if (ok) {
-      parsed <- parse_tree_markers(res, sub)
-      out[names(parsed)] <- parsed
-    } else if (length(idx) > 1) {
-      queue <- c(unname(chunk(idx, ceiling(length(idx) / 2))), queue)   # halve and retry
+    a <- attempt(idx)
+    if (!a$ok && length(idx) == 1L) {
+      pause(AI_BATCH_RETRY_WAIT_S)
+      a <- attempt(idx)
     }
-    # a single-repo batch still faulting is dropped (deferred), never written as clean
+    if (a$ok) {
+      parsed <- parse(a$res, a$sub)
+      results[names(parsed)] <- parsed
+      if (!is.null(breaker)) { breaker$count <- 0L; breaker$message <- NA_character_; breaker$key <- NA_character_ }
+    } else if (length(idx) > 1L) {
+      queue <- c(unname(chunk(idx, ceiling(length(idx) / 2))), queue)
+    } else {
+      msg <- .fetch_first_error(a$res)
+      report(repos$repo_id[idx], msg)
+      if (!is.null(breaker)) {
+        key <- .fetch_error_key(msg)
+        if (identical(key, breaker$key)) breaker$count <- breaker$count + 1L
+        else { breaker$key <- key; breaker$message <- msg; breaker$count <- 1L }
+        if (breaker$count >= breaker$limit) {
+          breaker$tripped <- TRUE
+          rest <- unlist(queue, use.names = FALSE)
+          if (length(rest)) report(repos$repo_id[rest], msg)
+          break
+        }
+      }
+    }
   }
-  out
+  done()
 }
+
+#' The weekly repository contents read (build_tree_query), with failures reported.
+fetch_tree_markers <- function(io, repos, batch_size = TIER_D_BATCH, breaker = NULL)
+  fetch_aliased(io, repos, batch_size, build_tree_query, parse_tree_markers, "contents", breaker)
 
 #' Cheap PR-agent pass over a chunk of repos, batched TIER_D_BATCH at a time. Same
 #' halve-and-retry contract as fetch_tree_markers, over build_pr_agent_query /

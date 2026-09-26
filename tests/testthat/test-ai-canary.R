@@ -259,3 +259,48 @@ test_that("the inventory states each tier's breadth, which the tiers do not shar
   expect_true(all(c("A", "B", "C", "D") %in% names(per_tier)))
   expect_equal(anyDuplicated(paste(inv$tier, inv$tool)), 0L)
 })
+
+test_that("community-health files are detected in both locations", {
+  # A tree hit is 1 without the contents read; a miss is NA, since an owner default is invisible to the tree.
+  expect_equal(classify_dev_tooling(c("CODE_OF_CONDUCT.md"), character(0))$has_code_of_conduct, 1L)
+  expect_equal(classify_dev_tooling(character(0), c("CODE_OF_CONDUCT.md"))$has_code_of_conduct, 1L)
+  expect_equal(classify_dev_tooling(c("CODE_OF_CONDUCT"), character(0))$has_code_of_conduct, 1L)
+  expect_true(is.na(classify_dev_tooling(c("DESCRIPTION"), character(0))$has_code_of_conduct))
+
+  expect_equal(classify_dev_tooling(c("CONTRIBUTING.md"), character(0))$has_contributing, 1L)
+  expect_equal(classify_dev_tooling(character(0), c("CONTRIBUTING.md"))$has_contributing, 1L)
+  expect_equal(classify_dev_tooling(c("CONTRIBUTING.Rmd"), character(0))$has_contributing, 1L)
+  expect_true(is.na(classify_dev_tooling(c("DESCRIPTION"), character(0))$has_contributing))
+
+  # Neither is a CI system, so neither may move the has_ci rollup.
+  expect_equal(classify_dev_tooling(c("CODE_OF_CONDUCT.md", "CONTRIBUTING.md"),
+                                    character(0))$has_ci, 0L)
+})
+
+test_that("the two community columns join the derived column set", {
+  cols <- dev_tooling_columns()
+  expect_true("has_code_of_conduct" %in% cols)
+  expect_true("has_contributing" %in% cols)
+  expect_true(grepl("has_code_of_conduct INTEGER", dev_tooling_create_sql(), fixed = TRUE))
+  expect_true(grepl("has_contributing INTEGER", dev_tooling_create_sql(), fixed = TRUE))
+})
+
+test_that("community-health files are caught in the spellings maintainers use", {
+  # rlistings keeps .github/CODE_OF_CONDUCT.Rmd and partialling.out keeps .github/contributing.md.
+  expect_equal(classify_dev_tooling(character(0), c("CODE_OF_CONDUCT.Rmd"))$has_code_of_conduct, 1L)
+  expect_equal(classify_dev_tooling(character(0), c("contributing.md"))$has_contributing, 1L)
+  expect_equal(classify_dev_tooling(c("code_of_conduct.md"), character(0))$has_code_of_conduct, 1L)
+  expect_equal(classify_dev_tooling(c("Contributing.md"), character(0))$has_contributing, 1L)
+  expect_equal(classify_dev_tooling(c("CONDUCT.md"), character(0))$has_code_of_conduct, 1L)
+  expect_equal(classify_dev_tooling(c("CONTRIBUTING.MD"), character(0))$has_contributing, 1L)
+  expect_true(is.na(classify_dev_tooling(c("CONDUCT_OF_CODE.md"), character(0))$has_code_of_conduct))
+})
+
+test_that("a contents read that found no community files reads 0, not unknown", {
+  repo <- list(name_with_owner = "o/pkg", coc_url = NA_character_, contributing_url = NA_character_,
+               pr_templates = data.frame(filename = character(0), repository = character(0)))
+  r <- classify_dev_tooling(c("DESCRIPTION"), character(0), repo = repo)
+  expect_equal(r$has_code_of_conduct, 0L); expect_equal(r$coc_source, "none")
+  expect_equal(r$has_contributing, 0L);    expect_equal(r$contributing_source, "none")
+  expect_equal(r$has_pr_template, 0L);     expect_equal(r$pr_template_source, "none")
+})
