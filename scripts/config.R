@@ -345,7 +345,23 @@ DEV_TOOLING_DERIVED <- list(
   list(col = "ci_site_deploy", type = "INTEGER", source = "workflow_text",
        rule = paste("a workflow text matches", WORKFLOW_TEXT_RULES$site_deploy)),
   list(col = "ci_lint", type = "INTEGER", source = "workflow_text",
-       rule = paste("a workflow text without", WORKFLOW_TEXT_RULES$lint_skip, "matches", WORKFLOW_TEXT_RULES$lint)))
+       rule = paste("a workflow text without", WORKFLOW_TEXT_RULES$lint_skip, "matches", WORKFLOW_TEXT_RULES$lint)),
+  list(col = "has_pages", type = "INTEGER", source = "graphql",
+       rule = "a github-pages environment or deployment"),
+  list(col = "pages_last_deploy", type = "TEXT", source = "graphql",
+       rule = "createdAt of the newest github-pages deployment"),
+  list(col = "pages_url", type = "TEXT", source = "derived",
+       rule = "the deployment's url when its host is not github.io, else built from the repository's current name"),
+  list(col = "site_generator", type = "TEXT", source = "derived",
+       rule = "pkgdown when a built pkgdown.yml is found, else altdoc, litedown, pkgdown or quarto from their config, else unknown"),
+  list(col = "site_pkgdown_source", type = "TEXT", source = "graphql",
+       rule = "gh-pages when gh-pages:pkgdown.yml exists, else docs when HEAD:docs/pkgdown.yml exists"),
+  list(col = "site_pkgdown_version", type = "TEXT", source = "graphql",
+       rule = "the pkgdown: line of the built pkgdown.yml"),
+  list(col = "site_pkgdown_last_built", type = "TEXT", source = "graphql",
+       rule = "the last_built: line of the built pkgdown.yml, as written"),
+  list(col = "site_url", type = "TEXT", source = "graphql",
+       rule = "the reference url in the urls block of the built pkgdown.yml, else the article url, without its last path segment"))
 # v1 first scan 2026-07-18 (d115e2d), v2 00312fe, b903376, f861918 (2026-07-29 to 08-02), v3 this change.
 DEV_TOOLING_RULESET_VERSION <- "v3 (2026-09-26)"
 

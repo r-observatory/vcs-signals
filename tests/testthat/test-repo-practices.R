@@ -189,3 +189,59 @@ test_that("the parser's workflow texts reach the flags, and a file GitHub return
   expect_equal(b$ci_r_devel, 0L)
   expect_equal(b$ci_coverage, 1L)
 })
+
+test_that("a built pkgdown site on gh-pages is read for its version, build time and url", {
+  r <- row("kvenkita/bqmm")
+  expect_equal(r$has_pages, 1L)
+  expect_equal(r$pages_last_deploy, "2026-06-06T22:20:02Z")
+  expect_equal(r$pages_url, "https://kvenkita.github.io/bqmm/")
+  expect_equal(r$site_pkgdown_source, "gh-pages")
+  expect_equal(r$site_pkgdown_version, "2.2.0")
+  expect_equal(r$site_pkgdown_last_built, "2026-06-06T22:18Z")
+  expect_equal(r$site_url, "https://kvenkita.github.io/bqmm")
+  expect_equal(r$site_generator, "pkgdown")
+})
+
+test_that("a custom Pages domain is kept as the deployment states it", {
+  r <- row("JohnCoene/tippy")
+  expect_equal(r$pages_url, "http://tippy.john-coene.com/")
+  expect_equal(r$pages_last_deploy, "2023-04-13T21:27:19Z")
+  expect_true(is.na(r$site_generator))
+})
+
+test_that("a stale github.io deployment url is rebuilt from the current name", {
+  r <- row("ropensci-review-tools/goodpractice")
+  expect_equal(r$pages_url, "https://ropensci-review-tools.github.io/goodpractice/")
+  expect_equal(r$site_pkgdown_version, "2.0.9")
+  expect_equal(r$site_pkgdown_last_built, "2024-05-29T10:45Z")
+  expect_true(is.na(r$site_url))   # this pkgdown.yml has no urls block
+})
+
+test_that("a user site repository gets the bare github.io url, and an empty deployment url is not used", {
+  repo <- list(name_with_owner = "Someone/someone.github.io",
+               pages = list(environments = "github-pages", last_deploy_at = NA_character_, environment_url = ""))
+  r <- classify_dev_tooling(character(0), character(0), repo = repo)
+  expect_equal(r$pages_url, "https://someone.github.io/")
+  expect_true(is.na(r$pages_last_deploy))
+})
+
+test_that("no Pages site reads 0, and an unread repository reads NA", {
+  none <- list(name_with_owner = "o/p", pages = list(environments = character(0), last_deploy_at = NA_character_,
+                                                     environment_url = NA_character_))
+  r <- classify_dev_tooling(character(0), character(0), repo = none)
+  expect_equal(r$has_pages, 0L); expect_true(is.na(r$pages_url))
+  expect_true(is.na(classify_dev_tooling(character(0), character(0))$has_pages))
+})
+
+test_that("the site generator prefers the deployed site, then a chosen tool, then Quarto", {
+  read <- list(pkgdown_yml = c(gh_pages = NA_character_, docs = NA_character_))
+  gen <- function(root) classify_dev_tooling(root, character(0), repo = read)$site_generator
+  expect_equal(gen(c("altdoc", "_pkgdown.yml")), "altdoc")
+  expect_equal(gen(c("site/_litedown.yml", "_quarto.yml")), "litedown")
+  expect_equal(gen(c("_pkgdown.yml", "_quarto.yml")), "pkgdown")
+  expect_equal(gen(c("_quarto.yml")), "quarto")
+  expect_equal(gen(c("DESCRIPTION")), "unknown")
+  docs <- list(pkgdown_yml = c(gh_pages = NA_character_, docs = "pkgdown: 2.1.1\n"))
+  r <- classify_dev_tooling(c("altdoc"), character(0), repo = docs)
+  expect_equal(r$site_generator, "pkgdown"); expect_equal(r$site_pkgdown_source, "docs")
+})

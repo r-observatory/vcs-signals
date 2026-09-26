@@ -18,6 +18,10 @@ dev_tooling_derive <- function(root_entries, github_entries, flags, repo) {
   rbi <- rbuildignore_columns(root_entries, repo)
   out <- c(out, rbi)
   out <- c(out, workflow_columns(github_entries, repo))
+  out <- c(out, pages_columns(repo))
+  site <- pkgdown_site_columns(repo)
+  out <- c(out, list(site_generator = site_generator_for(site$site_pkgdown_source, flags,
+                                                          .dev_has(repo, "pkgdown_yml"))), site)
   attr(out, "rbuildignore_bad_lines") <- attr(rbi, "bad_lines")
   out
 }
@@ -168,4 +172,74 @@ workflow_columns <- function(github_entries, repo) {
        ci_coverage = as.integer(any_text(rules$coverage)),
        ci_site_deploy = as.integer(any_text(rules$site_deploy)),
        ci_lint = as.integer(any_text(rules$lint, texts[!grepl(rules$lint_skip, texts, fixed = TRUE)])))
+}
+
+#' GitHub Pages: whether a site is deployed, when, and where. environmentUrl goes stale after a
+#' transfer, so a github.io url is rebuilt from the repository's current name.
+pages_columns <- function(repo) {
+  none <- list(has_pages = NA_integer_, pages_last_deploy = NA_character_, pages_url = NA_character_)
+  if (!.dev_has(repo, "pages")) return(none)
+  p <- repo$pages
+  has <- as.integer("github-pages" %in% p$environments || !is.na(p$last_deploy_at))
+  url <- NA_character_
+  if (has == 1L) {
+    env <- p$environment_url
+    host <- if (is.na(env) || !nzchar(env)) NA_character_
+            else tolower(sub("^[A-Za-z][A-Za-z0-9+.-]*://([^/:]+).*$", "\\1", env))
+    nwo <- if (.dev_has(repo, "name_with_owner")) repo$name_with_owner else NA_character_
+    if (!is.na(host) && grepl("^https?://", env, ignore.case = TRUE) && !endsWith(host, ".github.io")) {
+      url <- env
+    } else if (!is.na(nwo)) {
+      owner <- tolower(sub("/.*$", "", nwo)); name <- sub("^[^/]*/", "", nwo)
+      url <- if (identical(tolower(name), paste0(owner, ".github.io"))) sprintf("https://%s.github.io/", owner)
+             else sprintf("https://%s.github.io/%s/", owner, name)
+    }
+  }
+  list(has_pages = has, pages_last_deploy = if (has == 1L) p$last_deploy_at else NA_character_,
+       pages_url = url)
+}
+
+#' What a built pkgdown site's pkgdown.yml says: where it was found, the pkgdown version,
+#' when it was built, and the site's base url. Regexes only, no YAML parser.
+pkgdown_site_columns <- function(repo) {
+  out <- list(site_pkgdown_source = NA_character_, site_pkgdown_version = NA_character_,
+              site_pkgdown_last_built = NA_character_, site_url = NA_character_)
+  if (!.dev_has(repo, "pkgdown_yml")) return(out)
+  y <- repo$pkgdown_yml
+  src <- if (!is.na(y[["gh_pages"]])) "gh-pages" else if (!is.na(y[["docs"]])) "docs" else return(out)
+  txt <- if (src == "gh-pages") y[["gh_pages"]] else y[["docs"]]
+  first <- function(pattern) {
+    m <- regmatches(txt, regexec(pattern, txt, perl = TRUE))[[1]]
+    if (length(m) >= 2L) m[2] else NA_character_
+  }
+  lines <- strsplit(txt, "\r\n|\r|\n")[[1]]
+  at <- which(grepl("^urls:\\s*$", lines))
+  block <- character(0)
+  if (length(at)) {
+    rest <- lines[-seq_len(at[1])]
+    stop_at <- which(!grepl("^\\s+", rest))
+    block <- if (length(stop_at)) rest[seq_len(stop_at[1] - 1L)] else rest
+  }
+  url_of <- function(key, tail) {
+    l <- grep(sprintf("^\\s+%s:", key), block, value = TRUE)
+    if (!length(l)) return(NA_character_)
+    v <- gsub("[\"']", "", trimws(sub(sprintf("^\\s+%s:", key), "", l[1])))
+    if (nzchar(v)) sub(tail, "", v) else NA_character_
+  }
+  site <- url_of("reference", "/reference/?$")
+  if (is.na(site)) site <- url_of("article", "/articles/?$")
+  list(site_pkgdown_source = src,
+       site_pkgdown_version = first("(?m)^pkgdown:\\s*['\"]?([0-9]+(\\.[0-9]+)*)"),
+       site_pkgdown_last_built = first("(?m)^last_built:\\s*['\"]?([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2})?Z?)"),
+       site_url = site)
+}
+
+#' The tool that builds the site: a deployed pkgdown.yml first, then a chosen tool's config
+#' (altdoc and litedown before pkgdown), Quarto last, else unknown.
+site_generator_for <- function(pkgdown_source, flags, read) {
+  if (!read) return(NA_character_)
+  if (!is.na(pkgdown_source)) return("pkgdown")
+  for (tool in c("altdoc", "litedown", "pkgdown", "quarto"))
+    if (identical(unname(flags[[paste0("has_", tool)]]), 1L)) return(tool)
+  "unknown"
 }
