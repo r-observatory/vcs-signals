@@ -595,10 +595,17 @@ parse_tree_markers <- function(resp, repos) {
     ns <- vapply(.nn(tree$entries, list()), function(e) .nn(e$name, ""), character(1))
     ns[nzchar(ns)]
   }
+  blob_text <- function(blob) .nn(blob$text, NA_character_)
+  # \r\n, \r or \n: the three line endings readLines accepts.
   blob_lines <- function(blob) {
-    txt <- .nn(blob$text, NA_character_)
+    txt <- blob_text(blob)
     if (is.na(txt) || !nzchar(txt)) return(character(0))
-    strsplit(txt, "\n", fixed = TRUE)[[1]]
+    strsplit(txt, "\r\n|\r|\n")[[1]]
+  }
+  prefixed <- function(tree, prefix) {
+    ns <- entry_names(tree)
+    if (!length(ns)) return(character(0))
+    paste0(prefix, "/", ns)
   }
   out <- vector("list", nrow(repos))
   names(out) <- repos$repo_id
@@ -607,36 +614,34 @@ parse_tree_markers <- function(resp, repos) {
     if (is.null(r)) {
       out[[j]] <- list(root_entries = character(0), github_entries = character(0),
                        is_fork = NA, parent = NA_character_,
-                       gitignore_lines = character(0), rbuildignore_lines = character(0))
+                       gitignore_lines = character(0), rbuildignore_lines = character(0),
+                       rbuildignore_text = NA_character_)
       next
     }
-    # Subtree entries join root_entries under their own prefix ("\u002eclaude/skills"),
-    # so a marker names the path it actually occupies and neither classifier needs a
-    # new argument or a new location keyword. An absent subtree contributes nothing,
-    # which is the same as the tree being empty: no marker, never a false absence
-    # recorded as a negative.
-    prefixed <- function(tree, prefix) {
-      ns <- entry_names(tree)
-      if (!length(ns)) return(character(0))
-      paste0(prefix, "/", ns)
+    # Subtree entries join root_entries or github_entries under their own prefix.
+    root <- entry_names(r$rootTree)
+    gh <- entry_names(r$githubTree)
+    for (alias in names(TREE_SUBTREES)) {
+      path <- TREE_SUBTREES[[alias]]
+      if (startsWith(path, ".github/")) gh <- c(gh, prefixed(r[[alias]], sub("^\\.github/", "", path)))
+      else root <- c(root, prefixed(r[[alias]], path))
     }
     out[[j]] <- list(
-      root_entries = c(entry_names(r$rootTree),
-                       prefixed(r$claudeTree, ".claude"),
-                       prefixed(r$agentsTree, ".agents"),
-                       prefixed(r$instTree, "inst"),
-                       # vignettes/ carries the source kind, which the extension
-                       # names and the root listing cannot. site/ is where every
-                       # observed _litedown.yml actually lives.
-                       prefixed(r$vignettesTree, "vignettes"),
-                       prefixed(r$siteTree, "site")),
-      github_entries = entry_names(r$githubTree),
+      root_entries = root,
+      github_entries = gh,
       is_fork = isTRUE(r$isFork),
       parent = .nn(r$parent$nameWithOwner, NA_character_),
       gitignore_lines = blob_lines(r$gitignore),
-      rbuildignore_lines = blob_lines(r$rbuildignore))
+      rbuildignore_lines = blob_lines(r$rbuildignore),
+      rbuildignore_text = blob_text(r$rbuildignore))
   }
   out
+}
+
+#' The subtree prefixes parse_tree_markers adds, split by the entry list they join.
+tree_subtree_prefixes <- function(subtrees = TREE_SUBTREES) {
+  gh <- startsWith(subtrees, ".github/")
+  list(root = unname(subtrees[!gh]), github = sub("^\\.github/", "", unname(subtrees[gh])))
 }
 
 #' One aliased multi-repo query for the newest 50 PRs per repo (CREATED_AT DESC),

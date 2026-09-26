@@ -189,3 +189,38 @@ test_that("the counting helper itself distinguishes none from one", {
   expect_equal(length(gregexpr("zzz", "abc", fixed = TRUE)[[1]]), 1L)  # the trap
   expect_equal(n_matches("a", "abcabc"), 2L)
 })
+
+one_repo <- data.frame(repo_id = "github.com/o/n", owner = "o", name = "n", stringsAsFactors = FALSE)
+
+test_that("every AI file rule under a subtree names a subtree the query fetches", {
+  pre <- tree_subtree_prefixes()
+  for (m in AI_MARKERS) {
+    if (!grepl("/", m$path, fixed = TRUE)) next
+    first <- sub("/.*$", "", m$path)
+    allowed <- if (identical(m$location, "github")) pre$github else pre$root
+    expect_true(first %in% allowed, info = m$path)
+  }
+})
+
+test_that("ignore-file lines split on CRLF, a bare CR and LF alike", {
+  resp <- list(data = list(r0 = list(isFork = FALSE, parent = NULL,
+    gitignore = list(text = ".claude\r\n*.o\r\n"),
+    rbuildignore = list(text = "^README\\.md$\r^tests$\r"))))
+  got <- parse_tree_markers(resp, one_repo)[[1]]
+  expect_equal(got$gitignore_lines, c(".claude", "*.o"))
+  expect_equal(got$rbuildignore_lines, c("^README\\.md$", "^tests$"))
+})
+
+test_that("the .Rbuildignore text is kept byte for byte", {
+  txt <- "^README\\.md$\r\n  ^docs$ \n\n#*NEWS\n"
+  resp <- list(data = list(r0 = list(isFork = FALSE, parent = NULL, rbuildignore = list(text = txt))))
+  expect_identical(parse_tree_markers(resp, one_repo)[[1]]$rbuildignore_text, txt)
+  resp$data$r0$rbuildignore <- NULL
+  expect_true(is.na(parse_tree_markers(resp, one_repo)[[1]]$rbuildignore_text))
+})
+
+test_that("a null alias still reads as not assessed", {
+  got <- parse_tree_markers(list(data = list(r0 = NULL)), one_repo)[[1]]
+  expect_true(is.na(got$is_fork))
+  expect_length(got$root_entries, 0L)
+})
