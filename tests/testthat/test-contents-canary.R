@@ -79,6 +79,17 @@ test_that("a fault or a failed floor GitHub answered stops the canary on the fir
   }
 })
 
+test_that("a request GitHub refused whole stops the canary with GitHub's reason", {
+  # gh exits 1 on a 401 but still prints the body, which gh_graphql parses.
+  refused <- jsonlite::fromJSON(
+    '{"message":"Bad credentials","documentation_url":"https://docs.github.com/graphql","status":"401"}',
+    simplifyVector = FALSE)
+  calls <- 0L
+  io <- list(graphql = function(query) { calls <<- calls + 1L; refused }, sleep = function(s) invisible(NULL))
+  expect_error(tree_query_canary(io), "GitHub returned no data. Bad credentials (HTTP 401).", fixed = TRUE)
+  expect_equal(calls, 1L)
+})
+
 test_that("the community-field fault stops enumerate before the roster is written", {
   e <- enumerate_with(function() list(data = NULL,
     errors = list(list(message = "Something went wrong while executing your query."))))

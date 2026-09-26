@@ -212,6 +212,18 @@ test_that("a 502, which reaches R as an error, is halved, read again and reporte
   expect_equal(sum(slept == AI_BATCH_RETRY_WAIT_S), 1L)
 })
 
+test_that("a request GitHub refused whole is reported with GitHub's reason", {
+  refused <- jsonlite::fromJSON(
+    '{"message":"Bad credentials","documentation_url":"https://docs.github.com/graphql","status":"401"}',
+    simplifyVector = FALSE)
+  io <- list(graphql = function(query) refused, sleep = function(s) invisible(NULL))
+  got <- fetch_tree_markers(io, fake_repos(2), batch_size = 10)
+  expect_equal(got$failed$repo_id, paste0("github.com/o/", c("p01", "p02")))
+  expect_equal(got$failed$error, rep("Bad credentials (HTTP 401)", 2L))
+  expect_equal(.fetch_first_error(list(message = "You have exceeded a secondary rate limit.")),
+               "You have exceeded a secondary rate limit.")
+})
+
 # ---- run_cheap: the shard stop and the per-shard breaker ---------------------
 
 .fr_wd <- setwd(.repo_root)

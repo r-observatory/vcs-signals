@@ -931,6 +931,9 @@ search_earliest_commit_hit <- function(token, owner, name, query, delay = SEARCH
 .fetch_first_error <- function(res) {
   msg <- if (!is.null(res$.err)) res$.err
          else if (length(res$errors)) .nn(res$errors[[1]]$message, "GitHub returned an error with no message")
+         # A request GitHub refused whole (bad credentials, a rate limit) carries only a top-level message.
+         else if (is.character(res[["message"]]) && length(res[["message"]]))
+           paste0(res[["message"]][[1]], if (length(res[["status"]])) sprintf(" (HTTP %s)", res[["status"]][[1]]))
          else "GitHub returned no data"
   substr(as.character(msg), 1L, 200L)
 }
