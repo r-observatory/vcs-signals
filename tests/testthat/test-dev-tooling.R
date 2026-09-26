@@ -163,3 +163,51 @@ test_that("the ruleset version names v3 and the day it landed", {
   }
   expect_false(any(duplicated(dev_tooling_columns())))
 })
+
+test_that("every subtree a rule names is one the contents query lists", {
+  for (m in DEV_TOOLING_MARKERS)
+    expect_identical(unfetched_rule_paths(m$paths, m$location %||% "root"), character(0), info = m$col)
+  for (paths in list(COC_TREE_PATHS, CONTRIBUTING_TREE_PATHS, PR_TEMPLATE_TREE_PATHS))
+    expect_identical(unfetched_rule_paths(paths, "both"), character(0))
+  # The retired litedown path is the case this check exists for.
+  expect_identical(unfetched_rule_paths(c("site/_litedown.yml", "docs/_litedown.yml"), "root"),
+                   "docs/_litedown.yml")
+})
+
+test_that("the community and pkgdown lists are the ones the analyzer shares", {
+  expect_identical(COC_TREE_PATHS, c("CODE_OF_CONDUCT.md", "CODE_OF_CONDUCT", "CODE_OF_CONDUCT.Rmd",
+    "CODE_OF_CONDUCT.rst", "code_of_conduct.md", "Code_of_conduct.md", "CODE-OF-CONDUCT.md", "CONDUCT.md"))
+  expect_identical(CONTRIBUTING_TREE_PATHS, c("CONTRIBUTING.md", "CONTRIBUTING", "CONTRIBUTING.Rmd",
+    "CONTRIBUTING.rst", "contributing.md", "Contributing.md", "CONTRIBUTING.MD"))
+  expect_identical(PR_TEMPLATE_TREE_PATHS, c("pull_request_template.md", "PULL_REQUEST_TEMPLATE.md",
+                                             "PULL_REQUEST_TEMPLATE"))
+  pk <- Find(function(m) m$col == "has_pkgdown", DEV_TOOLING_MARKERS)$paths
+  expect_setequal(pk, c(PKGDOWN_CONFIG_TREE_PATHS, "pkgdown"))
+})
+
+test_that("the v3 tree rules read what the repository holds", {
+  expect_equal(classify_dev_tooling(c("inst/_pkgdown.yml"), character(0))$has_pkgdown, 1L)
+  expect_equal(classify_dev_tooling(c("inst/_pkgdown.yaml"), character(0))$has_pkgdown, 1L)
+  expect_equal(classify_dev_tooling(c("docs/_litedown.yml"), character(0))$has_litedown, 0L)
+  expect_equal(classify_dev_tooling(c("issue_template.md"), character(0))$has_issue_template, 1L)
+  expect_equal(classify_dev_tooling(character(0), c("issue_template.md"))$has_issue_template, 1L)
+  expect_equal(classify_dev_tooling(c("ISSUE_TEMPLATE"), character(0))$has_issue_template, 1L)
+  expect_equal(classify_dev_tooling(c("tests"), character(0))$has_tests_dir, 1L)
+  expect_equal(classify_dev_tooling(c("jarl.toml"), character(0))$has_jarl, 1L)
+  expect_false("has_pr_template" %in% dev_tooling_marker_cols())
+})
+
+test_that("package_at_root says whether DESCRIPTION is at the root", {
+  expect_equal(classify_dev_tooling(c("DESCRIPTION"), character(0))$package_at_root, 1L)
+  expect_equal(classify_dev_tooling(c("pkg", "README.md"), character(0))$package_at_root, 0L)
+})
+
+test_that("Travis alone is told apart from Travis beside another CI system", {
+  alone <- classify_dev_tooling(c(".travis.yml"), character(0))
+  expect_equal(alone$ci_travis_only, 1L)
+  expect_equal(alone$has_ci, 1L)
+  both <- classify_dev_tooling(c(".travis.yml"), c("workflows"))
+  expect_equal(both$ci_travis_only, 0L)
+  expect_equal(both$has_ci, 1L)
+  expect_equal(classify_dev_tooling(c("DESCRIPTION"), character(0))$ci_travis_only, 0L)
+})

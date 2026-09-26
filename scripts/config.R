@@ -198,6 +198,7 @@ DEV_TOOLING_MARKERS <- list(
   # Lint / format / editor.
   list(col = "has_lintr",         paths = c(".lintr"),          location = "root"),
   list(col = "has_air",           paths = c("air.toml", ".air.toml"), location = "root"),
+  list(col = "has_jarl",          paths = c("jarl.toml"),       location = "root"),
   list(col = "has_editorconfig",  paths = c(".editorconfig"),   location = "root"),
   list(col = "has_vscode",        paths = c(".vscode"),         location = "root"),
   list(col = "has_rproj",         paths = c(".Rproj"),          location = "root", match = "suffix"),
@@ -208,6 +209,7 @@ DEV_TOOLING_MARKERS <- list(
   # Reproducibility / dev-env.
   list(col = "has_renv",          paths = c("renv.lock", "renv"),               location = "root"),
   list(col = "has_data_raw",      paths = c("data-raw"),                        location = "root"),
+  list(col = "has_tests_dir",     paths = c("tests"),                           location = "root"),
   list(col = "has_makefile",      paths = c("Makefile"),                        location = "root"),
   list(col = "has_dockerfile",    paths = c("Dockerfile"),                      location = "root"),
   list(col = "has_devcontainer",  paths = c(".devcontainer"),                   location = "root"),
@@ -224,10 +226,11 @@ DEV_TOOLING_MARKERS <- list(
   # Docs source (repo-only). readme_source is computed; has_quarto is a flag.
   list(col = "has_quarto",        paths = c("_quarto.yml"),      location = "root"),
   # pkgdown is the most common documentation site in the ecosystem and was the
-  # conspicuous absence here: _quarto.yml was detectable and this was not. Three
-  # shapes, because maintainers use all three: the config at the root under
-  # either extension, and a pkgdown/ directory holding templates or extra pages.
-  list(col = "has_pkgdown",       paths = c("_pkgdown.yml", "_pkgdown.yaml", "pkgdown"),
+  # conspicuous absence here: _quarto.yml was detectable and this was not. Its
+  # config sits at the root or in inst/ under either extension, or in a pkgdown/
+  # directory, which also holds templates or extra pages.
+  list(col = "has_pkgdown",       paths = c("_pkgdown.yml", "_pkgdown.yaml", "pkgdown",
+                                            "inst/_pkgdown.yml", "inst/_pkgdown.yaml"),
                                                                  location = "root"),
   # altdoc keeps its config in altdoc/ at the root, whatever backend it drives
   # (altdoc/mkdocs.yml, altdoc/quarto_website.yml, altdoc/docsify.html). Note
@@ -237,8 +240,8 @@ DEV_TOOLING_MARKERS <- list(
   # litedown's config is NOT a root file. Every observed instance sits under
   # site/ or docs/, so a root-only rule would report litedown as unused
   # everywhere. The site subtree is fetched for exactly this.
-  list(col = "has_litedown",      paths = c("_litedown.yml", "site/_litedown.yml",
-                                            "docs/_litedown.yml"), location = "root"),
+  # docs/ is not listed (it holds built output), so a docs/ path could never match.
+  list(col = "has_litedown",      paths = c("_litedown.yml", "site/_litedown.yml"), location = "root"),
 
   # Documentation written for language models to read. This is the package describing
   # itself TO a model, not evidence a model worked on it, so it is a practice and never
@@ -255,8 +258,8 @@ DEV_TOOLING_MARKERS <- list(
   list(col = "has_zenodo",           paths = c(".zenodo.json"),      location = "root"),
   list(col = "has_all_contributors", paths = c(".all-contributorsrc"),location = "root"),
   # Governance / community.
-  list(col = "has_issue_template", paths = c("ISSUE_TEMPLATE", "ISSUE_TEMPLATE.md"), location = "github"),
-  list(col = "has_pr_template",    paths = c("PULL_REQUEST_TEMPLATE.md"),           location = "github"),
+  list(col = "has_issue_template", paths = c("ISSUE_TEMPLATE", "ISSUE_TEMPLATE.md", "issue_template.md"),
+                                                                                 location = "both"),
   list(col = "has_funding",        paths = c("FUNDING.yml"),                        location = "github"),
   list(col = "has_security",       paths = c("SECURITY.md"),                        location = "both"),
   list(col = "has_codeowners",     paths = c("CODEOWNERS"),                         location = "both"),
@@ -268,13 +271,25 @@ DEV_TOOLING_MARKERS <- list(
   list(col = "has_blame_ignore",   paths = c(".git-blame-ignore-revs"), location = "root")
 )
 
+# Community files, checked at the root and in .github. The same lists as rpkg-analyzer's git input.
+COC_TREE_PATHS <- c("CODE_OF_CONDUCT.md", "CODE_OF_CONDUCT", "CODE_OF_CONDUCT.Rmd", "CODE_OF_CONDUCT.rst",
+                    "code_of_conduct.md", "Code_of_conduct.md", "CODE-OF-CONDUCT.md", "CONDUCT.md")
+CONTRIBUTING_TREE_PATHS <- c("CONTRIBUTING.md", "CONTRIBUTING", "CONTRIBUTING.Rmd", "CONTRIBUTING.rst",
+                             "contributing.md", "Contributing.md", "CONTRIBUTING.MD")
+PR_TEMPLATE_TREE_PATHS <- c("pull_request_template.md", "PULL_REQUEST_TEMPLATE.md", "PULL_REQUEST_TEMPLATE")
+# pkgdown 2.2.0's config paths the scan can list; the pkgdown/ directory stands for the other two.
+PKGDOWN_CONFIG_TREE_PATHS <- c("_pkgdown.yml", "_pkgdown.yaml", "inst/_pkgdown.yml", "inst/_pkgdown.yaml")
+
 # Every vcs_dev_tooling column not in DEV_TOOLING_MARKERS: its SQLite type, where the value
 # comes from (tree, graphql, workflow_text or derived) and the rule vcs_dev_tooling_rules publishes.
 DEV_TOOLING_DERIVED <- list(
   list(col = "readme_source", type = "TEXT", source = "tree",
        rule = "README.qmd, else README.Rmd, else README.md at root, else none"),
   list(col = "has_ci", type = "INTEGER", source = "derived",
-       rule = "any of ci_github_actions to ci_drone is 1"))
+       rule = "any of ci_github_actions to ci_drone is 1"),
+  list(col = "package_at_root", type = "INTEGER", source = "derived", rule = "DESCRIPTION at root"),
+  list(col = "ci_travis_only", type = "INTEGER", source = "derived",
+       rule = "ci_travis is 1 and every other CI configuration column is 0"))
 # v1 first scan 2026-07-18 (d115e2d), v2 00312fe, b903376, f861918 (2026-07-29 to 08-02), v3 this change.
 DEV_TOOLING_RULESET_VERSION <- "v3 (2026-09-26)"
 
