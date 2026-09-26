@@ -586,8 +586,9 @@ build_tree_query <- function(repos) {
   sprintf('query { %s }', paste(parts, collapse = "\n"))
 }
 
-#' Demux a build_tree_query response into a named list keyed by repo_id, each
-#' value list(root_entries, github_entries, is_fork, parent). A null alias (repo
+#' Demux a build_tree_query response into a named list keyed by repo_id. Each value
+#' always holds root_entries, github_entries, is_fork, parent, gitignore_lines,
+#' rbuildignore_lines and rbuildignore_text. A null alias (repo
 #' gone) or a null object() (absent tree) degrades to empty entries, so the cheap
 #' pass never reads "could not fetch the tree" as "no markers".
 parse_tree_markers <- function(resp, repos) {
