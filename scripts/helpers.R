@@ -711,6 +711,19 @@ ensure_series_schema <- function(con) {
     if (length(have) && !(col %in% have))
       DBI::dbExecute(con, sprintf("ALTER TABLE vcs_ai_signals ADD COLUMN %s INTEGER", col))
   }
+  # Who owns each active GitHub repository now, as the daily gauge query saw it.
+  # Keyed by the frozen repo_id; readers count a repository once by node_id.
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_repo_owner (
+    repo_id                 TEXT NOT NULL PRIMARY KEY,
+    node_id                 TEXT NOT NULL,
+    owner_login_current     TEXT NOT NULL,
+    owner_type              TEXT NOT NULL CHECK (owner_type IN ('Organization', 'User')),
+    owner_node_id           TEXT NOT NULL,
+    name_with_owner_current TEXT NOT NULL,
+    observed_on             TEXT NOT NULL) WITHOUT ROWID")
+  DBI::dbExecute(con, "CREATE INDEX IF NOT EXISTS idx_vro_login ON vcs_repo_owner(owner_login_current COLLATE NOCASE)")
+  DBI::dbExecute(con, "CREATE INDEX IF NOT EXISTS idx_vro_owner_node ON vcs_repo_owner(owner_node_id)")
+  DBI::dbExecute(con, "CREATE INDEX IF NOT EXISTS idx_vro_node ON vcs_repo_owner(node_id)")
   # Dev-tooling presence snapshot, one wide row per repo. WITHOUT ROWID is deliberate (see
   # dev_tooling_create_sql): a repo_id point lookup is a single covering seek. The DDL is
   # config-derived so it cannot drift from classify_dev_tooling.

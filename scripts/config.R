@@ -474,8 +474,10 @@ A,openhands,open,"tier A iterates cheap-pass evidence, which openhands can only 
 # seeded, and once a package has left CRAN or moved its URL it is the only record
 # anywhere of which repository the package was. A path that dropped it would
 # lose those links for good, because nothing resolves a delisted package again.
+# vcs_repo_owner stays the last entry; tables added later go before it.
 SUMMARY_EXTRA_TABLES <- c("vcs_ai_models", "vcs_ai_rule_inventory",
-                          "vcs_ai_silent_channels", "repo_package_links")
+                          "vcs_ai_silent_channels", "repo_package_links",
+                          "vcs_repo_owner")
 
 # Package-to-repository links this pipeline published before it kept them. Built
 # from every surviving copy of what it published: the vcs_signals_summary in a
