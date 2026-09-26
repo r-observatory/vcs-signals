@@ -1283,3 +1283,47 @@ test_that("the retry merges and does not scan", {
   expect_false(grepl("strategy:", txt, fixed = TRUE),
                info = "no fan-out, so nothing is being scanned")
 })
+
+test_that("enumerate records each roster repository's CRAN versions, and a failed CRAN read records none", {
+  rel <- tempfile("rel_"); dir.create(rel)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel, "vcs-signals-summary.db"))
+  ensure_repo_schema(scon)
+  DBI::dbExecute(scon, "INSERT INTO repos (repo_id,node_id,host,host_domain,owner,name,name_with_owner,supported,n_packages,first_seen,last_seen,status) VALUES
+    ('github.com/a/prova',NULL,'github','github.com','a','prova','a/prova',1,1,'2024-01-01','2026-07-01','active')")
+  DBI::dbExecute(scon, "INSERT INTO repo_packages (repo_id, package, origin, resolved_from) VALUES
+    ('github.com/a/prova','prova','cran','url'), ('github.com/a/prova','provaBioc','bioc','url')")
+  DBI::dbDisconnect(scon)
+  dl <- function(pattern, dir) {
+    f <- list.files(rel, pattern = utils::glob2rx(pattern), full.names = TRUE)
+    if (!length(f)) return(FALSE)
+    file.copy(f, file.path(dir, basename(f)), overwrite = TRUE); TRUE }
+  gq <- with_contents_canary(function(query) list(data = list()))
+  out <- tempfile("out_"); dir.create(out)
+  run_enumerate_ai(list(download = dl, graphql = gq,
+                        cran_packages = function() data.frame(Package = "prova", Version = "0.4.5")), out)
+  got <- load_roster_cran(file.path(out, "vcs-ai-roster.db"))
+  expect_equal(got$package, "prova"); expect_equal(got$cran_version, "0.4.5")
+
+  out2 <- tempfile("out_"); dir.create(out2)
+  expect_message(run_enumerate_ai(list(download = dl, graphql = gq,
+                                       cran_packages = function() stop("503")), out2),
+                 "could not be read")
+  expect_equal(nrow(load_roster_cran(file.path(out2, "vcs-ai-roster.db"))), 0L)
+})
+
+test_that("the cheap pass compares the default branch's version with CRAN", {
+  out <- tempfile("out_"); dir.create(out)
+  roster <- data.frame(repo_id = "github.com/a/prova", owner = "a", name = "prova", node_id = NA_character_,
+                       done = 0L, stringsAsFactors = FALSE)
+  roster_path <- file.path(out, "vcs-ai-roster.db")
+  write_ai_roster(roster_path, roster, data.frame(repo_id = "github.com/a/prova", package = "prova",
+                                                  cran_version = "0.4.5"))
+  io <- fake_contents_io(alias = function(name) list(nameWithOwner = "a/prova", isFork = FALSE, parent = NULL,
+    rootTree = list(entries = list(list(name = "DESCRIPTION", type = "blob"))),
+    descBlob = list(byteSize = 40L, text = "Package: prova\nVersion: 0.4.4.9000\n")))
+  local_fast_batches()
+  run_cheap(io, out, roster_path, 0, 1)
+  dev <- read_dev_tooling(file.path(out, "vcs-dev-tooling-0.db"))
+  expect_equal(dev$cran_version_at_scan, "0.4.5")
+  expect_equal(dev$repo_version_vs_cran, "behind")
+})

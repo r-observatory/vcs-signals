@@ -361,7 +361,21 @@ DEV_TOOLING_DERIVED <- list(
   list(col = "site_pkgdown_last_built", type = "TEXT", source = "graphql",
        rule = "the last_built: line of the built pkgdown.yml, as written"),
   list(col = "site_url", type = "TEXT", source = "graphql",
-       rule = "the reference url in the urls block of the built pkgdown.yml, else the article url, without its last path segment"))
+       rule = "the reference url in the urls block of the built pkgdown.yml, else the article url, without its last path segment"),
+  list(col = "repo_desc_package", type = "TEXT", source = "graphql", rule = "Package in HEAD:DESCRIPTION"),
+  list(col = "repo_desc_version", type = "TEXT", source = "graphql", rule = "Version in HEAD:DESCRIPTION"),
+  list(col = "cran_version_at_scan", type = "TEXT", source = "derived",
+       rule = "the CRAN version of repo_desc_package when that name is one of the repository's CRAN packages"),
+  list(col = "repo_version_vs_cran", type = "TEXT", source = "derived",
+       rule = "ahead, equal or behind: compareVersion(repo_desc_version, cran_version_at_scan)"),
+  list(col = "funding_links", type = "TEXT", source = "graphql", rule = "fundingLinks as platform and url pairs"),
+  list(col = "owner_sponsorable", type = "INTEGER", source = "graphql", rule = "the owner has a GitHub Sponsors listing"),
+  list(col = "is_fork", type = "INTEGER", source = "graphql", rule = "isFork"),
+  list(col = "parent_name_with_owner", type = "TEXT", source = "graphql", rule = "parent nameWithOwner"),
+  list(col = "has_issues_enabled", type = "INTEGER", source = "graphql", rule = "hasIssuesEnabled"),
+  list(col = "homepage_url", type = "TEXT", source = "graphql", rule = "homepageUrl, trimmed, when not empty"),
+  list(col = "has_discussions", type = "INTEGER", source = "graphql", rule = "hasDiscussionsEnabled"),
+  list(col = "discussions_total", type = "INTEGER", source = "graphql", rule = "discussions totalCount"))
 # v1 first scan 2026-07-18 (d115e2d), v2 00312fe, b903376, f861918 (2026-07-29 to 08-02), v3 this change.
 DEV_TOOLING_RULESET_VERSION <- "v3 (2026-09-26)"
 

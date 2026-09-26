@@ -27,7 +27,7 @@ suppressPackageStartupMessages({ library(DBI); library(RSQLite) })
 AI_ROSTER_TABLE <- "roster"
 
 # ---- roster IO --------------------------------------------------------------
-write_ai_roster <- function(path, roster_df) {
+write_ai_roster <- function(path, roster_df, roster_cran = NULL) {
   if (file.exists(path)) unlink(path)
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
@@ -38,6 +38,11 @@ write_ai_roster <- function(path, roster_df) {
   if (nrow(roster_df) > 0)
     DBI::dbWriteTable(con, AI_ROSTER_TABLE,
                       roster_df[c("repo_id", "owner", "name", "node_id", "done")], append = TRUE)
+  # Rebuilt every week from one CRAN read, so no week depends on an earlier copy.
+  DBI::dbExecute(con, "CREATE TABLE roster_cran (repo_id TEXT NOT NULL, package TEXT NOT NULL,
+    cran_version TEXT NOT NULL, PRIMARY KEY (repo_id, package))")
+  if (!is.null(roster_cran) && nrow(roster_cran) > 0)
+    DBI::dbWriteTable(con, "roster_cran", roster_cran[c("repo_id", "package", "cran_version")], append = TRUE)
   DBI::dbExecute(con, "VACUUM")
   invisible(path)
 }
@@ -46,6 +51,31 @@ load_ai_roster <- function(path) {
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   DBI::dbReadTable(con, AI_ROSTER_TABLE)
+}
+
+load_roster_cran <- function(path) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  if (DBI::dbExistsTable(con, "roster_cran")) DBI::dbReadTable(con, "roster_cran")
+  else data.frame(repo_id = character(0), package = character(0), cran_version = character(0),
+                  stringsAsFactors = FALSE)
+}
+
+#' Each roster repository's CRAN packages with today's CRAN version. A failed CRAN read is
+#' logged and gives no rows, which only leaves the version comparison empty this week.
+build_roster_cran <- function(io, repo_packages, roster_ids) {
+  empty <- data.frame(repo_id = character(0), package = character(0), cran_version = character(0),
+                      stringsAsFactors = FALSE)
+  cran <- tryCatch(io$cran_packages(), error = function(e) {
+    message("ai enumerate: the CRAN package list could not be read (", conditionMessage(e),
+            "), so versions are not compared this week")
+    NULL })
+  if (is.null(cran) || !nrow(cran)) return(empty)
+  rp <- repo_packages[repo_packages$repo_id %in% roster_ids, c("repo_id", "package"), drop = FALSE]
+  out <- merge(rp, data.frame(package = cran$Package, cran_version = cran$Version, stringsAsFactors = FALSE),
+               by = "package")
+  out <- out[!duplicated(out[c("repo_id", "package")]), c("repo_id", "package", "cran_version"), drop = FALSE]
+  if (nrow(out)) out else empty
 }
 
 # ---- contents query canary ---------------------------------------------------
@@ -168,8 +198,11 @@ run_enumerate_ai <- function(io, out_dir) {
   }
   if (length(drop_idx) > 0) roster <- roster[-drop_idx, , drop = FALSE]
 
-  message(sprintf("ai enumerate: %d active github repos", nrow(roster)))
-  write_ai_roster(file.path(out_dir, "vcs-ai-roster.db"), roster)
+  rp <- DBI::dbGetQuery(con, "SELECT repo_id, package FROM repo_packages WHERE origin = 'cran'")
+  roster_cran <- build_roster_cran(io, rp, roster$repo_id)
+  message(sprintf("ai enumerate: %d active github repos, %d CRAN package versions to compare",
+                  nrow(roster), nrow(roster_cran)))
+  write_ai_roster(file.path(out_dir, "vcs-ai-roster.db"), roster, roster_cran)
 }
 
 # ---- flagged partial IO -----------------------------------------------------
@@ -296,6 +329,7 @@ contents_shard_stops <- function(n_failed, attempted)
 run_cheap <- function(io, out_dir, roster_path, i, N, batch_size = TIER_D_BATCH) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   roster <- load_ai_roster(roster_path)
+  cran_links <- load_roster_cran(roster_path)
   mine <- roster[shard_rows(nrow(roster), i, N), , drop = FALSE]
   message(sprintf("ai cheap shard %d/%d: %d of %d repos", i, N, nrow(mine), nrow(roster)))
 
@@ -327,6 +361,10 @@ run_cheap <- function(io, out_dir, roster_path, i, N, batch_size = TIER_D_BATCH)
       if (!is.null(tree) && !is.na(tree$is_fork)) {
         dv <- classify_dev_tooling(tree$root_entries, tree$github_entries, repo = tree)
         bad_rbi_lines <- bad_rbi_lines + attr(dv, "rbuildignore_bad_lines")
+        cmp <- compare_repo_version(dv$repo_desc_package, dv$repo_desc_version,
+                                    cran_links[cran_links$repo_id == rid, c("package", "cran_version")])
+        dv$cran_version_at_scan <- cmp$cran_version_at_scan
+        dv$repo_version_vs_cran <- cmp$repo_version_vs_cran
         dv$repo_id <- rid
         dv$last_scanned <- today
         dv$ruleset_version <- DEV_TOOLING_RULESET_VERSION
@@ -920,6 +958,10 @@ main <- function(mode, out_dir, io = NULL) {
     search_hit     = function(owner, name, query, delay = SEARCH_DELAY_S)
                        search_earliest_commit_hit(token, owner, name, query, delay),
     sleep          = function(seconds) Sys.sleep(seconds),
+    cran_packages  = function() {
+      db <- tools::CRAN_package_db()
+      db[!duplicated(db$Package), c("Package", "Version")]
+    },
     release_exists = function() gh_release_exists(RELEASE_REPO),
     generation     = function() gh_release_generation(RELEASE_REPO),
     download       = function(pattern, dir) gh_release_download(RELEASE_REPO, pattern, dir),

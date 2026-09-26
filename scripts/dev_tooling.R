@@ -22,6 +22,7 @@ dev_tooling_derive <- function(root_entries, github_entries, flags, repo) {
   site <- pkgdown_site_columns(repo)
   out <- c(out, list(site_generator = site_generator_for(site$site_pkgdown_source, flags,
                                                           .dev_has(repo, "pkgdown_yml"))), site)
+  out <- c(out, repo_desc_fields(repo), repo_scalar_columns(repo))
   attr(out, "rbuildignore_bad_lines") <- attr(rbi, "bad_lines")
   out
 }
@@ -242,4 +243,43 @@ site_generator_for <- function(pkgdown_source, flags, read) {
   for (tool in c("altdoc", "litedown", "pkgdown", "quarto"))
     if (identical(unname(flags[[paste0("has_", tool)]]), 1L)) return(tool)
   "unknown"
+}
+
+#' Package and Version of the default branch's DESCRIPTION; NA when absent or unreadable.
+repo_desc_fields <- function(repo) {
+  out <- list(repo_desc_package = NA_character_, repo_desc_version = NA_character_)
+  txt <- if (.dev_has(repo, "desc_text")) repo$desc_text else NA_character_
+  if (is.na(txt)) return(out)
+  d <- tryCatch(suppressWarnings(read.dcf(textConnection(txt), fields = c("Package", "Version"))),
+                error = function(e) NULL)
+  if (is.null(d) || !nrow(d)) return(out)
+  val <- function(f) { v <- trimws(d[1, f]); if (is.na(v) || !nzchar(v)) NA_character_ else v }
+  list(repo_desc_package = val("Package"), repo_desc_version = val("Version"))
+}
+
+#' Fork, support and funding facts GitHub reports for the repository itself.
+repo_scalar_columns <- function(repo) {
+  pick <- function(el, f) if (.dev_has(repo, el)) f(repo[[el]]) else NA
+  list(
+    funding_links = pick("funding_links", function(x) as.character(jsonlite::toJSON(x))),
+    owner_sponsorable = pick("owner_sponsorable", as.integer),
+    is_fork = pick("is_fork", as.integer),
+    parent_name_with_owner = pick("parent", as.character),
+    has_issues_enabled = pick("has_issues_enabled", as.integer),
+    homepage_url = pick("homepage_url", function(x) { x <- trimws(x); if (is.na(x) || !nzchar(x)) NA_character_ else x }),
+    has_discussions = pick("has_discussions", as.integer),
+    discussions_total = pick("discussions_total", as.integer))
+}
+
+#' The default branch's version against CRAN's, only when the DESCRIPTION's Package is one of
+#' the repository's CRAN packages (case-sensitive). `cran_links` is data.frame(package, cran_version).
+compare_repo_version <- function(repo_desc_package, repo_desc_version, cran_links) {
+  none <- list(cran_version_at_scan = NA_character_, repo_version_vs_cran = NA_character_)
+  if (is.na(repo_desc_package) || is.na(repo_desc_version) || is.null(cran_links) || !nrow(cran_links))
+    return(none)
+  cv <- cran_links$cran_version[cran_links$package == repo_desc_package]
+  if (!length(cv) || is.na(cv[1])) return(none)
+  cmp <- tryCatch(suppressWarnings(utils::compareVersion(repo_desc_version, cv[1])), error = function(e) NA)
+  list(cran_version_at_scan = cv[1],
+       repo_version_vs_cran = if (is.na(cmp)) NA_character_ else c("behind", "equal", "ahead")[cmp + 2L])
 }

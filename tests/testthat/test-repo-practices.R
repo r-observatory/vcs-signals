@@ -245,3 +245,38 @@ test_that("the site generator prefers the deployed site, then a chosen tool, the
   r <- classify_dev_tooling(c("altdoc"), character(0), repo = docs)
   expect_equal(r$site_generator, "pkgdown"); expect_equal(r$site_pkgdown_source, "docs")
 })
+
+test_that("the default branch's DESCRIPTION gives its package and version", {
+  d <- function(txt) classify_dev_tooling(c("DESCRIPTION"), character(0), repo = list(desc_text = txt))
+  r <- d("Package: prova\r\nTitle: Tests\r\nVersion: 0.4.4.9000\r\n")
+  expect_equal(r$repo_desc_package, "prova"); expect_equal(r$repo_desc_version, "0.4.4.9000")
+  wrapped <- d("Package: prova\nDescription: One line\n    that continues.\nVersion: 1.0\n")
+  expect_equal(wrapped$repo_desc_version, "1.0")
+  expect_true(is.na(d(NA_character_)$repo_desc_package))
+  expect_true(is.na(d("not a dcf file at all")$repo_desc_version))
+})
+
+test_that("the default branch is compared with CRAN only for the repository's own CRAN package", {
+  links <- data.frame(package = c("prova", "other"), cran_version = c("0.4.5", "2.3.0"))
+  expect_equal(compare_repo_version("prova", "0.4.4.9000", links)$repo_version_vs_cran, "behind")
+  expect_equal(compare_repo_version("other", "2.3.0.9000", links)$repo_version_vs_cran, "ahead")
+  expect_equal(compare_repo_version("prova", "1.0-2", data.frame(package = "prova", cran_version = "1.0.2"))$repo_version_vs_cran, "equal")
+  expect_equal(compare_repo_version("prova", "0.4.4.9000", links)$cran_version_at_scan, "0.4.5")
+  expect_true(is.na(compare_repo_version("Prova", "1.0", links)$cran_version_at_scan))
+  expect_true(is.na(compare_repo_version("prova", "1.0", links[0, ])$repo_version_vs_cran))
+})
+
+test_that("fork, issues, homepage, discussions and funding come through as GitHub states them", {
+  repo <- list(is_fork = TRUE, parent = "up/pkg", has_issues_enabled = FALSE, homepage_url = "  ",
+               has_discussions = TRUE, discussions_total = 12L, owner_sponsorable = TRUE,
+               funding_links = data.frame(platform = "GITHUB", url = "https://github.com/sponsors/o"))
+  r <- classify_dev_tooling(character(0), character(0), repo = repo)
+  expect_equal(r$is_fork, 1L); expect_equal(r$parent_name_with_owner, "up/pkg")
+  expect_equal(r$has_issues_enabled, 0L); expect_true(is.na(r$homepage_url))
+  expect_equal(r$has_discussions, 1L); expect_equal(r$discussions_total, 12L)
+  expect_equal(r$owner_sponsorable, 1L)
+  expect_equal(r$funding_links, '[{"platform":"GITHUB","url":"https://github.com/sponsors/o"}]')
+  none <- classify_dev_tooling(character(0), character(0),
+    repo = list(funding_links = data.frame(platform = character(0), url = character(0))))
+  expect_equal(none$funding_links, "[]")
+})
