@@ -133,7 +133,7 @@ test_that("two repo_ids on one repository both get a row, even when the query re
   con <- new_test_db(); on.exit(DBI::dbDisconnect(con))
   node <- "MDEwOlJlcG9zaXRvcnk4NjA1Njc="
   sn <- .owner_snapshot(node, "r-lib/log4r", "r-lib", "Organization", "O_rlib")
-  .quiet_write(con, rbind(sn, sn),
+  res <- .quiet_write(con, rbind(sn, sn),
     .owner_map(c("github.com/johnmyleswhite/log4r", "github.com/r-lib/log4r"), c(node, node)),
     .today)
   got <- .owner_rows(con)
@@ -141,6 +141,7 @@ test_that("two repo_ids on one repository both get a row, even when the query re
   expect_equal(unique(got$node_id), node)
   expect_equal(unique(got$owner_login_current), "r-lib")
   expect_equal(unique(got$name_with_owner_current), "r-lib/log4r")
+  expect_equal(res$written, 2L)
 })
 
 test_that("a null owner or an unknown owner type is not written, and both are counted", {
