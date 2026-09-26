@@ -1,0 +1,13 @@
+on:
+  pull_request:
+
+name: lint
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+      - run: lintr::lint_package()
+        shell: Rscript {0}

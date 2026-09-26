@@ -290,6 +290,20 @@ VIGNETTE_SOURCE_PATTERN <- "\\.(Rmd|Rnw|qmd|Rtex|Rhtml|asis)$"
 # rbuildignore_text keeps a .Rbuildignore up to this many bytes (the largest in the sweep is 10,739).
 RBUILDIGNORE_TEXT_MAX_BYTES <- 65536L
 
+# GitHub Actions workflow rules, matched on the text of each .yml or .yaml file in
+# .github/workflows. Case-sensitive, as measured, unless the pattern says (?i).
+WORKFLOW_TEXT_RULES <- list(
+  rcmdcheck      = "check-r-package|rcmdcheck|R CMD check|devtools::check|BiocCheck|rworkflows",
+  rcmdcheck_name = "(?i)r-?cmd-?check|^check|cran-check|bioc|rworkflows",
+  platforms      = "(?i)\\b(ubuntu|macos|windows)-(latest|[0-9])",
+  r_devel        = "r(-version)?:\\s*['\"]?devel",
+  coverage       = "covr::|codecov|test-coverage|coveralls",
+  site_deploy    = paste0("build_site_github_pages|pkgdown::deploy|github-pages-deploy-action|",
+                          "actions/deploy-pages|peaceiris/actions-gh-pages|altdoc::render|",
+                          "quarto publish|quarto-actions/publish"),
+  lint           = "lintr::|lint_package|jarl|air format|styler::",
+  lint_skip      = "issue_comment")
+
 # Every vcs_dev_tooling column not in DEV_TOOLING_MARKERS: its SQLite type, where the value
 # comes from (tree, graphql, workflow_text or derived) and the rule vcs_dev_tooling_rules publishes.
 DEV_TOOLING_DERIVED <- list(
@@ -315,7 +329,23 @@ DEV_TOOLING_DERIVED <- list(
   list(col = "rbuildignore_excluded", type = "TEXT", source = "derived",
        rule = "items present in the repository that .Rbuildignore leaves out of the release, read as R CMD build reads it"),
   list(col = "rbuildignore_text", type = "TEXT", source = "graphql",
-       rule = ".Rbuildignore text up to 65536 bytes"))
+       rule = ".Rbuildignore text up to 65536 bytes"),
+  list(col = "ci_workflow_files", type = "TEXT", source = "workflow_text",
+       rule = ".yml and .yaml file names in .github/workflows, in listing order"),
+  list(col = "ci_rcmdcheck", type = "INTEGER", source = "workflow_text",
+       rule = paste("a workflow text matches", WORKFLOW_TEXT_RULES$rcmdcheck,
+                    "or a workflow GitHub returns no text for is named", WORKFLOW_TEXT_RULES$rcmdcheck_name)),
+  list(col = "ci_platforms", type = "TEXT", source = "workflow_text",
+       rule = paste("linux, macos and windows as named by", WORKFLOW_TEXT_RULES$platforms,
+                    "in the R CMD check workflows")),
+  list(col = "ci_r_devel", type = "INTEGER", source = "workflow_text",
+       rule = paste("an R CMD check workflow matches", WORKFLOW_TEXT_RULES$r_devel)),
+  list(col = "ci_coverage", type = "INTEGER", source = "workflow_text",
+       rule = paste("a workflow text matches", WORKFLOW_TEXT_RULES$coverage)),
+  list(col = "ci_site_deploy", type = "INTEGER", source = "workflow_text",
+       rule = paste("a workflow text matches", WORKFLOW_TEXT_RULES$site_deploy)),
+  list(col = "ci_lint", type = "INTEGER", source = "workflow_text",
+       rule = paste("a workflow text without", WORKFLOW_TEXT_RULES$lint_skip, "matches", WORKFLOW_TEXT_RULES$lint)))
 # v1 first scan 2026-07-18 (d115e2d), v2 00312fe, b903376, f861918 (2026-07-29 to 08-02), v3 this change.
 DEV_TOOLING_RULESET_VERSION <- "v3 (2026-09-26)"
 

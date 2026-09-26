@@ -17,6 +17,7 @@ dev_tooling_derive <- function(root_entries, github_entries, flags, repo) {
   out <- c(out, community_columns(root_entries, github_entries, repo))
   rbi <- rbuildignore_columns(root_entries, repo)
   out <- c(out, rbi)
+  out <- c(out, workflow_columns(github_entries, repo))
   attr(out, "rbuildignore_bad_lines") <- attr(rbi, "bad_lines")
   out
 }
@@ -133,4 +134,38 @@ rbuildignore_columns <- function(root_entries, repo) {
   keep <- if (!is.na(txt) && nchar(txt, type = "bytes") <= RBUILDIGNORE_TEXT_MAX_BYTES) txt else NA_character_
   structure(list(rbuildignore_excluded = as.vector(ex), rbuildignore_text = keep),
             bad_lines = attr(ex, "bad_lines"))
+}
+
+#' What the GitHub Actions workflows run. A NULL `workflows` element means the directory
+#' was read and is absent, which reads 0; a repo without the element reads NA.
+workflow_columns <- function(github_entries, repo) {
+  cols <- c("ci_workflow_files", "ci_rcmdcheck", "ci_platforms", "ci_r_devel", "ci_coverage",
+            "ci_site_deploy", "ci_lint")
+  if (!.dev_has(repo, "workflows")) return(stats::setNames(as.list(rep(NA, length(cols))), cols))
+  rules <- WORKFLOW_TEXT_RULES
+  names <- sub("^workflows/", "", github_entries[startsWith(github_entries, "workflows/")])
+  yml <- names[grepl("\\.ya?ml$", names, ignore.case = TRUE)]
+  wf <- repo$workflows
+  texts <- if (is.null(wf)) character(0) else wf$text[wf$name %in% yml]
+  textless <- setdiff(yml, if (is.null(wf)) character(0) else wf$name)
+  any_text <- function(pattern, t = texts) length(t) > 0L && any(grepl(pattern, t, perl = TRUE))
+  check_texts <- texts[grepl(rules$rcmdcheck, texts, perl = TRUE)]
+  rcmd <- length(check_texts) > 0L || any(grepl(rules$rcmdcheck_name, textless, perl = TRUE))
+  platforms <- NA_character_
+  r_devel <- NA_integer_
+  if (rcmd) {
+    found <- unlist(regmatches(check_texts, gregexpr(rules$platforms, check_texts, perl = TRUE)))
+    seen <- unique(sub("-.*$", "", tolower(found)))
+    family <- c(linux = "ubuntu", macos = "macos", windows = "windows")
+    named <- names(family)[family %in% seen]
+    if (length(named)) platforms <- as.character(jsonlite::toJSON(named))
+    r_devel <- as.integer(any_text(rules$r_devel, check_texts))
+  }
+  list(ci_workflow_files = as.character(jsonlite::toJSON(yml)),
+       ci_rcmdcheck = as.integer(rcmd),
+       ci_platforms = platforms,
+       ci_r_devel = r_devel,
+       ci_coverage = as.integer(any_text(rules$coverage)),
+       ci_site_deploy = as.integer(any_text(rules$site_deploy)),
+       ci_lint = as.integer(any_text(rules$lint, texts[!grepl(rules$lint_skip, texts, fixed = TRUE)])))
 }

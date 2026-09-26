@@ -1,0 +1,14 @@
+on:
+  issue_comment:
+    types: [created]
+
+name: pr-commands
+
+jobs:
+  style:
+    if: ${{ github.event.issue.pull_request && startsWith(github.event.comment.body, '/style') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: styler::style_pkg()
+        shell: Rscript {0}

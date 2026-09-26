@@ -79,3 +79,83 @@ test_that("a url pointing anywhere else is not a claim either way", {
   expect_true(is.na(r$coc_source)); expect_true(is.na(r$has_code_of_conduct))
   expect_true(is.na(r$pr_template_source))
 })
+
+wf_file <- function(name) paste(readLines(test_path("fixtures", "workflows", name)), collapse = "\n")
+wf_repo <- function(files, texts = files) {
+  wf <- data.frame(name = texts, text = vapply(texts, wf_file, ""), stringsAsFactors = FALSE)
+  list(github = c("workflows", paste0("workflows/", files)), repo = list(workflows = wf))
+}
+wf_row <- function(w) classify_dev_tooling(character(0), w$github, repo = w$repo)
+
+test_that("a standard r-lib workflow set reads as check, platforms, devel, coverage, site and lint", {
+  files <- c("R-CMD-check.yaml", "test-coverage.yaml", "pkgdown.yaml", "lint.yaml", "pr-commands.yaml")
+  r <- wf_row(wf_repo(files))
+  expect_equal(r$ci_workflow_files, as.character(jsonlite::toJSON(files)))
+  expect_equal(r$ci_rcmdcheck, 1L)
+  expect_equal(r$ci_platforms, '["linux","macos","windows"]')
+  expect_equal(r$ci_r_devel, 1L)
+  expect_equal(r$ci_coverage, 1L)
+  expect_equal(r$ci_site_deploy, 1L)
+  expect_equal(r$ci_lint, 1L)
+})
+
+test_that("a comment-triggered format bot is not a lint step", {
+  expect_equal(wf_row(wf_repo("pr-commands.yaml"))$ci_lint, 0L)
+})
+
+test_that("macOS and a pinned Ubuntu are both named, and no devel entry reads 0", {
+  r <- wf_row(wf_repo("check-matrix.yml"))
+  expect_equal(r$ci_platforms, '["linux","macos"]')
+  expect_equal(r$ci_r_devel, 0L)
+})
+
+test_that("a reusable workflow names no platform, so the platforms are unknown", {
+  r <- wf_row(wf_repo("reusable.yml"))
+  expect_equal(r$ci_rcmdcheck, 1L)
+  expect_true(is.na(r$ci_platforms))
+})
+
+test_that("a workflow GitHub returns no text for still counts by its name", {
+  r <- wf_row(list(github = c("workflows", "workflows/R-CMD-check.yaml"),
+                   repo = list(workflows = data.frame(name = character(0), text = character(0)))))
+  expect_equal(r$ci_rcmdcheck, 1L)
+  expect_true(is.na(r$ci_platforms))
+  expect_equal(r$ci_r_devel, 0L)
+  expect_equal(r$ci_coverage, 0L)
+})
+
+test_that("no workflows directory reads 0, and no contents read reads NA", {
+  none <- list(); none["workflows"] <- list(NULL)
+  r <- classify_dev_tooling(c("DESCRIPTION"), character(0), repo = none)
+  expect_equal(r$ci_workflow_files, "[]")
+  for (cn in c("ci_rcmdcheck", "ci_coverage", "ci_site_deploy", "ci_lint")) expect_equal(r[[cn]], 0L, info = cn)
+  expect_true(is.na(r$ci_platforms)); expect_true(is.na(r$ci_r_devel))
+  unread <- classify_dev_tooling(c("DESCRIPTION"), c("workflows"))
+  for (cn in c("ci_workflow_files", "ci_rcmdcheck", "ci_coverage", "ci_site_deploy", "ci_lint"))
+    expect_true(is.na(unread[[cn]]), info = cn)
+})
+
+test_that("a non-workflow file in the directory is not read for rules", {
+  w <- list(github = c("workflows", "workflows/README.md"),
+            repo = list(workflows = data.frame(name = "README.md", text = "We run codecov and lintr:: here.")))
+  r <- wf_row(w)
+  expect_equal(r$ci_workflow_files, "[]")
+  expect_equal(r$ci_coverage, 0L)
+  expect_equal(r$ci_lint, 0L)
+})
+
+test_that("each alternative of each workflow rule matches, and case matters", {
+  one <- function(text) wf_row(list(github = "workflows/x.yml",
+                                    repo = list(workflows = data.frame(name = "x.yml", text = text))))
+  for (t in c("check-r-package", "rcmdcheck", "R CMD check", "devtools::check", "BiocCheck", "rworkflows"))
+    expect_equal(one(t)$ci_rcmdcheck, 1L, info = t)
+  expect_equal(one("r cmd check")$ci_rcmdcheck, 0L)
+  for (t in c("covr::", "codecov", "test-coverage", "coveralls")) expect_equal(one(t)$ci_coverage, 1L, info = t)
+  for (t in c("build_site_github_pages", "pkgdown::deploy", "github-pages-deploy-action", "actions/deploy-pages",
+              "peaceiris/actions-gh-pages", "altdoc::render", "quarto publish", "quarto-actions/publish"))
+    expect_equal(one(t)$ci_site_deploy, 1L, info = t)
+  for (t in c("lintr::", "lint_package", "jarl", "air format", "styler::")) expect_equal(one(t)$ci_lint, 1L, info = t)
+  expect_equal(one("rcmdcheck\nr-version: 'devel'")$ci_r_devel, 1L)
+  expect_equal(one("rcmdcheck\nr: devel")$ci_r_devel, 1L)
+  expect_equal(one("rcmdcheck on windows-2022")$ci_platforms, '["windows"]')
+})
