@@ -392,8 +392,8 @@ order_ai_tools <- function(ai_rows) {
 
 #' Every (tier, tool) that has a detection rule, and could therefore detect.
 #'
-#' The four tiers keep their rules in four differently shaped tables, so this is
-#' the one place that states the inventory as a flat set of channels.
+#' Each search keeps its rules in a differently shaped table, so this is the one
+#' place that lists every rule as one row per search and tool.
 ai_rule_inventory <- function() {
   tool_of <- function(xs) vapply(xs, function(x) x$tool, character(1))
   inv <- rbind(
@@ -407,7 +407,10 @@ ai_rule_inventory <- function() {
     # table built to tell a measured zero from an unasked question must not
     # invent channels nobody scans.
     data.frame(tier = "D", tool = unname(tool_of(ai_deliberate_markers())),
-               stringsAsFactors = FALSE))
+               stringsAsFactors = FALSE),
+    # Pull requests opened by a tool's account. Without these rows a login that
+    # never matches sits at zero where the silent-search check cannot see it.
+    data.frame(tier = "PR", tool = unname(AI_PR_AGENT_LOGINS), stringsAsFactors = FALSE))
   inv <- unique(inv)
   inv[order(inv$tier, inv$tool), , drop = FALSE]
 }
