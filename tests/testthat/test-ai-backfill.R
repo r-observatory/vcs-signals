@@ -869,13 +869,11 @@ test_that("an unverified trailer hit dates a floor, never an exact onset", {
       list(date = "2025-09-15T00:00:00Z",
            message = "fix\n\nCo-authored-by: Claude Dupont <claude@univ.fr>", author = "Jean")
     })
-  # The marker dates exactly at 2026-03, later than the floor's "on or before
-  # 2025-09". That is a contradiction, and the reducer says so and keeps the floor:
-  # an exact date cannot be later than a bound that already excluded it.
-  expect_warning(
+  # The file is dated exactly at 2026-03 and the credit search bounds the start at 2025-09: two rules, so the earlier bound stands, censored.
+  expect_no_warning(
     run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
              marker_delay = 0, search_delay = 0),
-    "contradiction")
+    message = "contradiction")
   scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db"))
   on.exit(DBI::dbDisconnect(scon))
   got <- DBI::dbReadTable(scon, "vcs_ai_signals")

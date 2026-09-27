@@ -174,6 +174,35 @@ test_that("reducer: an exact LATER than a floor is a contradiction - keep the fl
   expect_equal(o$first_seen_date, "2023-01-01"); expect_equal(o$first_seen_censored, 1L)
 })
 
+test_that("one tool's rules dated differently keep the earliest as a floor without a warning", {
+  # mlr-org/mlr3tuning's week: a commit's address bounds the start, a pull request's footer dates later.
+  found <- cbind(repo_id = "github.com/mlr-org/mlr3tuning",
+                 .ai_found(c("claude", "claude"), c("B", "PB"), c("msg.claude.address", "pr.claude.footer"),
+                           onset = c("2026-03-17T07:23:36Z", "2026-06-11T09:25:27Z"),
+                           onset_censored = c(1L, 0L)))
+  expect_no_warning(r <- build_cheap_rows(found, "2026-09-27"))
+  expect_equal(r$first_seen_date, "2026-03-17T07:23:36Z")
+  expect_equal(r$first_seen_censored, 1L)
+  ev <- data.frame(tool = c("claude", "claude"), tier = c("B", "PB"),
+                   marker = c("msg.claude.address", "pr.claude.footer"), agnostic = 0L,
+                   stringsAsFactors = FALSE)
+  on <- data.frame(tool = ev$tool, marker = ev$marker,
+                   first_seen_date = c("2026-03-17T07:23:36Z", "2026-06-11T09:25:27Z"),
+                   first_seen_censored = c(1L, 0L), stringsAsFactors = FALSE)
+  expect_no_warning(d <- build_ai_detail("github.com/mlr-org/mlr3tuning", ev, on, "2026-09-27"))
+  expect_equal(d$first_seen_date, "2026-03-17T07:23:36Z")
+  expect_equal(d$first_seen_censored, 1L)
+})
+
+test_that("a value dated exactly after its own floor still warns", {
+  mk <- function(date, cens) cbind(row("claude", date, cens, "B", 0L, "2026-09-27"),
+                                   markers = "msg.claude.coauthor", stringsAsFactors = FALSE)
+  expect_warning(
+    o <- ai_onset_reducer(mk("2026-03-17T07:23:36Z", 1L), mk("2026-05-01T00:00:00Z", 0L)),
+    "contradiction")
+  expect_equal(o$first_seen_date, "2026-03-17T07:23:36Z"); expect_equal(o$first_seen_censored, 1L)
+})
+
 test_that("reducer keeps distinct tools as distinct rows", {
   o <- ai_onset_reducer(row("claude","2024-01-01",0L,"A",0L,"2024-01-01"),
                         row("cursor","2024-02-01",0L,"D",0L,"2024-02-01"))

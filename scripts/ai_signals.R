@@ -638,8 +638,20 @@ order_ai_tools <- function(ai_rows) {
   else if (!length(floors)) { fs <- min(exact); fc <- 0L }         # exacts only
   else if (min(exact) <= min(floors)) { fs <- min(exact); fc <- 0L } # exact consistent with floor
   else {                                                            # exact later than a floor
-    warning(sprintf("ai onset contradiction for %s/%s: exact %s later than floor %s; keeping floor",
-                    g$repo_id[1], g$tool[1], min(exact), min(floors)))
+    # Only a value dated exactly after its own floor contradicts itself; different rules date different things.
+    key <- if (is.null(g$markers)) rep("", nrow(g)) else ifelse(is.na(g$markers), "", g$markers)
+    key <- key[ok]
+    own <- lapply(split(seq_along(dates), key), function(ix) {
+      e <- dates[ix][which(cens[ix] == 0L)]; f <- dates[ix][which(cens[ix] == 1L)]
+      if (length(e) && length(f) && min(e) > min(f)) c(min(e), min(f))
+    })
+    own <- Filter(Negate(is.null), own)
+    if (length(own)) {
+      v <- names(own)[1]
+      warning(sprintf("ai onset contradiction for %s/%s: %s dated exactly %s, later than its floor %s; keeping floor",
+                      g$repo_id[1], g$tool[1], if (nzchar(v)) v else "an unnamed value",
+                      own[[1]][1], own[[1]][2]))
+    }
     fs <- min(floors); fc <- 1L
   }
   tiers <- sort(unique(unlist(lapply(g$evidence_tiers, .ai_split_tiers))))
