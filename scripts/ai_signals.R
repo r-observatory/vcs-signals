@@ -1554,9 +1554,9 @@ more_commit_pages <- function(plan, oldest, has_next, pages_done) {
 next_commit_read_state <- function(prev, plan, commits, has_next, today, ruleset = AI_RULESET_VERSION) {
   dates <- commits$committed_at[!is.na(commits$committed_at)]
   oldest <- if (length(dates)) min(dates) else NA_character_
-  reached_first <- !isTRUE(has_next) && !identical(plan$shape, "weekly")
+  reached_first <- identical(has_next, FALSE) && !identical(plan$shape, "weekly")
   window <- if (identical(plan$shape, "first")) 1L
-            else if (identical(plan$shape, "weekly")) as.integer(!isTRUE(has_next))
+            else if (identical(plan$shape, "weekly")) as.integer(identical(has_next, FALSE))
             else as.integer(reached_first || (!isTRUE(plan$to_first) && !is.na(plan$bound) &&
                                               !is.na(oldest) && substr(oldest, 1, 10) <= plan$bound))
   history <- if (identical(plan$shape, "weekly"))
@@ -1614,13 +1614,14 @@ read_model_rows <- function(repo_id, commits, hits, mode, after = NA_character_)
 #' for a repository with more than fifty; afterwards only until the stored newest date.
 plan_pr_pages <- function(read, page1) {
   if (is.null(page1) || !isTRUE(page1$prs_has_next)) return(list(walk = FALSE))
+  oldest <- .ai_earliest_chr(page1$prs$created_at)
+  if (isTRUE(oldest < AI_PR_CUTOFF)) return(list(walk = FALSE))
   if (!isTRUE(.ai_col1(read, "prs_walk_complete") == 1L)) {
     cursor <- .ai_col1(read, "prs_walk_cursor")
     return(list(walk = TRUE, after = if (is.na(cursor)) page1$prs_end_cursor else cursor,
                 stop_before = AI_PR_CUTOFF, kind = "walk"))
   }
   newest <- .ai_col1(read, "prs_newest_created_at")
-  oldest <- .ai_earliest_chr(page1$prs$created_at)
   if (!is.na(newest) && !is.na(oldest) && oldest > newest)
     return(list(walk = TRUE, after = page1$prs_end_cursor, stop_before = newest, kind = "catch-up"))
   list(walk = FALSE)
@@ -1630,18 +1631,23 @@ plan_pr_pages <- function(read, page1) {
 more_pr_pages <- function(plan, oldest, has_next, points_left)
   isTRUE(plan$walk) && isTRUE(has_next) && points_left > 0 && (is.na(oldest) || oldest > plan$stop_before)
 
-#' The pull request columns of vcs_ai_repo_reads after page one and any walk. Pure.
+#' The pull request columns of vcs_ai_repo_reads after page one and any walk. The newest date moves
+#' only once every pull request after the stored one has been read, so a short catch-up runs again. Pure.
 next_pr_read_state <- function(prev, page1, plan, walked, today) {
   started <- .ai_col1(prev, "prs_walk_started_on")
-  newest <- .ai_latest_chr(c(as.character(.ai_col1(prev, "prs_newest_created_at")), page1$prs$created_at))
+  stored <- as.character(.ai_col1(prev, "prs_newest_created_at"))
+  oldest1 <- .ai_earliest_chr(page1$prs$created_at)
+  stopped <- isTRUE(walked$reached_stop) || identical(walked$has_next, FALSE)
+  caught_up <- is.na(stored) || !isTRUE(page1$prs_has_next) || isTRUE(oldest1 <= stored) ||
+    (identical(plan$kind, "catch-up") && stopped)
+  newest <- if (caught_up) .ai_latest_chr(c(stored, page1$prs$created_at)) else stored
   # Nothing past page one, or a walk finished in an earlier week.
   if (!isTRUE(page1$prs_has_next) || !isTRUE(plan$walk) || identical(plan$kind, "catch-up"))
     return(list(prs_read_on = today, prs_newest_created_at = newest, prs_walk_complete = 1L,
                 prs_walk_started_on = if (is.na(started)) today else started, prs_walk_cursor = NA_character_))
-  complete <- isTRUE(walked$reached_stop) || !isTRUE(walked$has_next)
-  list(prs_read_on = today, prs_newest_created_at = newest, prs_walk_complete = as.integer(complete),
+  list(prs_read_on = today, prs_newest_created_at = newest, prs_walk_complete = as.integer(stopped),
        prs_walk_started_on = if (is.na(started)) today else started,
-       prs_walk_cursor = if (complete) NA_character_ else walked$end_cursor)
+       prs_walk_cursor = if (stopped) NA_character_ else as.character(walked$end_cursor %||% plan$after))
 }
 
 #' New-tool gate for the weekly incremental. Returns the subset of flagged repo_ids that

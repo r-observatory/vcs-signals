@@ -238,3 +238,106 @@ test_that("a weekly read's rows name the watermark they counted after, so the lo
   kept <- fold_search_log(prior, add, rebuilt_repos = character(0), reads = later)
   expect_equal(kept$total_count[kept$rule_key == "msg.claude.coauthor"], 1L)
 })
+
+.page1 <- function(dates, has_next = TRUE, cursor = "P1")
+  list(prs = data.frame(created_at = dates, stringsAsFactors = FALSE), prs_has_next = has_next,
+       prs_end_cursor = cursor)
+.st <- function(s) as.data.frame(s, stringsAsFactors = FALSE)
+
+test_that("a catch-up that stops short keeps the stored newest date, so next week catches up again", {
+  page1 <- .page1(c("2026-10-01T00:00:00Z", "2026-09-01T00:00:00Z"))
+  prev <- data.frame(prs_read_on = "2026-09-27", prs_walk_complete = 1L,
+                     prs_newest_created_at = "2026-05-01T00:00:00Z", prs_walk_started_on = "2026-09-13",
+                     stringsAsFactors = FALSE)
+  plan <- plan_pr_pages(prev, page1)
+  # Out of points before the stored date, or the page failed.
+  for (w in list(list(has_next = TRUE, end_cursor = "P3", reached_stop = FALSE), NULL)) {
+    st <- next_pr_read_state(prev, page1, plan, w, "2026-10-04")
+    expect_equal(st$prs_newest_created_at, "2026-05-01T00:00:00Z"); expect_equal(st$prs_walk_complete, 1L)
+    nxt <- plan_pr_pages(.st(st), .page1(c("2026-10-09T00:00:00Z", "2026-10-05T00:00:00Z")))
+    expect_equal(nxt$kind, "catch-up"); expect_equal(nxt$stop_before, "2026-05-01T00:00:00Z")
+  }
+  for (w in list(list(has_next = TRUE, end_cursor = "P4", reached_stop = TRUE),
+                 list(has_next = FALSE, end_cursor = NA_character_, reached_stop = FALSE)))
+    expect_equal(next_pr_read_state(prev, page1, plan, w, "2026-10-04")$prs_newest_created_at,
+                 "2026-10-01T00:00:00Z")
+  # Every pull request since the stored date fits on page one.
+  quiet <- .page1(page1$prs$created_at, has_next = FALSE)
+  st <- next_pr_read_state(prev, quiet, plan_pr_pages(prev, quiet), NULL, "2026-10-04")
+  expect_equal(st$prs_newest_created_at, "2026-10-01T00:00:00Z")
+})
+
+test_that("a busy week during the walk keeps the stored newest date until a catch-up reaches it", {
+  w1 <- .page1(c("2026-09-20T00:00:00Z", "2026-09-10T00:00:00Z"))
+  s1 <- next_pr_read_state(NULL, w1, plan_pr_pages(NULL, w1),
+                           list(has_next = TRUE, end_cursor = "A150", reached_stop = FALSE), "2026-09-27")
+  expect_equal(s1$prs_newest_created_at, "2026-09-20T00:00:00Z")
+  # More than fifty new pull requests: page one stops at 10-01, the walk resumes older than 09-10.
+  w2 <- .page1(c("2026-10-03T00:00:00Z", "2026-10-01T00:00:00Z"), cursor = "P2")
+  p2 <- plan_pr_pages(.st(s1), w2)
+  expect_equal(p2$after, "A150")
+  done <- list(has_next = FALSE, end_cursor = NA_character_, reached_stop = TRUE)
+  s2 <- next_pr_read_state(.st(s1), w2, p2, done, "2026-10-04")
+  expect_equal(s2$prs_walk_complete, 1L); expect_equal(s2$prs_newest_created_at, "2026-09-20T00:00:00Z")
+  p3 <- plan_pr_pages(.st(s2), .page1(c("2026-10-09T00:00:00Z", "2026-10-05T00:00:00Z")))
+  expect_equal(p3$kind, "catch-up"); expect_equal(p3$stop_before, "2026-09-20T00:00:00Z")
+  # A page one that reaches back past the stored date read everything since it.
+  w3 <- .page1(c("2026-10-10T00:00:00Z", "2026-09-15T00:00:00Z"))
+  s3 <- next_pr_read_state(.st(s2), w3, plan_pr_pages(.st(s2), w3), NULL, "2026-10-11")
+  expect_equal(s3$prs_newest_created_at, "2026-10-10T00:00:00Z")
+})
+
+test_that("a read whose next-page flag is missing is never taken for a whole history or a finished walk", {
+  for (hn in list(NULL, NA)) {
+    st <- next_commit_read_state(NULL, plan_commit_read(NULL), .commits("2026-09-20T00:00:00Z"), has_next = hn,
+                                 today = "2026-10-04")
+    expect_equal(c(st$commits_history_complete, st$reached_first), c(0L, 0L))
+    expect_true(is.na(read_count_mode(plan_commit_read(NULL), st)))
+  }
+  weekly <- data.frame(commits_read_on = "2026-09-27", commits_read_through = "2026-09-26T00:00:00Z",
+                       commits_ruleset = AI_RULESET_VERSION, commits_history_complete = 1L,
+                       stringsAsFactors = FALSE)
+  st <- next_commit_read_state(weekly, plan_commit_read(weekly), .commits("2026-10-01T00:00:00Z"),
+                               has_next = NA, today = "2026-10-04")
+  expect_equal(c(st$commits_window_complete, st$commits_history_complete), c(0L, 0L))
+  page1 <- .page1(c("2026-10-01T00:00:00Z", "2026-06-01T00:00:00Z"))
+  st <- next_pr_read_state(NULL, page1, plan_pr_pages(NULL, page1),
+                           list(has_next = NA, end_cursor = "P2", reached_stop = FALSE), "2026-10-04")
+  expect_equal(st$prs_walk_complete, 0L); expect_equal(st$prs_walk_cursor, "P2")
+  # A walk page that failed keeps the cursor the walk started from.
+  resumed <- data.frame(prs_walk_complete = 0L, prs_walk_cursor = "P9",
+                        prs_newest_created_at = "2026-09-20T00:00:00Z", stringsAsFactors = FALSE)
+  for (prev in list(NULL, resumed)) {
+    st <- next_pr_read_state(prev, page1, plan_pr_pages(prev, page1), NULL, "2026-10-04")
+    expect_equal(st$prs_walk_complete, 0L)
+    expect_identical(st$prs_walk_cursor, if (is.null(prev)) "P1" else "P9")
+  }
+})
+
+test_that("a ruleset change stops paging a partial history at two weeks before its watermark", {
+  prev <- data.frame(commits_read_on = "2026-09-27", commits_read_through = "2026-10-01T00:00:00Z",
+                     commits_ruleset = "2026-01-01", commits_history_complete = 0L, stringsAsFactors = FALSE)
+  plan <- plan_commit_read(prev)
+  expect_equal(plan$bound, "2026-09-17")
+  expect_true(more_commit_pages(plan, "2026-09-18T00:00:00Z", TRUE, 0L))
+  expect_false(more_commit_pages(plan, "2026-09-17T23:00:00Z", TRUE, 0L))
+  st <- next_commit_read_state(prev, plan, .commits(c("2026-10-01T00:00:00Z", "2026-09-17T23:00:00Z")),
+                               has_next = TRUE, today = "2026-10-04")
+  expect_equal(c(st$commits_window_complete, st$commits_history_complete), c(1L, 0L))
+  expect_true(is.na(read_count_mode(plan, st)))
+  short <- next_commit_read_state(prev, plan, .commits(rep("2026-09-18T00:00:00Z", 600)), has_next = TRUE,
+                                  today = "2026-10-04")
+  expect_equal(short$commits_window_complete, 0L)
+})
+
+test_that("a page one that already reaches before the cutoff needs no walk", {
+  page1 <- .page1(c("2023-06-01T00:00:00Z", "2022-11-01T00:00:00Z"))
+  expect_false(plan_pr_pages(NULL, page1)$walk)
+  resumed <- data.frame(prs_walk_complete = 0L, prs_walk_cursor = "P9", stringsAsFactors = FALSE)
+  expect_false(plan_pr_pages(resumed, page1)$walk)
+  for (prev in list(NULL, resumed)) {
+    st <- next_pr_read_state(prev, page1, plan_pr_pages(prev, page1), NULL, "2026-10-04")
+    expect_equal(st$prs_walk_complete, 1L); expect_true(is.na(st$prs_walk_cursor))
+    expect_equal(st$prs_newest_created_at, "2023-06-01T00:00:00Z")
+  }
+})
