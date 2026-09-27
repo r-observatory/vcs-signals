@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       full_gate:
-        description: "Ask every rule of every flagged repository again, as a campaign later dispatches resume"
+        description: "Start a search campaign, or resume the open one: ask every search not asked since it began"
         type: boolean
         default: false
 permissions:
@@ -130,7 +130,7 @@ jobs:
           FULL_GATE: ${{ inputs.full_gate }}
         run: |
           if [ "$FULL_GATE" = "true" ]; then
-            echo "full gate: re-deep-scanning every flagged repo"
+            echo "full gate: asking every search not asked since the campaign began"
             Rscript scripts/ai_backfill.R gate
           else
             Rscript scripts/ai_backfill.R gate-incremental
