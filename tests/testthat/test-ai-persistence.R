@@ -77,3 +77,112 @@ test_that("a failed asset upload stops the run rather than publishing green", {
                       tempfile(fileext = ".db")),
     "gh release upload failed")
 })
+
+.row <- function(n, on, col = "authored") {
+  r <- .ai_align_signals(data.frame(repo_id = "github.com/o/r", tool = "claude", first_seen_date = "2026-01-01",
+    first_seen_censored = 0L, evidence_tiers = "A", authored = 1L, last_confirmed_date = "2026-10-04",
+    stringsAsFactors = FALSE))
+  r[[paste0(col, "_commits")]] <- as.integer(n); r[[paste0(col, "_measured_on")]] <- on
+  r
+}
+.log <- function(repo, key, outcome, n, src = "search", on = "2026-10-05", first = "2025-01-02", rev = 1L)
+  data.frame(repo_id = repo, rule_key = key, rule_rev = rev, ruleset_version = AI_RULESET_VERSION,
+             asked_on = on, outcome = outcome, total_count = if (outcome == "refused") NA_integer_ else as.integer(n),
+             verified = if (outcome == "hit") 1L else NA_integer_, incomplete = 0L,
+             first_hit_on = if (outcome == "hit") first else NA_character_, source = src, stringsAsFactors = FALSE)
+.key_rev <- function(key) Find(function(r) r$key == key, c(AI_TRAILER_PATTERNS, AI_AUTHOR_SUFFIXES))$rev
+
+test_that("the latest measured count wins over a larger older one", {
+  out <- ai_onset_reducer(.row(57, "2026-09-27"), .row(40, "2026-10-04"))
+  expect_equal(out$authored_commits, 40L)
+  expect_equal(out$authored_measured_on, "2026-10-04")
+})
+
+test_that("rows written before counts were dated still take the largest", {
+  out <- ai_onset_reducer(.row(7, NA), .row(57, NA))
+  expect_equal(out$authored_commits, 57L)
+})
+
+test_that("a credit count is the largest usable rule count, and zero only when every rule answered none", {
+  r <- "github.com/o/r"
+  sig <- .row(NA, NA, "assisted")
+  sig$evidence_tiers <- "B"; sig$markers <- "msg.claude.coauthor"
+  hit <- rbind(.log(r, "msg.claude.coauthor", "hit", 37, first = "2025-06-01"),
+               .log(r, "msg.claude.generated", "hit", 12))
+  got <- derive_assisted_counts(sig, hit, .ai_empty_reads())
+  expect_equal(got$assisted_commits, 37L); expect_equal(got$assisted_measured_on, "2026-10-05")
+  claude_always <- Filter(function(x) identical(x$tool, "claude") && identical(x$search, "always"),
+                          c(AI_TRAILER_PATTERNS, AI_AUTHOR_SUFFIXES))
+  none <- do.call(rbind, lapply(claude_always, function(x) .log(r, x$key, "none", 0, rev = x$rev)))
+  expect_equal(derive_assisted_counts(sig, none, .ai_empty_reads())$assisted_commits, 0L)
+  some_refused <- none; some_refused$outcome[1] <- "refused"; some_refused$total_count[1] <- NA_integer_
+  expect_true(is.na(derive_assisted_counts(sig, some_refused, .ai_empty_reads())$assisted_commits))
+})
+
+test_that("Assisted-by counts come from a read of the whole history, never from its search", {
+  r <- "github.com/o/r"
+  cop <- .row(NA, NA, "assisted"); cop$tool <- "copilot"; cop$evidence_tiers <- "B"
+  cla <- .row(NA, NA, "assisted"); cla$evidence_tiers <- "B"
+  log <- rbind(.log(r, "msg.any.assisted-by.copilot", "hit", 50, src = "read"),
+               .log(r, "msg.any.assisted-by.claude", "hit", 1, src = "read"))
+  got <- derive_assisted_counts(rbind(cop, cla), log, .ai_empty_reads())
+  expect_equal(got$assisted_commits[got$tool == "copilot"], 50L)
+  expect_equal(got$assisted_commits[got$tool == "claude"], 1L)
+  only_search <- .log(r, "msg.any.assisted-by", "hit", 51)
+  expect_true(is.na(derive_assisted_counts(cop, only_search, .ai_empty_reads())$assisted_commits))
+})
+
+test_that("a VS Code Copilot count is used only when its earliest hit is after the false window", {
+  r <- "github.com/o/r"
+  cop <- .row(NA, NA, "assisted"); cop$tool <- "copilot"; cop$evidence_tiers <- "B"
+  early <- .log(r, "msg.copilot.vscode", "hit", 9, first = "2026-04-25")
+  late <- .log(r, "msg.copilot.vscode", "hit", 9, first = "2026-05-07")
+  expect_true(is.na(derive_assisted_counts(cop, early, .ai_empty_reads())$assisted_commits))
+  expect_equal(derive_assisted_counts(cop, late, .ai_empty_reads())$assisted_commits, 9L)
+})
+
+test_that("a whole-history read that matched no credit rule is a measured zero", {
+  r <- "github.com/o/r"
+  sig <- .row(NA, NA, "assisted"); sig$evidence_tiers <- "D"
+  reads <- .ai_bind_like(.ai_empty_reads(), list(data.frame(repo_id = r, commits_read_on = "2026-10-04",
+    commits_ruleset = AI_RULESET_VERSION, commits_history_complete = 1L, stringsAsFactors = FALSE)))
+  got <- derive_assisted_counts(sig, .ai_empty_log(), reads)
+  expect_equal(got$assisted_commits, 0L); expect_equal(got$assisted_measured_on, "2026-10-04")
+})
+
+test_that("the search log keeps the latest answer, and a weekly read adds to a whole-history count", {
+  r <- "github.com/o/r"
+  prior <- rbind(.log(r, "msg.claude.coauthor", "hit", 10, src = "read", on = "2026-10-04"),
+                 .log(r, "msg.cursor.made-with", "refused", NA, on = "2026-10-04"))
+  add <- .log(r, "msg.claude.coauthor", "hit", 3, src = "read", on = "2026-10-11", first = "2026-10-08")
+  add$mode <- "add"
+  ask <- .log(r, "msg.cursor.made-with", "none", 0, on = "2026-10-12"); ask$mode <- NA_character_
+  got <- fold_search_log(prior, rbind(add, ask), rebuilt_repos = character(0))
+  expect_equal(got$total_count[got$rule_key == "msg.claude.coauthor"], 13L)
+  expect_equal(got$first_hit_on[got$rule_key == "msg.claude.coauthor"], "2025-01-02")
+  expect_equal(got$outcome[got$rule_key == "msg.cursor.made-with"], "none")
+  rebuilt <- fold_search_log(prior, .ai_empty_log(), rebuilt_repos = r)
+  expect_equal(nrow(rebuilt), 0L)
+  expect_false("mode" %in% names(got))
+})
+
+test_that("review rows fold to one per tool and take their count and first date from the log", {
+  r <- "github.com/o/r"
+  rv <- review_rows(.ai_found(c("copilot-review", "copilot-review"), "B", "review.copilot.suggestion",
+                              role = "review", rule_key = "review.copilot.suggestion",
+                              onset = c("2026-09-01T00:00:00Z", "2026-08-01T00:00:00Z")), r, "2026-10-04")
+  folded <- fold_review_rows(.ai_empty_review(), rv)
+  expect_equal(nrow(folded), 1L); expect_equal(folded$first_seen_date, "2026-08-01T00:00:00Z")
+  got <- derive_review_counts(folded, .log(r, "review.copilot.suggestion", "hit", 4, first = "2025-12-01"))
+  expect_equal(got$assisted_commits, 4L); expect_equal(got$first_seen_date, "2025-12-01")
+  expect_equal(got$first_seen_censored, 0L)
+})
+
+test_that("an outside pull request seen again keeps one row with the newest date", {
+  o <- data.frame(repo_id = "g", pr_number = 927L, tool = "cursor", found_via = "pr.cursor.agent-branch",
+                  created_at = "2026-08-28T09:43:30Z", from_fork = 1L, author_association = "NONE",
+                  last_confirmed_date = "2026-10-04", stringsAsFactors = FALSE)
+  o2 <- o; o2$last_confirmed_date <- "2026-10-11"
+  got <- fold_outside_prs(o, o2)
+  expect_equal(nrow(got), 1L); expect_equal(got$last_confirmed_date, "2026-10-11")
+})

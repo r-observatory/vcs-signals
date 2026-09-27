@@ -607,6 +607,24 @@ order_ai_tools <- function(ai_rows) {
   if (length(x)) max(x) else NA_character_
 }
 
+# The earliest of a date column, NA when no row carries one.
+.ai_earliest_chr <- function(x) {
+  x <- x[!is.na(x)]
+  if (length(x)) min(x) else NA_character_
+}
+
+# A count column reduced by date: the value measured most recently wins, ties take the
+# larger, and rows written before counts were dated fall back to the largest. Pure.
+.ai_latest_count <- function(counts, dates) {
+  if (is.null(counts)) return(NA_integer_)
+  counts <- suppressWarnings(as.integer(counts))
+  dates <- if (is.null(dates) || length(dates) != length(counts)) rep(NA_character_, length(counts))
+           else as.character(dates)
+  dated <- !is.na(dates) & !is.na(counts)
+  if (any(dated)) return(max(counts[dated & dates == max(dates[dated])]))
+  .ai_max_count(counts)
+}
+
 .ai_reduce_group <- function(g) {
   dates <- g$first_seen_date; cens <- as.integer(g$first_seen_censored)
   ok <- !is.na(dates)
@@ -636,7 +654,7 @@ order_ai_tools <- function(ai_rows) {
              # before the counts existed has authored = 1 and no number, and
              # deriving strictly would silently reset all of them to 0.
              authored = {
-               n <- .ai_max_count(g$authored_commits)
+               n <- .ai_latest_count(g$authored_commits, g$authored_measured_on)
                if (!is.na(n) && n > 0L) 1L
                # Tier A IS the authorship channel: it is recorded when an author
                # search matched this identity in this repository. Evidence tiers
@@ -649,11 +667,9 @@ order_ai_tools <- function(ai_rows) {
                # written before the counts existed carries it and nothing else.
                else as.integer(any(as.integer(g$authored) == 1L, na.rm = TRUE))
              },
-             # Max, not sum: two patterns for one tool can match the same commit,
-             # so summing double-counts it. Max is a floor and stays a floor.
-             # all-NA stays NA, because "nobody asked" is not "asked and got 0".
-             authored_commits = .ai_max_count(g$authored_commits),
-             assisted_commits = .ai_max_count(g$assisted_commits),
+             # The latest measurement wins so a wrong high value can be corrected.
+             authored_commits = .ai_latest_count(g$authored_commits, g$authored_measured_on),
+             assisted_commits = .ai_latest_count(g$assisted_commits, g$assisted_measured_on),
              last_confirmed_date = if (length(lc)) max(lc) else NA_character_,
              authored_measured_on = .ai_latest_chr(g$authored_measured_on),
              assisted_measured_on = .ai_latest_chr(g$assisted_measured_on),
@@ -973,6 +989,223 @@ ai_onset_reducer <- function(prior_rows, incoming_rows) {
   key <- paste(all_rows$repo_id, all_rows$tool, sep = "\r")
   parts <- lapply(split(all_rows, key), .ai_reduce_group)
   do.call(rbind, parts)
+}
+
+.ai_empty_log <- function()
+  data.frame(repo_id = character(), rule_key = character(), rule_rev = integer(),
+             ruleset_version = character(), asked_on = character(), outcome = character(),
+             total_count = integer(), verified = integer(), incomplete = integer(),
+             first_hit_on = character(), source = character(), stringsAsFactors = FALSE)
+.ai_empty_reads <- function()
+  data.frame(repo_id = character(), commits_read_on = character(), commits_read_through = character(),
+             commits_ruleset = character(), commits_read = integer(), commits_window_complete = integer(),
+             commits_history_complete = integer(), prs_read_on = character(),
+             prs_newest_created_at = character(), prs_walk_complete = integer(),
+             prs_walk_started_on = character(), prs_walk_cursor = character(),
+             accounts_counted_on = character(), last_failed_on = character(), last_failure = character(),
+             stringsAsFactors = FALSE)
+.ai_empty_counts <- function()
+  data.frame(repo_id = character(), tool = character(), identity_set = character(), commits = integer(),
+             newest_commit_date = character(), measured_on = character(), stringsAsFactors = FALSE)
+.ai_empty_outside <- function()
+  data.frame(repo_id = character(), pr_number = integer(), tool = character(), found_via = character(),
+             created_at = character(), from_fork = integer(), author_association = character(),
+             last_confirmed_date = character(), stringsAsFactors = FALSE)
+
+#' Stack frames on the column set of `empty`: a missing column is NA of its type, an
+#' extra one is dropped. Partials written by older code carry fewer columns. Pure.
+.ai_bind_like <- function(empty, frames) {
+  frames <- Filter(function(f) !is.null(f) && nrow(f) > 0, frames)
+  if (!length(frames)) return(empty)
+  do.call(rbind, lapply(frames, function(f) {
+    for (cn in setdiff(names(empty), names(f))) f[[cn]] <- rep(empty[[cn]][NA_integer_], nrow(f))
+    f[, names(empty), drop = FALSE]
+  }))
+}
+
+#' Fold this run's read state over the stored state, one column group at a time: a group
+#' moves only when this run read it, so a failed read leaves last week's watermark. Pure.
+fold_repo_reads <- function(prior, incoming) {
+  empty <- .ai_empty_reads()
+  prior <- .ai_bind_like(empty, list(prior)); incoming <- .ai_bind_like(empty, list(incoming))
+  groups <- list(
+    commits_read_on = c("commits_read_on", "commits_read_through", "commits_ruleset", "commits_read",
+                        "commits_window_complete", "commits_history_complete"),
+    prs_read_on = c("prs_read_on", "prs_newest_created_at", "prs_walk_complete", "prs_walk_started_on",
+                    "prs_walk_cursor"),
+    accounts_counted_on = "accounts_counted_on",
+    last_failed_on = c("last_failed_on", "last_failure"))
+  for (i in seq_len(nrow(incoming))) {
+    k <- match(incoming$repo_id[i], prior$repo_id)
+    if (is.na(k)) { prior <- rbind(prior, incoming[i, , drop = FALSE]); next }
+    for (g in names(groups)) if (!is.na(incoming[[g]][i])) prior[k, groups[[g]]] <- incoming[i, groups[[g]]]
+  }
+  prior
+}
+
+#' Keep the newest count per repository, tool and address set. A repository counted this
+#' run has no GraphQL count left for a tool with no commits now; REST counts stand. Pure.
+fold_account_counts <- function(prior, incoming, counted_repos) {
+  empty <- .ai_empty_counts()
+  inc <- .ai_bind_like(empty, list(incoming))
+  pri <- .ai_bind_like(empty, list(prior))
+  inc_graphql <- paste(inc$repo_id, inc$tool)[inc$identity_set == "graphql"]
+  stale <- pri$identity_set == "graphql" & pri$repo_id %in% counted_repos &
+           !(paste(pri$repo_id, pri$tool) %in% inc_graphql)
+  all <- rbind(inc, pri[!stale, , drop = FALSE])
+  all <- all[order(all$measured_on, decreasing = TRUE), , drop = FALSE]
+  all[!duplicated(paste(all$repo_id, all$tool, all$identity_set, sep = "\r")), , drop = FALSE]
+}
+
+#' Fold this run's searches and whole-history matches into the log. A repository read to
+#' its first commit this run loses its older commit-credit, name and review rows first,
+#' since the read answered every such rule. Pure.
+fold_search_log <- function(prior, incoming, rebuilt_repos = character(0)) {
+  empty <- .ai_empty_log()
+  pri <- .ai_bind_like(empty, list(prior))
+  local_key <- grepl("^(msg|name|review)\\.", pri$rule_key)
+  pri <- pri[!(pri$repo_id %in% rebuilt_repos & local_key), , drop = FALSE]
+  if (is.null(incoming) || !nrow(incoming)) return(pri)
+  mode <- if ("mode" %in% names(incoming)) incoming$mode else rep(NA_character_, nrow(incoming))
+  inc <- .ai_bind_like(empty, list(incoming))
+  add <- inc[!is.na(mode) & mode == "add", , drop = FALSE]
+  all <- rbind(inc[is.na(mode) | mode != "add", , drop = FALSE], pri)
+  all <- all[order(all$asked_on, decreasing = TRUE), , drop = FALSE]
+  all <- all[!duplicated(paste(all$repo_id, all$rule_key, sep = "\r")), , drop = FALSE]
+  for (i in seq_len(nrow(add))) {
+    k <- which(all$repo_id == add$repo_id[i] & all$rule_key == add$rule_key[i] & all$source == "read")
+    if (!length(k)) { all <- rbind(all, add[i, , drop = FALSE]); next }
+    all$total_count[k] <- all$total_count[k] + add$total_count[i]
+    all$first_hit_on[k] <- .ai_earliest_chr(c(all$first_hit_on[k], add$first_hit_on[i]))
+    all[k, c("asked_on", "rule_rev", "ruleset_version")] <- add[i, c("asked_on", "rule_rev", "ruleset_version")]
+  }
+  rownames(all) <- NULL
+  all
+}
+
+#' One review row per repository and tool: codes and values united, the earliest date
+#' kept (an exact one wins a tie), the latest confirmation kept. Pure.
+fold_review_rows <- function(prior, incoming) {
+  all <- .ai_bind_like(.ai_empty_review(), list(prior, incoming))
+  if (!nrow(all)) return(.ai_empty_review())
+  uni <- function(x) { v <- sort(unique(unlist(lapply(x, .ai_split_tiers)))); if (length(v)) paste(v, collapse = ",") else NA_character_ }
+  do.call(rbind, unname(lapply(split(all, paste(all$repo_id, all$tool, sep = "\r")), function(g) {
+    ok <- !is.na(g$first_seen_date)
+    first <- if (any(ok)) {
+      o <- order(g$first_seen_date[ok], g$first_seen_censored[ok]); g[ok, , drop = FALSE][o[1], ]
+    } else g[1, ]
+    data.frame(repo_id = g$repo_id[1], tool = g$tool[1],
+               first_seen_date = if (any(ok)) first$first_seen_date else NA_character_,
+               first_seen_censored = if (any(ok)) as.integer(first$first_seen_censored) else 0L,
+               evidence_tiers = uni(g$evidence_tiers), markers = uni(g$markers),
+               assisted_commits = .ai_latest_count(g$assisted_commits, g$assisted_measured_on),
+               assisted_measured_on = .ai_latest_chr(g$assisted_measured_on),
+               last_confirmed_date = .ai_latest_chr(g$last_confirmed_date), stringsAsFactors = FALSE)
+  })))
+}
+
+#' One row per outside pull request and tool; the newest sighting wins. Pure.
+fold_outside_prs <- function(prior, incoming) {
+  all <- .ai_bind_like(.ai_empty_outside(), list(incoming, prior))
+  all <- all[order(all$last_confirmed_date, decreasing = TRUE), , drop = FALSE]
+  all[!duplicated(paste(all$repo_id, all$pr_number, all$tool, sep = "\r")), , drop = FALSE]
+}
+
+#' Commit-credit and author-name rules with their tool, revision and search mode. Pure.
+.ai_credit_rules <- function()
+  do.call(rbind, lapply(c(AI_TRAILER_PATTERNS, AI_AUTHOR_SUFFIXES), function(r)
+    data.frame(key = r$key, tool = r$tool, rev = as.integer(r$rev), search = r$search, stringsAsFactors = FALSE)))
+
+#' authored_commits: the sum of a tool's account counts in a repository whose accounts
+#' were counted, 0 when counted with none, NA for a tool with no accounts. A repository
+#' never counted keeps what it had. Pure.
+derive_authored_counts <- function(signals, counts, reads) {
+  if (is.null(signals) || !nrow(signals)) return(signals)
+  counts <- .ai_bind_like(.ai_empty_counts(), list(counts))
+  reads <- .ai_bind_like(.ai_empty_reads(), list(reads))
+  acct <- vapply(AI_ACCOUNTS, `[[`, "", "tool")
+  key <- paste(counts$repo_id, counts$tool, sep = "\r")
+  n <- if (nrow(counts)) tapply(counts$commits, key, sum) else integer(0)
+  on <- if (nrow(counts)) tapply(counts$measured_on, key, max) else character(0)
+  counted_on <- reads$accounts_counted_on[match(signals$repo_id, reads$repo_id)]
+  for (i in seq_len(nrow(signals))) {
+    if (!(signals$tool[i] %in% acct)) {
+      signals$authored_commits[i] <- NA_integer_; signals$authored_measured_on[i] <- NA_character_; next
+    }
+    if (is.na(counted_on[i])) next
+    k <- paste(signals$repo_id[i], signals$tool[i], sep = "\r")
+    signals$authored_commits[i] <- if (k %in% names(n)) as.integer(n[[k]]) else 0L
+    signals$authored_measured_on[i] <- if (k %in% names(on)) on[[k]] else counted_on[i]
+    tiers <- .ai_split_tiers(signals$evidence_tiers[i])
+    signals$authored[i] <- if (signals$authored_commits[i] > 0L || "A" %in% tiers) 1L else 0L
+  }
+  signals
+}
+
+#' assisted_commits: the largest usable commit-credit count of the tool, a floor. The
+#' Assisted-by search and VS Code Copilot hits that may fall in its false window are not
+#' usable. 0 only where a whole-history read matched none of the tool's rules or every
+#' always rule answered none at its current revision; otherwise the stored value stands. Pure.
+derive_assisted_counts <- function(signals, log, reads, ruleset = AI_RULESET_VERSION) {
+  if (is.null(signals) || !nrow(signals)) return(signals)
+  log <- .ai_bind_like(.ai_empty_log(), list(log))
+  reads <- .ai_bind_like(.ai_empty_reads(), list(reads))
+  rules <- .ai_credit_rules()
+  log$tool <- rules$tool[match(log$rule_key, rules$key)]
+  ab <- startsWith(log$rule_key, "msg.any.assisted-by.")
+  log$tool[ab] <- sub("^msg\\.any\\.assisted-by\\.", "", log$rule_key[ab])
+  usable <- log$outcome == "hit" & log$verified %in% 1L & log$source %in% c("search", "read") &
+            !(log$rule_key == "msg.any.assisted-by" & log$source == "search") &
+            !(log$rule_key == "msg.copilot.vscode" & log$source == "search" &
+              !is.na(log$first_hit_on) & log$first_hit_on <= AI_COPILOT_VSCODE_FALSE_WINDOW[2])
+  use <- log[usable & !is.na(log$tool), , drop = FALSE]
+  whole <- reads$repo_id[reads$commits_history_complete %in% 1L & reads$commits_ruleset %in% ruleset]
+  credit_tools <- unique(c(rules$tool[rules$tool != "any"], unname(AI_ASSISTED_BY_TOOLS)))
+  for (i in seq_len(nrow(signals))) {
+    rid <- signals$repo_id[i]; tl <- signals$tool[i]
+    mine <- use[use$repo_id == rid & use$tool == tl, , drop = FALSE]
+    if (nrow(mine)) {
+      signals$assisted_commits[i] <- as.integer(max(mine$total_count))
+      signals$assisted_measured_on[i] <- max(mine$asked_on)
+      next
+    }
+    if (!(tl %in% credit_tools)) next
+    read_rows <- log$repo_id == rid & log$source == "read" & log$tool %in% tl
+    if (rid %in% whole && !any(read_rows)) {
+      signals$assisted_commits[i] <- 0L
+      signals$assisted_measured_on[i] <- reads$commits_read_on[match(rid, reads$repo_id)]
+      next
+    }
+    always <- rules[rules$tool == tl & rules$search == "always", , drop = FALSE]
+    if (!nrow(always)) next
+    asked <- log[log$repo_id == rid & log$rule_key %in% always$key & log$source == "search", , drop = FALSE]
+    at_rev <- asked$rule_rev == always$rev[match(asked$rule_key, always$key)]
+    if (nrow(asked) == nrow(always) && all(at_rev) && all(asked$outcome == "none")) {
+      signals$assisted_commits[i] <- 0L
+      signals$assisted_measured_on[i] <- max(asked$asked_on)
+    }
+  }
+  signals
+}
+
+#' A review tool's accepted-suggestion count and first date from its rule's latest
+#' checked hit. Pure.
+derive_review_counts <- function(review, log) {
+  if (is.null(review) || !nrow(review)) return(review)
+  log <- .ai_bind_like(.ai_empty_log(), list(log))
+  for (i in seq_len(nrow(review))) {
+    keys <- vapply(Filter(function(r) identical(r$tool, review$tool[i]), AI_REVIEW_RULES), `[[`, "", "key")
+    h <- log[log$repo_id == review$repo_id[i] & log$rule_key %in% keys & log$outcome == "hit" &
+             log$verified %in% 1L, , drop = FALSE]
+    if (!nrow(h)) next
+    review$assisted_commits[i] <- as.integer(max(h$total_count))
+    review$assisted_measured_on[i] <- max(h$asked_on)
+    first <- .ai_earliest_chr(h$first_hit_on)
+    if (!is.na(first) && (is.na(review$first_seen_date[i]) || first < review$first_seen_date[i])) {
+      review$first_seen_date[i] <- first; review$first_seen_censored[i] <- 0L
+    }
+  }
+  review
 }
 
 #' New-tool gate for the weekly incremental. Returns the subset of flagged repo_ids that
