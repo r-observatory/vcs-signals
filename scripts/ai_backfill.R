@@ -746,7 +746,7 @@ run_gate <- function(io, out_dir, parts_dir, full = TRUE) {
 run_gate_incremental <- function(io, out_dir, parts_dir) run_gate(io, out_dir, parts_dir, full = FALSE)
 
 # ---- deep onset shard IO ----------------------------------------------------
-export_ai_shard <- function(path, rows, model_rows = NULL) {
+export_ai_shard <- function(path, rows, model_rows = NULL, extra = list()) {
   if (file.exists(path)) unlink(path)
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
@@ -755,6 +755,7 @@ export_ai_shard <- function(path, rows, model_rows = NULL) {
   if (nrow(rows) > 0) DBI::dbWriteTable(con, "vcs_ai_signals", rows, append = TRUE)
   if (!is.null(model_rows) && nrow(model_rows) > 0)
     DBI::dbWriteTable(con, "vcs_ai_models", model_rows, append = TRUE)
+  for (nm in names(extra)) DBI::dbWriteTable(con, nm, extra[[nm]], overwrite = TRUE)
   DBI::dbExecute(con, "VACUUM")
   invisible(path)
 }
@@ -768,265 +769,181 @@ export_ai_shard <- function(path, rows, model_rows = NULL) {
 }
 
 # ---- deep onset scan --------------------------------------------------------
-#' Deep onset scan over one even mod-N shard of the flagged roster. Per repo:
-#'   (0) a graphql_rate_remaining(io) preflight (mirrors update.R:130-137 and run_cheap's,
-#'       Task 7): when the budget is below AI_POINT_RESERVE, pause the shard rather than
-#'       let fetch_marker_onset fail closed to NA onset rows that never recover across
-#'       deterministic re-runs;
-#'   (1) date each COMMITTED Tier-D marker exactly by paging its REAL repo path's history
-#'       (marker_repo_path prepends .github/ for a github-located marker; fetch_marker_onset,
-#'       GraphQL budget) - a fault leaves that marker's onset NA (build_ai_detail tolerates
-#'       it). An IGNORE-TOKEN marker names a .gitignore/.Rbuildignore entry, not a committed
-#'       path, so it is NOT queried; it takes an honest censored floor of today via
-#'       build_onset_map;
-#'   (2) for each flagged bot-identity tool, one author-email commit search (io$search_hit,
-#'       REST-search budget) - a hit is an EXACT Tier-A onset and adds a Tier-A evidence
-#'       row (authored = 1, since an author-email match means the bot itself authored the
-#'       commit) so a marker + a bot commit corroborate to two tiers;
-#'   (3) the PR onset carried from the cheap pass (exact);
-#' then build_onset_map + apply_fork_guard (a fork censors every Tier-D onset to a floor)
-#' + build_ai_detail collapse each tool through ai_onset_reducer, taking the tighter onset.
-#' Writes the 7-col vcs_ai_signals partial. Template-seed (first-commit) detection is left
-#' to first_commit_touches = character(0) here; only the fork guard fires in B2.
-#' Repos whose published onset row was already confirmed today.
-#'
-#' A full gate hands every shard the entire flagged roster, so a second dispatch
-#' would otherwise spend its whole budget redoing what the first one finished and
-#' never reach the tail. This reads the roster's own confirmation dates, which
-#' the pipeline already maintains, rather than inventing a campaign marker.
-#'
-#' Returns NULL when there is nothing to read, which the caller treats as "skip
-#' nothing" rather than as "everything is done".
-load_confirmed_today <- function(roster_path, today = format(Sys.Date())) {
-  db <- file.path(dirname(roster_path), "vcs-signals-summary.db")
-  if (!file.exists(db)) return(NULL)
-  con <- tryCatch(DBI::dbConnect(RSQLite::SQLite(), db), error = function(e) NULL)
-  if (is.null(con)) return(NULL)
-  on.exit(DBI::dbDisconnect(con), add = TRUE)
-  if (!DBI::dbExistsTable(con, "vcs_ai_signals")) return(NULL)
-  tryCatch(
-    DBI::dbGetQuery(con,
-      "SELECT DISTINCT repo_id FROM vcs_ai_signals WHERE last_confirmed_date = ?",
-      params = list(today))$repo_id,
-    error = function(e) NULL)
+# One search_log row for one search's answer. A refusal has no count; a hit with no
+# count returned still holds the commit that proves at least one.
+.ai_log_row <- function(rid, key, rev, hit, verified, today) {
+  outcome <- if (isTRUE(hit$unavailable)) "refused"
+             else if (!is.na(.nn(hit$date, NA_character_)) || isTRUE(.nn(hit$total_count, 0L) > 0L)) "hit"
+             else "none"
+  data.frame(repo_id = rid, rule_key = key, rule_rev = as.integer(rev), ruleset_version = AI_RULESET_VERSION,
+             asked_on = today, outcome = outcome,
+             total_count = switch(outcome, refused = NA_integer_, none = 0L,
+                                  hit = as.integer(.nn(hit$total_count, 1L))),
+             verified = if (outcome == "hit") as.integer(isTRUE(verified)) else NA_integer_,
+             incomplete = as.integer(.nn(hit$incomplete, 0L)),
+             first_hit_on = if (outcome == "hit") substr(.nn(hit$date, NA_character_), 1, 10) else NA_character_,
+             source = "search", stringsAsFactors = FALSE)
 }
 
+# vcs_ai_signals rows for one repository from this run's dates: the week's findings for
+# the tools it worked on, files dated from their history, and every dated search hit.
+.ai_deep_rows <- function(rid, s, evidence, repo, today) {
+  tools <- unique(c(s$tools, if (!is.null(s$extra)) s$extra$tool))
+  ev <- evidence[evidence$repo_id == rid & evidence$role == "authoring" & evidence$tool %in% tools &
+                 !(evidence$marker %in% ai_non_naming_pr_keys()), , drop = FALSE]
+  onset <- ev$onset; cens <- as.integer(ev$onset_censored); cens[is.na(cens)] <- 0L
+  fill <- is.na(onset) & ev$tier %in% c("PR", "PB") & !is.na(repo$pr_onset_date)
+  onset[fill] <- repo$pr_onset_date; cens[fill] <- 0L
+  for (j in which(ev$tier == "D" & ev$marker %in% names(s$marker_dates))) {
+    onset[j] <- s$marker_dates[[ev$marker[j]]]
+    cens[j] <- if (ai_is_ignore_marker(ev$marker[j]) && !(ev$marker[j] %in% s$exact_ignores)) 1L else 0L
+  }
+  raw <- data.frame(tool = ev$tool, tier = ev$tier, marker = ev$marker, agnostic = as.integer(ev$agnostic %in% TRUE),
+                    authored = as.integer(ev$tier == "A"), stringsAsFactors = FALSE)
+  onsets <- data.frame(tool = ev$tool, marker = ev$marker, first_seen_date = onset,
+                       first_seen_censored = cens, stringsAsFactors = FALSE)
+  x <- s$extra
+  if (!is.null(x) && nrow(x)) {
+    raw <- rbind(raw, data.frame(tool = x$tool, tier = x$tier, marker = x$marker, agnostic = 0L,
+                                 authored = as.integer(x$tier == "A"), stringsAsFactors = FALSE))
+    onsets <- rbind(onsets, data.frame(tool = x$tool, marker = x$marker, first_seen_date = x$date,
+                                       first_seen_censored = as.integer(!x$confirmed), stringsAsFactors = FALSE))
+  }
+  if (!nrow(raw)) return(.ai_empty_signals())
+  onsets <- onsets[order(is.na(onsets$first_seen_date), onsets$first_seen_date), , drop = FALSE]
+  guarded <- apply_fork_guard(raw, isTRUE(repo$is_fork == 1L), repo$parent, character(0))
+  build_ai_detail(rid, guarded, onsets, today)
+}
+
+#' The search pass over one mod-N shard of the flagged roster. Works through the gate's
+#' list most urgent first, within AI_DEEP_BUDGET_S and the point reserve: dating a tool
+#' (its files' history and, where its account committed, its first commit), counting a
+#' REST-only address, and asking commit searches. Every search is logged, refusals
+#' included, and counts are left for the merge to derive from the log.
 run_deep <- function(io, out_dir, roster_path, i, N,
                      marker_delay = BACKFILL_DELAY_S, search_delay = SEARCH_DELAY_S) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   fr <- read_flagged(roster_path)
-  flagged <- fr$flagged; evidence <- fr$evidence
-  mine <- flagged[shard_rows(nrow(flagged), i, N), , drop = FALSE]
-  message(sprintf("ai deep shard %d/%d: %d of %d flagged repos", i, N, nrow(mine), nrow(flagged)))
+  flagged <- fr$flagged
+  evidence <- .ai_bind_like(cbind(repo_id = character(0), .ai_empty_found()), list(fr$evidence))
+  evidence$role[is.na(evidence$role)] <- "authoring"
   today <- format(Sys.Date())
-
-  acc <- list()
-  unavailable <- 0L   # searches the API refused, kept apart from searches that missed
-  model_rows <- list()   # one row per repo per tool per model named in a trailer
-
-  # A shard that runs past the job's timeout is cancelled, and a cancelled job
-  # skips its upload step, so every repo it scanned is discarded. The first full
-  # re-scan lost all twelve shards that way: 181 repos at eleven searches and six
-  # seconds a search is 3.3 hours before overhead, against a 240 minute cap.
-  #
-  # Stopping short of the cap turns that into a partial shard that is uploaded
-  # and folded, which is the same bargain run_cheap already takes when the point
-  # budget runs low. The tail is picked up by the next dispatch.
+  mine_ids <- flagged$repo_id[shard_rows(nrow(flagged), i, N)]
+  # A roster written before the list existed reads as every tool dated and every rule asked.
+  work <- if (!is.null(fr$work)) fr$work else select_deep_work(flagged, evidence, NULL, NULL, NULL, NULL, today = today)
+  work <- work[work$repo_id %in% mine_ids, , drop = FALSE]
+  work <- work[order(work$priority, work$repo_id), , drop = FALSE]
+  message(sprintf("ai deep shard %d/%d: %d item(s) for %d of %d flagged repos", i, N, nrow(work),
+                  length(unique(work$repo_id)), nrow(flagged)))
+  rules <- c(AI_TRAILER_PATTERNS, AI_AUTHOR_SUFFIXES, AI_REVIEW_RULES)
+  state <- list(); logs <- list(); why <- character(0); counts <- list(); model_rows <- list()
+  put_log <- function(row, reason) { logs[[length(logs) + 1L]] <<- row; why <<- c(why, reason) }
+  search <- function(repo, q) tryCatch(io$search_hit(repo$owner, repo$name, q, search_delay),
+                                       error = function(e) list(date = NA_character_, unavailable = TRUE))
   deadline <- Sys.time() + AI_DEEP_BUDGET_S
-  stopped_early <- FALSE
-  skipped <- 0L
-  # Repos whose published row was already confirmed today, i.e. by an earlier
-  # dispatch of this same campaign.
-  done_today <- tryCatch(load_confirmed_today(roster_path), error = function(e) NULL)
-  for (r in seq_len(nrow(mine))) {
+  stopped_early <- FALSE; done <- 0L
+  for (k in seq_len(nrow(work))) {
     if (Sys.time() >= deadline) {
       stopped_early <- TRUE
-      message(sprintf(
-        "ai deep shard %d/%d: stopping at %d of %d repos, %.0f min budget reached; the rest ride the next dispatch",
-        i, N, r - 1L, nrow(mine), AI_DEEP_BUDGET_S / 60))
+      message(sprintf("ai deep shard %d/%d: stopping at %d of %d items, %.0f min budget reached; the rest ride the next run",
+                      i, N, k - 1L, nrow(work), AI_DEEP_BUDGET_S / 60))
       break
     }
     rl <- graphql_rate_remaining(io)
     if (rl < AI_POINT_RESERVE) {
-      message(sprintf(
-        "ai deep shard %d/%d: graphql rate remaining (%s) below reserve (%d); pausing after %d of %d repos",
-        i, N, rl, AI_POINT_RESERVE, r - 1L, nrow(mine)))
+      message(sprintf("ai deep shard %d/%d: graphql rate remaining (%s) below reserve (%d); pausing after %d of %d items",
+                      i, N, rl, AI_POINT_RESERVE, k - 1L, nrow(work)))
       break
     }
-    rid <- mine$repo_id[r]; owner <- mine$owner[r]; name <- mine$name[r]
-    # Already scanned in this campaign. A full gate hands every shard the whole
-    # roster, so without this a second dispatch would spend its budget redoing
-    # the repos the first one finished and never reach the tail. Keyed on the
-    # published confirmation date rather than a campaign marker, because that is
-    # a fact the pipeline already records.
-    if (!is.null(done_today) && rid %in% done_today) { skipped <- skipped + 1L; next }
-
-    ev <- evidence[evidence$repo_id == rid, c("tool", "tier", "marker", "agnostic"), drop = FALSE]
-    if (nrow(ev) == 0) next
-    ev$authored <- 0L   # only a Tier-A author-email hit below sets authored = 1
-    # Cheap-pass evidence is markers and PRs: no commit search ran for it, so both
-    # counts are "nobody asked" rather than zero. The tier-A and tier-B blocks
-    # below append rows that carry real numbers.
-    ev$authored_commits <- NA_integer_
-    ev$assisted_commits <- NA_integer_
-
-    # (1) Tier-D onsets, keyed by the FULL evidence marker string. A COMMITTED marker (its
-    #     marker is the tree entry name) is dated exactly by paging its REAL repo path's
-    #     history - marker_repo_path prepends .github/ for a github-located marker, which
-    #     GraphQL history(path:) resolves for files, nested paths, and directories alike. An
-    #     IGNORE-TOKEN marker ("gitignore:<path>" / "rbuildignore:<path>") names an entry in
-    #     that file rather than a
-    #     committed path, so its history cannot be dated: it takes an honest censored floor of
-    #     today (build_onset_map stamps first_seen_censored = 1), and no history call is spent
-    #     on a path that does not exist in the tree.
-    marker_dates <- list()
-    exact_ignores <- character(0)
-    for (marker in unique(ev$marker[ev$tier == "D"])) {
-      if (ai_is_ignore_marker(marker)) {
-        # Bisect the ignore file's own history for the commit that added the line.
-        # Stamping the scan date instead is what left most of the onset table sitting
-        # on whichever day we last ran, and it is the reason the curve can only chart
-        # a third of the detections.
-        parts <- strsplit(marker, ":", fixed = TRUE)[[1]]
-        file  <- if (identical(parts[1], "rbuildignore")) ".Rbuildignore" else ".gitignore"
-        token <- paste(parts[-1], collapse = ":")
-        got <- tryCatch(fetch_ignore_onset(io, owner, name, file, token, delay = marker_delay),
-                        error = function(e) list(date = NA_character_, exact = FALSE))
-        if (!is.na(got$date) && isTRUE(got$exact)) {
-          marker_dates[[marker]] <- got$date
-          exact_ignores <- c(exact_ignores, marker)
-        } else if (!is.na(got$date)) {
-          # Present at the oldest revision we can see, so the line predates the history.
-          # A tighter floor than the scan date, and still a floor.
-          marker_dates[[marker]] <- got$date
-        } else {
-          # End-of-day instant so a same-day committed exact sorts BEFORE this floor and
-          # dominates it in the reducer; a bare date-only "today" would be a lexicographic
-          # prefix of any same-day instant and wrongly win.
-          marker_dates[[marker]] <- paste0(today, "T23:59:59Z")
+    it <- work[k, ]; rid <- it$repo_id
+    repo <- flagged[flagged$repo_id == rid, , drop = FALSE][1, ]
+    s <- state[[rid]] %||% list(tools = character(0), marker_dates = list(), exact_ignores = character(0), extra = NULL)
+    add_extra <- function(tool, tier, marker, date, confirmed)
+      s$extra <<- rbind(s$extra, data.frame(tool = tool, tier = tier, marker = marker, date = date,
+                                            confirmed = confirmed, stringsAsFactors = FALSE))
+    if (identical(it$reason, "onset")) {
+      s$tools <- unique(c(s$tools, it$tool))
+      ev <- evidence[evidence$repo_id == rid & evidence$tool == it$tool & evidence$role == "authoring", , drop = FALSE]
+      for (marker in unique(ev$marker[ev$tier == "D"])) {
+        if (ai_is_ignore_marker(marker)) {
+          parts <- strsplit(marker, ":", fixed = TRUE)[[1]]
+          file <- if (identical(parts[1], "rbuildignore")) ".Rbuildignore" else ".gitignore"
+          got <- tryCatch(fetch_ignore_onset(io, repo$owner, repo$name, file, paste(parts[-1], collapse = ":"),
+                                             delay = marker_delay),
+                          error = function(e) list(date = NA_character_, exact = FALSE))
+          # An unreadable history falls back to the end of today, a floor that still sorts
+          # after any exact date the same day.
+          s$marker_dates[[marker]] <- if (!is.na(got$date)) got$date else paste0(today, "T23:59:59Z")
+          if (!is.na(got$date) && isTRUE(got$exact)) s$exact_ignores <- c(s$exact_ignores, marker)
+          next
         }
-        next
+        d <- tryCatch(fetch_marker_onset(io, repo$owner, repo$name, marker_repo_path(marker), delay = marker_delay),
+                      error = function(e) NA_character_)
+        if (!is.na(d)) s$marker_dates[[marker]] <- d
       }
-      d <- tryCatch(fetch_marker_onset(io, owner, name, marker_repo_path(marker), delay = marker_delay),
-                    error = function(e) NA_character_)
-      if (!is.na(d)) marker_dates[[marker]] <- d
+      if (any(ev$tier == "A")) for (q in .ai_author_queries(it$tool)) {
+        hit <- search(repo, q)
+        put_log(.ai_log_row(rid, paste0("author.", sub("^author-email:", "", q)), 1L, hit, TRUE, today), it$reason)
+        if (!isTRUE(hit$unavailable) && !is.na(.nn(hit$date, NA_character_))) add_extra(it$tool, "A", "A", hit$date, TRUE)
+      }
+    } else if (startsWith(it$rule_key, "account.")) {
+      addr <- sub("^account\\.", "", it$rule_key)
+      hit <- search(repo, paste0("author-email:", addr))
+      put_log(.ai_log_row(rid, it$rule_key, 1L, hit, TRUE, today), it$reason)
+      n <- as.integer(.nn(hit$total_count, NA_integer_))
+      if (!isTRUE(hit$unavailable) && !is.na(n) && n > 0L)
+        counts[[length(counts) + 1L]] <- data.frame(repo_id = rid, tool = it$tool, identity_set = addr, commits = n,
+          newest_commit_date = NA_character_, measured_on = today, stringsAsFactors = FALSE)
+      if (!isTRUE(hit$unavailable) && !is.na(.nn(hit$date, NA_character_))) add_extra(it$tool, "A", "A", hit$date, TRUE)
+    } else {
+      rule <- Find(function(r) identical(r$key, it$rule_key), rules)
+      if (is.null(rule)) next
+      tier <- if (startsWith(rule$key, "name.")) "C" else "B"
+      hit <- search(repo, rule$query)
+      is_hit <- !isTRUE(hit$unavailable) && !is.na(.nn(hit$date, NA_character_))
+      v <- if (is_hit) verify_search_hit(rule, tier, hit) else list(tool = rule$tool, confirmed = FALSE)
+      put_log(.ai_log_row(rid, rule$key, rule$rev, hit, v$confirmed, today), it$reason)
+      # Review credits are logged only: they never name a tool that wrote the package.
+      if (is_hit && !startsWith(rule$key, "review.") && !is.na(v$tool)) {
+        add_extra(v$tool, tier, if (isTRUE(v$confirmed)) rule$key else tier, hit$date, isTRUE(v$confirmed))
+        if (isTRUE(v$confirmed) && !is.null(hit$items) && nrow(hit$items) > 0) {
+          n <- .nn(hit$total_count, NA_integer_)
+          # A search GitHub cut short returned part of the credits, so its tally is never the whole one.
+          whole <- (is.na(n) || n <= nrow(hit$items)) && !isTRUE(hit$incomplete == 1L)
+          mr <- build_ai_model_rows(rid, v$tool, hit$items, window_complete = whole)
+          if (nrow(mr)) model_rows[[length(model_rows) + 1L]] <- mr
+        }
+      }
     }
-
-    # (2) Tier-A author-email commit onsets (exact) for flagged bot-identity tools.
-    commit_onsets <- NULL; extra_ev <- NULL
-    for (tool in unique(ev$tool[!as.logical(ev$agnostic)])) {
-      # Every allowlisted identity for the tool, not just an email-shaped one.
-      #
-      # Routed through search_hit, which reports a refusal as a refusal. The old
-      # transport collapsed both outcomes onto NA, so a throttled tier-A search
-      # published as "this bot has never committed here" with exactly the
-      # confidence of a measured absence. Tiers B and C already keep them apart;
-      # tier A is the one that was still guessing, and it is the tier whose
-      # zeros the canary reports.
-      hits <- character(0)
-      # The author qualifier is an exact match, so its total_count is the number
-      # of commits this identity authored here. A refused search contributes
-      # nothing, leaving the count NA rather than 0.
-      n_authored <- NA_integer_
-      asked <- FALSE
-      for (term in .ai_author_queries(tool)) {
-        hit <- tryCatch(io$search_hit(owner, name, term, search_delay),
-                        error = function(e) list(date = NA_character_, unavailable = TRUE))
-        if (isTRUE(hit$unavailable)) { unavailable <- unavailable + 1L; next }
-        asked <- TRUE
-        n_authored <- .ai_max_count(c(n_authored, .nn(hit$total_count, NA_integer_)))
-        d <- .nn(hit$date, NA_character_)
-        if (!is.na(d)) hits <- c(hits, d)
-      }
-      # A search that ran and matched nothing is a measured zero, and writing NA
-      # there would claim nobody looked. A hit whose count did not come back is
-      # not zero either: we are holding the commit that proves at least one.
-      if (asked && is.na(n_authored)) n_authored <- if (length(hits)) 1L else 0L
-      if (!length(hits)) {
-        # Asked, and the answer was none. That is a measured zero and it belongs
-        # on the tool's existing evidence rather than being dropped with the
-        # onset: writing NA here would claim nobody looked, which is the
-        # honest-NA rule broken in the direction people forget. No tier-A row is
-        # added, because nothing was detected.
-        if (asked) ev$authored_commits[ev$tool == tool] <- n_authored
-        next
-      }
-      # The earliest across identities: a bot that changed login keeps its onset.
-      commit_onsets <- rbind(commit_onsets, data.frame(tool = tool, tier = "A",
-        first_seen_date = min(hits), confirmed = TRUE, stringsAsFactors = FALSE))
-      extra_ev <- rbind(extra_ev, data.frame(tool = tool, tier = "A", marker = "A",
-        agnostic = 0L, authored = 1L, authored_commits = n_authored,
-        assisted_commits = NA_integer_, stringsAsFactors = FALSE))
-    }
-    # (2b) Tier-B commit trailers and Tier-C author suffixes. These were written into
-    #      the ruleset and never called from any scan, so every published detection was
-    #      a config marker and an AI co-author line was invisible. Each rule is searched
-    #      literally, then verified against its real pattern: a verified hit carries an
-    #      exact onset, an unverified one still counts as evidence but only dates a floor.
-    #      Searched per repo because the flagged roster is what this pass walks.
-    for (spec in c(lapply(AI_TRAILER_PATTERNS, function(r) list(rule = r, tier = "B")),
-                   lapply(AI_AUTHOR_SUFFIXES,  function(r) list(rule = r, tier = "C")))) {
-      q <- spec$rule$query
-      if (is.null(q) || is.na(q) || !nzchar(q)) next
-      hit <- tryCatch(io$search_hit(owner, name, q, search_delay),
-                      error = function(e) list(date = NA_character_, unavailable = TRUE))
-      # A refused question is not an absence of trailers. Count it, leave the repo
-      # without a tier-B row, and record nothing either way: the alternative is what
-      # happened on the first run, where throttling produced a confident zero across
-      # the whole roster.
-      if (isTRUE(hit$unavailable)) { unavailable <- unavailable + 1L; next }
-      if (is.na(.nn(hit$date, NA_character_))) next
-      v <- verify_search_hit(spec$rule, spec$tier, hit)
-      # The count is kept only when the hit verifies against the rule's real
-      # pattern. The query is deliberately fuzzy so the search will find the
-      # trailer at all, which means an unverified hit is evidence the search
-      # matched something we cannot vouch for, and its total_count would be
-      # counting that too. A floor we cannot defend is worse than no number.
-      n_assisted <- if (isTRUE(v$confirmed)) .nn(hit$total_count, NA_integer_) else NA_integer_
-      # The page we already fetched names the model on three tools' trailers.
-      # Only read it off a verified hit, for the same reason the count is: an
-      # unverified hit matched something we cannot vouch for.
-      if (isTRUE(v$confirmed) && !is.null(hit$items) && nrow(hit$items) > 0) {
-        complete <- is.na(n_assisted) || n_assisted <= nrow(hit$items)
-        mr <- build_ai_model_rows(rid, v$tool, hit$items, window_complete = complete)
-        if (nrow(mr) > 0) model_rows[[length(model_rows) + 1L]] <- mr
-      }
-      commit_onsets <- rbind(commit_onsets, data.frame(tool = v$tool, tier = v$tier,
-        first_seen_date = hit$date, confirmed = v$confirmed, stringsAsFactors = FALSE))
-      extra_ev <- rbind(extra_ev, data.frame(tool = v$tool, tier = v$tier, marker = v$tier,
-        agnostic = 0L, authored = 0L, authored_commits = NA_integer_,
-        assisted_commits = as.integer(n_assisted), stringsAsFactors = FALSE))
-    }
-
-    full_ev <- rbind(ev, extra_ev)
-
-    # (3) assemble + guard + collapse.
-    onsets <- build_onset_map(full_ev, marker_dates, commit_onsets, mine$pr_onset_date[r],
-                              exact_markers = exact_ignores)
-    guarded <- apply_fork_guard(full_ev, isTRUE(mine$is_fork[r] == 1L), mine$parent[r], character(0))
-    detail <- build_ai_detail(rid, guarded, onsets, today)
-    if (nrow(detail) > 0) acc[[length(acc) + 1L]] <- detail
+    state[[rid]] <- s
+    done <- done + 1L
   }
-  rows <- if (length(acc)) do.call(rbind, acc) else .ai_empty_signals()
-  models_df <- if (length(model_rows)) do.call(rbind, model_rows) else .ai_empty_models()
-  export_ai_shard(file.path(out_dir, sprintf("vcs-ai-shard-%d.db", i)), rows, models_df)
-  if (skipped > 0L)
-    message(sprintf("ai deep shard %d/%d: skipped %d repo(s) already confirmed today",
-                    i, N, skipped))
-  if (stopped_early)
-    message(sprintf("ai deep shard %d/%d: PARTIAL, dispatch again to continue", i, N))
+  rows <- .ai_bind_like(.ai_empty_signals(), lapply(names(state), function(rid)
+    .ai_deep_rows(rid, state[[rid]], evidence, flagged[flagged$repo_id == rid, , drop = FALSE][1, ], today)))
+  models_df <- .ai_bind_like(.ai_empty_models(), model_rows)
+  log_df <- .ai_bind_like(.ai_empty_log(), logs)
+  export_ai_shard(file.path(out_dir, sprintf("vcs-ai-shard-%d.db", i)), rows, models_df,
+                  extra = list(search_log = log_df, account_counts = .ai_bind_like(.ai_empty_counts(), counts),
+                               campaign = .ai_bind_like(data.frame(since = character(), stringsAsFactors = FALSE),
+                                                        list(fr$campaign))))
+  by_reason <- table(factor(work$reason[seq_len(done)], levels = names(AI_WORK_PRIORITY)))
+  message(sprintf("ai deep shard %d/%d: %d item(s) done (%s)", i, N, done,
+                  paste(sprintf("%s %d", names(by_reason), as.integer(by_reason)), collapse = ", ")))
+  # Asked, matched, none and refused for each reason, as the shard's own record of its searches.
+  for (rs in intersect(names(AI_WORK_PRIORITY), unique(why))) {
+    o <- log_df$outcome[why == rs]
+    message(sprintf("ai deep shard %d/%d:   %s: %d asked, %d matched, %d none, %d refused",
+                    i, N, rs, length(o), sum(o == "hit"), sum(o == "none"), sum(o == "refused")))
+  }
+  if (stopped_early) message(sprintf("ai deep shard %d/%d: PARTIAL, the rest ride the next run", i, N))
   if (nrow(models_df) > 0)
-    message(sprintf("ai deep shard %d/%d: %d model row(s) across %d repo(s)",
-                    i, N, nrow(models_df), length(unique(models_df$repo_id))))
-  message(sprintf("ai deep shard %d/%d: %d onset detail rows", i, N, nrow(rows)))
-  # Said out loud, because a run that could not ask is not a run that found nothing,
-  # and the difference is invisible in the published table.
-  if (unavailable > 0L) {
-    message(sprintf(
-      "ai deep shard %d/%d: WARNING %d commit search(es) were refused (rate limit or error); ",
-      i, N, unavailable),
-      "tiers A, B and C are UNDER-COUNTED for this shard, not absent")
-  }
+    message(sprintf("ai deep shard %d/%d: %d model row(s) across %d repo(s)", i, N, nrow(models_df),
+                    length(unique(models_df$repo_id))))
+  message(sprintf("ai deep shard %d/%d: %d dated row(s)", i, N, nrow(rows)))
+  refused <- sum(log_df$outcome == "refused")
+  if (refused > 0L)
+    message(sprintf("ai deep shard %d/%d: WARNING %d commit search(es) were refused (rate limit or error); ", i, N, refused),
+            "commit counts for this shard are UNDER-COUNTED, not absent")
 }
 
 # ---- merge ------------------------------------------------------------------

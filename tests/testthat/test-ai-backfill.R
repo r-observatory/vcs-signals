@@ -205,7 +205,7 @@ test_that("run_deep assembles marker + confirmed commit + PR onsets into a detai
     data.frame(repo_id = "github.com/o/r", owner = "o", name = "r", node_id = "R_1",
                is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_,
                stringsAsFactors = FALSE),
-    data.frame(repo_id = "github.com/o/r", tool = "claude", tier = "D", marker = "CLAUDE.md",
+    data.frame(repo_id = "github.com/o/r", tool = "claude", tier = c("D", "A"), marker = c("CLAUDE.md", "A"),
                agnostic = 0L, stringsAsFactors = FALSE))
   # Marker pager returns a single last page dated 2024-03-01; the author-email search
   # returns an earlier 2023-11-01 (a real bot-authored commit, structurally exact).
@@ -926,8 +926,8 @@ test_that("Tier A takes the earliest across a tool's identities", {
     data.frame(repo_id = "github.com/o/r", owner = "o", name = "r", node_id = "R_1",
                is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_,
                stringsAsFactors = FALSE),
-    data.frame(repo_id = "github.com/o/r", tool = "copilot", tier = "D",
-               marker = "copilot-instructions.md", agnostic = 0L, stringsAsFactors = FALSE))
+    data.frame(repo_id = "github.com/o/r", tool = "copilot", tier = c("D", "A"),
+               marker = c("copilot-instructions.md", "A"), agnostic = 0L, stringsAsFactors = FALSE))
   io <- list(
     graphql = function(query) list(data = list(repository = list(defaultBranchRef = list(
       target = list(history = list(pageInfo = list(endCursor = "", hasNextPage = FALSE),
@@ -1066,7 +1066,7 @@ test_that("run_deep counts a refused Tier-A search instead of reading it as an a
     data.frame(repo_id = "github.com/o/r", owner = "o", name = "r", node_id = "R_1",
                is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_,
                stringsAsFactors = FALSE),
-    data.frame(repo_id = "github.com/o/r", tool = "claude", tier = "D", marker = "CLAUDE.md",
+    data.frame(repo_id = "github.com/o/r", tool = "claude", tier = c("D", "A"), marker = c("CLAUDE.md", "A"),
                agnostic = 0L, stringsAsFactors = FALSE))
   refused <- 0L
   io <- list(
@@ -1090,16 +1090,14 @@ test_that("run_deep counts a refused Tier-A search instead of reading it as an a
              marker_delay = 0, search_delay = 0))
 
   expect_true(refused > 0L)                       # tier A did ask
-  # The run must say out loud that it could not ask, and name tier A among the
-  # under-counted tiers rather than only B and C.
+  # The run must say out loud that it could not ask, and the log must keep each refusal without a count.
   expect_match(paste(msgs, collapse = "\n"), "refused")
-  expect_match(paste(msgs, collapse = "\n"), "tiers A, B and C are UNDER-COUNTED")
+  expect_match(paste(msgs, collapse = "\n"), "commit counts for this shard are UNDER-COUNTED")
   scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db"))
   on.exit(DBI::dbDisconnect(scon))
-  got <- DBI::dbReadTable(scon, "vcs_ai_signals")
-  # The marker still stands on its own, but nothing may claim a tier-A finding.
-  expect_false(any(grepl("A", strsplit(got$evidence_tiers, ",")[[1]], fixed = TRUE)))
-  expect_equal(got$authored, 0L)
+  lg <- DBI::dbReadTable(scon, "search_log")
+  expect_true(all(lg$outcome[startsWith(lg$rule_key, "author.")] == "refused"))
+  expect_true(all(is.na(lg$total_count[lg$outcome == "refused"])))
 })
 
 test_that("a deep shard stops inside its budget and keeps what it scanned", {
@@ -1138,94 +1136,6 @@ test_that("a deep shard stops inside its budget and keeps what it scanned", {
     expect_match(paste(msgs, collapse = "\n"), "PARTIAL")
   })
   expect_true(file.exists(file.path(out, "vcs-ai-shard-0.db")))
-})
-
-test_that("a repo confirmed today is not rescanned by a later dispatch", {
-  # A full gate hands every shard the whole roster, so without this the second
-  # dispatch spends its budget redoing the first one's work and never reaches
-  # the tail.
-  out <- tempfile("skip_"); dir.create(out)
-  db <- file.path(out, "vcs-signals-summary.db")
-  con <- DBI::dbConnect(RSQLite::SQLite(), db)
-  ensure_repo_schema(con); ensure_series_schema(con)
-  DBI::dbExecute(con, sprintf(
-    "INSERT INTO vcs_ai_signals (repo_id, tool, evidence_tiers, last_confirmed_date)
-     VALUES ('github.com/o/done','claude','D','%s')", format(Sys.Date())))
-  DBI::dbDisconnect(con)
-
-  got <- load_confirmed_today(file.path(out, "vcs-ai-flagged-roster.db"))
-  expect_true("github.com/o/done" %in% got)
-
-  # Yesterday's confirmation is not this campaign, so it is not skipped.
-  expect_false("github.com/o/done" %in%
-    load_confirmed_today(file.path(out, "vcs-ai-flagged-roster.db"),
-                         today = format(Sys.Date() - 1)))
-})
-
-test_that("no summary to read means skip nothing, not skip everything", {
-  # The failure that would be silent: reading nothing and concluding the whole
-  # roster is done, so the dispatch scans zero repos and reports success.
-  expect_null(load_confirmed_today(file.path(tempfile("none_"), "roster.db")))
-})
-
-test_that("run_deep actually skips the repo, not just knows it could", {
-  # The previous test proved load_confirmed_today returns the right repo and
-  # nothing more: removing the skip from the loop left it passing. This asserts
-  # the loop honours it, by recording which repos were reached.
-  out <- tempfile("skipdeep_"); dir.create(out)
-  roster <- data.frame(
-    repo_id = c("github.com/o/done", "github.com/o/todo"), owner = "o",
-    name = c("done", "todo"), node_id = c("R_1", "R_2"),
-    is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_,
-    stringsAsFactors = FALSE)
-  ev <- data.frame(repo_id = roster$repo_id, tool = "claude", tier = "D",
-                   marker = "CLAUDE.md", agnostic = 0L, stringsAsFactors = FALSE)
-  write_flagged_partial(file.path(out, "vcs-ai-flagged-roster.db"), roster, ev)
-
-  con <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-signals-summary.db"))
-  ensure_repo_schema(con); ensure_series_schema(con)
-  DBI::dbExecute(con, sprintf(
-    "INSERT INTO vcs_ai_signals (repo_id, tool, evidence_tiers, last_confirmed_date)
-     VALUES ('github.com/o/done','claude','D','%s')", format(Sys.Date())))
-  DBI::dbDisconnect(con)
-
-  reached <- character(0)
-  io <- list(
-    graphql = function(q) list(data = list(repository = list(defaultBranchRef = list(
-      target = list(history = list(pageInfo = list(endCursor = "", hasNextPage = FALSE),
-        nodes = list(list(committedDate = "2025-01-01T00:00:00Z")))))))),
-    search_hit = function(owner, name, query, delay = 0) {
-      reached <<- c(reached, name)
-      list(date = NA_character_, message = NA_character_, author = NA_character_,
-           total_count = 0L, unavailable = FALSE)
-    })
-  suppressMessages(run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
-                            marker_delay = 0, search_delay = 0))
-
-  expect_true("todo" %in% reached)
-  expect_false("done" %in% reached)   # already confirmed today: not rescanned
-})
-
-test_that("the deep job is given the file its resume check reads", {
-  # load_confirmed_today looks for vcs-signals-summary.db beside the roster.
-  # The deep job downloads the ai-flagged-roster artifact and has no token to
-  # fetch anything else, so unless the gate puts the summary INTO that artifact
-  # the check reads nothing, every dispatch restarts each shard from repo 1, and
-  # the second half of the roster is never reached. Asserted against the
-  # workflow because that is where the wiring lives.
-  path <- ".github/workflows/ai-weekly.yml"
-  for (up in c("", "../", "../../")) {
-    if (file.exists(paste0(up, path))) { path <- paste0(up, path); break }
-  }
-  if (!file.exists(path)) skip("workflow not reachable from the test directory")
-  wf <- paste(readLines(path, warn = FALSE), collapse = "\n")
-
-  expect_true(grepl("vcs-signals-summary.db", wf, fixed = TRUE),
-              info = "the gate fetches the published summary")
-  # And ships it in the same artifact the deep job already downloads.
-  art <- regmatches(wf, regexpr("name: ai-flagged-roster.*?if-no-files-found", wf))
-  expect_true(length(art) == 1 && grepl("vcs-signals-summary.db", art[1], fixed = TRUE),
-              info = "the summary is in the roster artifact, not a separate one")
 })
 
 test_that("the merge does not require an artifact a full gate never writes", {
@@ -1644,4 +1554,96 @@ test_that("each state table, empty or missing once it has been published, stops 
     expect_error(.ai_state_guard(con, state), sprintf("summary has no %s rows", t), info = paste(t, "dropped"))
     DBI::dbDisconnect(con)
   }
+})
+
+.deep_roster <- function(out, evidence, work) {
+  write_flagged_partial(file.path(out, "vcs-ai-flagged-roster.db"),
+    data.frame(repo_id = "github.com/d-morrison/snapr", owner = "d-morrison", name = "snapr", node_id = "R_s",
+               is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_, stringsAsFactors = FALSE),
+    evidence, work = work, campaign = data.frame(since = "2026-10-04", stringsAsFactors = FALSE))
+  file.path(out, "vcs-ai-flagged-roster.db")
+}
+.no_history_io <- function(search) list(
+  graphql = function(q) list(data = list(repository = list(defaultBranchRef = list(target = list(
+    history = list(pageInfo = list(endCursor = "", hasNextPage = FALSE), nodes = list())))))),
+  search_hit = search)
+
+test_that("the search pass asks only the week's list and logs every answer", {
+  out <- tempfile("deep_"); dir.create(out)
+  gh <- "41898282+claude[bot]@users.noreply.github.com"
+  ev <- cbind(repo_id = "github.com/d-morrison/snapr",
+              .ai_found("claude", "A", "A", rule_key = paste0("account.", gh), newest_at = "2026-05-18T21:38:26Z"))
+  work <- data.frame(repo_id = "github.com/d-morrison/snapr", tool = c("claude", "claude", "claude"),
+                     rule_key = c(paste0("account.", gh), "msg.claude.coauthor", "msg.any.assisted-by"),
+                     reason = c("account-count", "never-asked", "rule-new"), priority = c(2L, 8L, 7L),
+                     stringsAsFactors = FALSE)
+  asked <- character(0)
+  io <- .no_history_io(function(owner, name, query, delay = 0) {
+    asked <<- c(asked, query)
+    if (startsWith(query, "author-email:41898282"))
+      return(list(date = "2026-05-18T21:38:26Z", message = "", author = "claude[bot]", total_count = 2L,
+                  items = data.frame(date = character(), message = character()), unavailable = FALSE))
+    if (grepl("Assisted-by", query, fixed = TRUE))
+      return(list(date = NA_character_, total_count = NA_integer_, unavailable = TRUE))
+    list(date = NA_character_, message = NA_character_, author = NA_character_, total_count = 0L,
+         items = data.frame(date = character(), message = character()), unavailable = FALSE)
+  })
+  suppressMessages(run_deep(io, out, .deep_roster(out, ev, work), 0, 1, marker_delay = 0, search_delay = 0))
+  expect_equal(length(asked), 3L)
+  expect_true(startsWith(asked[1], "author-email:41898282"))   # most urgent first
+  con <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db")); on.exit(DBI::dbDisconnect(con))
+  lg <- DBI::dbReadTable(con, "search_log")
+  expect_setequal(lg$rule_key, work$rule_key)
+  expect_equal(lg$outcome[lg$rule_key == "msg.claude.coauthor"], "none")
+  expect_equal(lg$total_count[lg$rule_key == "msg.claude.coauthor"], 0L)
+  expect_equal(lg$outcome[lg$rule_key == "msg.any.assisted-by"], "refused")
+  ac <- DBI::dbReadTable(con, "account_counts")
+  expect_equal(ac$identity_set, gh); expect_equal(ac$commits, 2L)
+  expect_equal(DBI::dbReadTable(con, "campaign")$since, "2026-10-04")
+  sig <- DBI::dbReadTable(con, "vcs_ai_signals")
+  expect_equal(sig$first_seen_date, "2026-05-18T21:38:26Z"); expect_equal(sig$first_seen_censored, 0L)
+  expect_true(is.na(sig$authored_commits))
+})
+
+test_that("a checked credit is stored under its rule, and an Assisted-by hit under the tool its line names", {
+  out <- tempfile("deep_"); dir.create(out)
+  ev <- cbind(repo_id = "github.com/d-morrison/snapr", .ai_found("claude", "D", "CLAUDE.md"))
+  work <- data.frame(repo_id = "github.com/d-morrison/snapr", tool = c("claude", "any"),
+                     rule_key = c("msg.claude.session", "msg.any.assisted-by"), reason = "rule-new",
+                     priority = 7L, stringsAsFactors = FALSE)
+  io <- .no_history_io(function(owner, name, query, delay = 0) {
+    if (grepl("claude.ai/code/session_", query, fixed = TRUE))
+      return(list(date = "2026-08-06T01:50:50Z", total_count = 3L, author = "p", unavailable = FALSE,
+                  message = "x\n\nClaude-Session: https://claude.ai/code/session_01N6",
+                  items = data.frame(date = character(), message = character())))
+    list(date = "2026-09-23T23:08:29Z", total_count = 51L, author = "p", unavailable = FALSE,
+         message = "ci\n\nAssisted-by: GPT-6 Astra <codex@openai.com>",
+         items = data.frame(date = character(), message = character()))
+  })
+  suppressMessages(run_deep(io, out, .deep_roster(out, ev, work), 0, 1, marker_delay = 0, search_delay = 0))
+  con <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db")); on.exit(DBI::dbDisconnect(con))
+  sig <- DBI::dbReadTable(con, "vcs_ai_signals")
+  expect_true(grepl("msg.claude.session", sig$markers[sig$tool == "claude"], fixed = TRUE))
+  expect_equal(sig$first_seen_date[sig$tool == "codex"], "2026-09-23T23:08:29Z")
+  lg <- DBI::dbReadTable(con, "search_log")
+  expect_equal(lg$verified[lg$rule_key == "msg.any.assisted-by"], 1L)
+  expect_true(all(is.na(sig$assisted_commits)))
+})
+
+test_that("a credit search GitHub cut short is logged as incomplete, and its model tally as partial", {
+  out <- tempfile("deep_"); dir.create(out)
+  ev <- cbind(repo_id = "github.com/d-morrison/snapr", .ai_found("claude", "D", "CLAUDE.md"))
+  work <- data.frame(repo_id = "github.com/d-morrison/snapr", tool = "claude", rule_key = "msg.claude.coauthor",
+                     reason = "never-asked", priority = 8L, stringsAsFactors = FALSE)
+  page <- data.frame(date = "2026-08-06T01:50:50Z",
+                     message = "x\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>", stringsAsFactors = FALSE)
+  io <- .no_history_io(function(owner, name, query, delay = 0)
+    list(date = page$date, message = page$message, author = "p", total_count = 1L, items = page,
+         unavailable = FALSE, incomplete = 1L))
+  suppressMessages(run_deep(io, out, .deep_roster(out, ev, work), 0, 1, marker_delay = 0, search_delay = 0))
+  con <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db")); on.exit(DBI::dbDisconnect(con))
+  lg <- DBI::dbReadTable(con, "search_log")
+  expect_equal(lg$outcome, "hit"); expect_equal(lg$incomplete, 1L); expect_equal(lg$total_count, 1L)
+  # One commit on the page and one counted still is not the whole tally when GitHub stopped short.
+  expect_equal(DBI::dbReadTable(con, "vcs_ai_models")$window_complete, 0L)
 })

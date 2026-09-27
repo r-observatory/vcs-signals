@@ -100,52 +100,41 @@ test_that("evidence with no count columns still reduces, so old shards keep work
   expect_true(is.na(got$authored_commits))
 })
 
-test_that("run_deep writes both counts through to the shard, fibr-shaped", {
-  # The spec's worked example: the agent authored nothing here and a person
-  # credited it 37 times. A single blended figure would be wrong either way it
-  # rounded, so both must arrive and neither may stand in for the other.
+test_that("the search pass logs a credit count and never writes a count into a row", {
   out <- tempfile("out_"); dir.create(out)
   write_flagged_partial(file.path(out, "vcs-ai-flagged-roster.db"),
     data.frame(repo_id = "github.com/o/fibr", owner = "o", name = "fibr", node_id = "R_1",
-               is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_,
-               stringsAsFactors = FALSE),
-    data.frame(repo_id = "github.com/o/fibr", tool = "claude", tier = "D",
-               marker = "CLAUDE.md", agnostic = 0L, stringsAsFactors = FALSE))
+               is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_, stringsAsFactors = FALSE),
+    data.frame(repo_id = "github.com/o/fibr", tool = "claude", tier = "D", marker = "CLAUDE.md",
+               agnostic = 0L, stringsAsFactors = FALSE))
   io <- list(
     graphql = function(query) list(data = list(repository = list(defaultBranchRef = list(
       target = list(history = list(pageInfo = list(endCursor = "", hasNextPage = FALSE),
         nodes = list(list(committedDate = "2025-05-01T00:00:00Z")))))))),
     search_hit = function(owner, name, query, delay = 0) {
-      if (grepl("^author(-email)?:", query))     # the agent authored nothing here
-        return(list(date = NA_character_, message = NA_character_, author = NA_character_,
-                    total_count = 0L, unavailable = FALSE))
       if (!grepl("Co-Authored-By: Claude", query, fixed = TRUE))
         return(list(date = NA_character_, message = NA_character_, author = NA_character_,
                     total_count = 0L, unavailable = FALSE))
-      list(date = "2025-06-01T00:00:00Z",
-           message = "feat: x\n\nCo-authored-by: Claude <noreply@anthropic.com>",
+      list(date = "2025-06-01T00:00:00Z", message = "feat: x\n\nCo-authored-by: Claude <noreply@anthropic.com>",
            author = "Jane", total_count = 37L, unavailable = FALSE)
     })
   suppressMessages(run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
                             marker_delay = 0, search_delay = 0))
-  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db"))
-  on.exit(DBI::dbDisconnect(scon))
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db")); on.exit(DBI::dbDisconnect(scon))
+  lg <- DBI::dbReadTable(scon, "search_log")
+  expect_equal(lg$total_count[lg$rule_key == "msg.claude.coauthor"], 37L)
+  expect_equal(lg$verified[lg$rule_key == "msg.claude.coauthor"], 1L)
   got <- DBI::dbReadTable(scon, "vcs_ai_signals")
-  got <- got[got$tool == "claude", ]
-  expect_equal(got$assisted_commits, 37L)
-  expect_equal(got$authored_commits, 0L)   # measured zero, not "never asked"
-  expect_false(is.na(got$authored_commits))
-  expect_equal(got$authored, 0L)           # derived: it authored none
+  expect_true(is.na(got$assisted_commits)); expect_true(is.na(got$authored_commits))
 })
 
-test_that("a refused count is not stored as zero", {
+test_that("a refused search is logged as refused, with no count", {
   out <- tempfile("out_"); dir.create(out)
   write_flagged_partial(file.path(out, "vcs-ai-flagged-roster.db"),
     data.frame(repo_id = "github.com/o/r", owner = "o", name = "r", node_id = "R_1",
-               is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_,
-               stringsAsFactors = FALSE),
-    data.frame(repo_id = "github.com/o/r", tool = "claude", tier = "D",
-               marker = "CLAUDE.md", agnostic = 0L, stringsAsFactors = FALSE))
+               is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_, stringsAsFactors = FALSE),
+    data.frame(repo_id = "github.com/o/r", tool = "claude", tier = "D", marker = "CLAUDE.md",
+               agnostic = 0L, stringsAsFactors = FALSE))
   io <- list(
     graphql = function(query) list(data = list(repository = list(defaultBranchRef = list(
       target = list(history = list(pageInfo = list(endCursor = "", hasNextPage = FALSE),
@@ -155,11 +144,10 @@ test_that("a refused count is not stored as zero", {
            total_count = NA_integer_, unavailable = TRUE))
   suppressMessages(run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
                             marker_delay = 0, search_delay = 0))
-  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db"))
-  on.exit(DBI::dbDisconnect(scon))
-  got <- DBI::dbReadTable(scon, "vcs_ai_signals")
-  expect_true(is.na(got$authored_commits))
-  expect_true(is.na(got$assisted_commits))
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db")); on.exit(DBI::dbDisconnect(scon))
+  lg <- DBI::dbReadTable(scon, "search_log")
+  expect_true(nrow(lg) > 0)
+  expect_true(all(lg$outcome == "refused" & is.na(lg$total_count)))
 })
 
 test_that("folding two repos onto one identity keeps every column it did not read", {
