@@ -7,10 +7,10 @@
 #   enumerate -> full active github roster from the published summary's repos table (one job)
 #   cheap     -> every repository's contents, recent pull requests and commits, and account
 #                counts over one mod-N shard, written to the cheap partial (matrix job)
-#   gate      -> union every cheap shard's flagged partials into one flagged-roster (one job)
-#   gate-incremental -> like gate, but narrow the flagged roster to repos carrying a tool not
-#                yet in the published vcs_ai_signals detail (the weekly incremental gate used
-#                by .github/workflows/ai-weekly.yml in place of gate)
+#   gate      -> union the cheap partials into the flagged roster and write the week's search
+#                list, and on a full gate work within the campaign (one job)
+#   gate-incremental -> write the same list without a campaign (the weekly gate used by
+#                .github/workflows/ai-weekly.yml in place of gate)
 #   deep      -> commit-history onset scan over one mod-N shard of the flagged roster,
 #                build vcs_ai_signals detail rows (matrix job)
 #   merge     -> reconcile node_id identity, reduce prior+incoming onsets, rebuild the

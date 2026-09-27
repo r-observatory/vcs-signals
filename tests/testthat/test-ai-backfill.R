@@ -449,7 +449,10 @@ test_that("the gate lists dating for a new tool, keeps every flagged repository 
   expect_setequal(fr$flagged$repo_id, c("github.com/a/x", "github.com/b/y", "github.com/c/z"))
   onset <- paste(fr$work$repo_id, fr$work$tool)[fr$work$reason == "onset"]
   expect_setequal(onset, c("github.com/b/y cursor", "github.com/c/z copilot"))
-  expect_true(any(fr$work$reason %in% c("rule-new", "never-asked")))
+  al <- .ai_search_rules(); al <- al$key[al$search == "always"]
+  rw <- fr$work[fr$work$reason %in% c("rule-new", "never-asked"), , drop = FALSE]
+  expect_setequal(paste(rw$repo_id, rw$rule_key), as.vector(outer(fr$flagged$repo_id, al, paste)))
+  expect_equal(nrow(rw), 3L * length(al))
   expect_true(is.na(fr$campaign$since))
   expect_false(file.exists(file.path(out, "vcs-ai-shard-confirm.db")))
 })

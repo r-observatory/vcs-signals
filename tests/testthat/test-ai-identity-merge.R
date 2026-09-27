@@ -67,9 +67,9 @@ setwd(.aiim_wd)
                    tier = "D", marker = rep(c(".claude", "AGENTS.md"), 2),
                    agnostic = rep(c(0L, 1L), 2), stringsAsFactors = FALSE)
   parts <- tempfile("parts_"); dir.create(parts)
+  seen <- paste(pub$repo_id, pub$tool) %in% paste(ev$repo_id, ev$tool)
   export_ai_shard(file.path(parts, "vcs-ai-shard-confirm.db"),
-                  .confirm_rows(pub$repo_id[paste(pub$repo_id, pub$tool) %in% paste(ev$repo_id, ev$tool)],
-                                pub$tool[paste(pub$repo_id, pub$tool) %in% paste(ev$repo_id, ev$tool)], today))
+                  .confirm_rows(pub$repo_id[seen], pub$tool[seen], today))
   list(parts = parts, ev = ev, pub = pub)
 }
 

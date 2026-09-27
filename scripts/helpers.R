@@ -555,11 +555,8 @@ reconcile_ai_identity <- function(con) {
 #' row describes the same GitHub repository and a sibling's evidence is this row's
 #' evidence too.
 #'
-#' The empty rows already published cannot recover by being scanned:
-#' select_incremental_repos deep-scans only (repo_id, tool) keys that are not yet
-#' published, and an empty row's key is published, so it would only ever be confirmed.
-#' Stopping the fold leaves them empty for good; this is what repairs them, and it
-#' spends no API budget.
+#' The gate dates an empty published row only while its repository is flagged, at the cost
+#' of a search, while this fold repairs it at the merge from a sibling's rows for no API budget.
 #'
 #' Onset, censoring, tiers, markers, authorship and both counts come from the sibling
 #' (reduced by the onset rules when two or more siblings have evidence). The filled row

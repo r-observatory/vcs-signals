@@ -1653,7 +1653,7 @@ next_pr_read_state <- function(prev, page1, plan, walked, today) {
 #' TRUE for each vcs_ai_signals row that says nothing but when it was confirmed: no
 #' onset, no evidence tier and no marker. That is the shape of a confirmation row, and
 #' of the published row the reducer made out of one. A frame without a markers column
-#' (select_confirmation_rows writes seven columns) reads as carrying no markers. Pure.
+#' (the old gate's confirmation rows had seven columns) reads as carrying no markers. Pure.
 .ai_is_hollow <- function(rows) {
   blank <- function(cn) {
     x <- rows[[cn]]
@@ -1672,16 +1672,17 @@ next_pr_read_state <- function(prev, page1, plan, walked, today) {
 #' is how github.com/uchidamizuki/jpstat and github.com/doi-usgs/nhdplustools came to be
 #' published with no onset, tiers or markers: reconcile_ai_identity had folded their rows
 #' onto a sibling slug, and the gate had read a published copy that still held the keys.
-#' Such a row cannot repair itself either, because select_incremental_repos treats its
-#' key as published and never schedules the deep scan that would date it. Rows with any
+#' Nor could such a row repair itself under the old weekly gate, which treated its key as
+#' published and never scheduled the deep scan that would date it. Rows with any
 #' evidence pass through, confirmation or not.
 #'
 #' Dropping loses nothing for good. The key is left out of what this merge publishes, so
-#' if its slug is still active and its cheap pass still sees the tool, the next gate's
-#' select_incremental_repos schedules the deep scan that dates it. A slug retired in the
-#' meantime is not scanned again, and reconcile_ai_identity has already carried its rows
-#' onto the canonical slug. Nor is the row copied from an active sibling slug here, for
-#' the reason heal_hollow_siblings gives for not creating rows. Pure.
+#' if its slug is still active and its cheap pass still sees the tool, the next gate lists
+#' the key for dating: select_deep_work gives an onset item to a flagged repository's tool
+#' that is not published. A slug retired in the meantime is not scanned again, and
+#' reconcile_ai_identity has already carried its rows onto the canonical slug. Nor is the
+#' row copied from an active sibling slug here, for the reason heal_hollow_siblings gives
+#' for not creating rows. Pure.
 drop_unanchored_confirmations <- function(prior, incoming) {
   if (is.null(incoming) || nrow(incoming) == 0) return(incoming)
   key <- function(d) if (is.null(d) || nrow(d) == 0) character(0)
