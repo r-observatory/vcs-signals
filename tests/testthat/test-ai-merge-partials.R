@@ -249,3 +249,30 @@ test_that("a read to the first commit behind the stored watermark replaces no co
   lg <- .tbl(s, "vcs_ai_search_log")
   expect_equal(lg$total_count[lg$rule_key == "msg.claude.session"], 12L)
 })
+
+test_that("a renamed repository's rows are published under its current name, and the gate reads the fold as kept", {
+  r <- .seed_release()
+  old <- "github.com/old/a"
+  for (f in c("vcs-signals-summary.db", "vcs-signals-recent.db")) {
+    con <- DBI::dbConnect(RSQLite::SQLite(), file.path(r$rel, f))
+    DBI::dbExecute(con, "INSERT INTO repos (repo_id,node_id,host,host_domain,owner,name,name_with_owner,supported,n_packages,first_seen,last_seen,status)
+      VALUES ('github.com/old/a','R_a','github','github.com','old','a','old/a',1,1,'2020-01-01','2026-06-01','retired')")
+    DBI::dbExecute(con, "INSERT INTO vcs_ai_outside_prs VALUES
+      ('github.com/old/a', 55, 'copilot', 'pr-author', '2026-05-01T00:00:00Z', 1, 'NONE', '2026-06-01')")
+    DBI::dbExecute(con, "INSERT INTO vcs_ai_search_log VALUES
+      ('github.com/old/a', 'author.aider', 1, 'v', '2026-05-31', 'none', 0, NULL, 0, NULL, 'search')")
+    DBI::dbExecute(con, "INSERT INTO vcs_ai_review_signals (repo_id, tool, first_seen_date, first_seen_censored,
+        evidence_tiers, markers, last_confirmed_date) VALUES
+      ('github.com/old/a', 'coderabbit', '2025-01-01', 0, 'D', '.coderabbit.yml', '2026-06-01'),
+      ('github.com/o/a', 'coderabbit', '2025-06-01', 0, 'D', '.coderabbit.yaml', '2026-09-27')")
+    DBI::dbDisconnect(con)
+  }
+  # The published summary holds two review rows and the merge one: the gate must read it as a fold.
+  expect_no_error(suppressMessages(run_merge(r$io, tempfile("m_"), .parts())))
+  s <- .pub(r$io)
+  op <- .tbl(s, "vcs_ai_outside_prs"); lg <- .tbl(s, "vcs_ai_search_log"); rv <- .tbl(s, "vcs_ai_review_signals")
+  expect_false(any(c(op$repo_id, lg$repo_id, rv$repo_id) == old))
+  expect_true(55L %in% op$pr_number[op$repo_id == .A])
+  expect_true("author.aider" %in% lg$rule_key[lg$repo_id == .A])
+  expect_equal(nrow(rv), 1L); expect_equal(rv$first_seen_date, "2025-01-01")
+})

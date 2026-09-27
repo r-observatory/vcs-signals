@@ -131,3 +131,31 @@ test_that("the weekly read's state tables refuse a build that lost their rows", 
   expect_equal(summary_regressions(prev, mk(99L)), character(0))
   expect_true(any(grepl("vcs_ai_search_log", summary_regressions(prev, mk(50L)))))
 })
+
+# A summary whose review rows sit under the given repo_ids, with github.com/a/old retired and
+# github.com/a/new active on one node, as a rename leaves them.
+.rn_gate <- function(review_ids) {
+  path <- tempfile(fileext = ".db")
+  con <- DBI::dbConnect(RSQLite::SQLite(), path); on.exit(DBI::dbDisconnect(con))
+  ensure_repo_schema(con); ensure_series_schema(con)
+  DBI::dbExecute(con, "INSERT INTO repos (repo_id,node_id,host,host_domain,owner,name,name_with_owner,supported,n_packages,first_seen,last_seen,status) VALUES
+    ('github.com/a/old','R_n','github','github.com','a','old','a/old',1,1,'2024-01-01','2026-06-01','retired'),
+    ('github.com/a/new','R_n','github','github.com','a','new','a/new',1,1,'2024-01-01','2026-09-27','active'),
+    ('github.com/z/other','R_z','github','github.com','z','other','z/other',1,1,'2024-01-01','2026-09-27','active')")
+  DBI::dbWriteTable(con, "vcs_ai_review_signals", data.frame(repo_id = review_ids, tool = "coderabbit",
+    first_seen_date = "2025-01-01", first_seen_censored = 0L, evidence_tiers = "D", markers = ".coderabbit.yaml",
+    assisted_commits = NA_integer_, assisted_measured_on = NA_character_, last_confirmed_date = "2026-09-27",
+    stringsAsFactors = FALSE), append = TRUE)
+  path
+}
+
+test_that("a review row folded from a renamed repository's old name is kept, not lost", {
+  prev <- .rn_gate(c("github.com/a/old", "github.com/a/new"))
+  expect_equal(summary_regressions(prev, .rn_gate("github.com/a/new")), character(0))
+})
+
+test_that("a review row gone with no current name to fold into is refused", {
+  prev <- .rn_gate(c("github.com/a/new", "github.com/z/other"))
+  expect_true(any(grepl("vcs_ai_review_signals: 1 rows, was 2",
+                        summary_regressions(prev, .rn_gate("github.com/a/new")), fixed = TRUE)))
+})

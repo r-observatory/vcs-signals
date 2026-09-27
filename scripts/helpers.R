@@ -485,40 +485,61 @@ update_repo_node_ids <- function(con, resolved) {
   invisible(TRUE)
 }
 
-#' Carry vcs_ai_signals onset rows across repos that share an immutable node_id (a
-#' rename/transfer minted a second repo_id for the same GitHub repository, orphaning the
-#' old slug's onset). For each node_id held by 2+ repos, the canonical repo_id is the
-#' active, most-recently-seen one (tiebroken by repo_id ascending for determinism); every
-#' member that is not active is stale (every member but the canonical one, when none is
-#' active). The stale rows are re-keyed to the canonical repo_id and folded with its own
-#' through ai_onset_reducer, so a (canonical, tool) collision collapses by the onset
-#' rules (exact dominates a later floor, min of exacts, tier union, authored OR,
-#' last_confirmed max) instead of violating the (repo_id, tool) primary key that a blind
-#' UPDATE ... SET repo_id would hit. A second active member is not stale and keeps its
-#' rows; heal_hollow_siblings then fills any of them left empty. Structural: run on
-#' every merge, before the prior-vs-incoming onset reduce. No-op when no node_id is shared.
+#' Old repo_id to current repo_id for every node_id two or more repos rows hold (a rename or
+#' transfer that a DESCRIPTION followed minted a second repo_id). The current name is the
+#' active member with the newest last_seen, ties to the smallest repo_id. It takes every
+#' member that is not active, or every other member when none is active, so a second active
+#' member maps nowhere. A node's old names come newest last_seen first. Pure.
+ai_canonical_repo_map <- function(repos) {
+  none <- stats::setNames(character(0), character(0))
+  need <- c("repo_id", "node_id", "status", "last_seen")
+  if (is.null(repos) || !nrow(repos) || !all(need %in% names(repos))) return(none)
+  repos <- repos[!is.na(repos$node_id), need, drop = FALSE]
+  repos <- repos[repos$node_id %in% repos$node_id[duplicated(repos$node_id)], , drop = FALSE]
+  if (!nrow(repos)) return(none)
+  out <- lapply(split(repos, repos$node_id), function(g) {
+    active <- g$status %in% "active"
+    o <- order(ifelse(active, 0L, 1L), g$last_seen, g$repo_id,
+               decreasing = c(FALSE, TRUE, FALSE), method = "radix")
+    g <- g[o, , drop = FALSE]; active <- active[o]
+    stale <- if (any(active)) !active else seq_len(nrow(g)) > 1L
+    stats::setNames(rep(g$repo_id[1], sum(stale)), g$repo_id[stale])
+  })
+  unlist(unname(out))
+}
+
+#' Carry every AI table's rows from a renamed repository's old repo_ids to its current one,
+#' in one transaction, before the merge folds any partial. vcs_ai_signals folds through
+#' ai_onset_reducer and heal_hollow_siblings as it always has; the weekly read's tables and
+#' the model tallies follow carry_renamed_state. A table the database lacks is skipped on
+#' its own. Structural: runs on every merge, and does nothing when no node_id is shared.
 reconcile_ai_identity <- function(con) {
-  if (!DBI::dbExistsTable(con, "vcs_ai_signals")) return(invisible(FALSE))
-  dups <- DBI::dbGetQuery(con,
-    "SELECT node_id FROM repos WHERE node_id IS NOT NULL GROUP BY node_id HAVING COUNT(*) > 1")
-  if (nrow(dups) == 0) return(invisible(FALSE))
+  if (!DBI::dbExistsTable(con, "repos")) return(invisible(FALSE))
+  repos <- DBI::dbGetQuery(con, "SELECT repo_id, node_id, status, last_seen FROM repos")
+  nodes <- repos$node_id[!is.na(repos$node_id)]
+  shared <- repos[repos$node_id %in% nodes[duplicated(nodes)], , drop = FALSE]
+  if (!nrow(shared)) return(invisible(FALSE))
+  map <- ai_canonical_repo_map(repos)
+  DBI::dbWithTransaction(con, {
+    if (DBI::dbExistsTable(con, "vcs_ai_signals")) .reconcile_ai_signals(con, shared, map)
+    .reconcile_ai_state(con, map)
+  })
+  invisible(TRUE)
+}
+
+# The signals fold, one shared node_id at a time: the old names' rows reduced onto the
+# current name, then any empty row filled from an active sibling.
+.reconcile_ai_signals <- function(con, shared, map) {
   healed <- 0L
-  for (nid in dups$node_id) {
-    grp <- DBI::dbGetQuery(con,
-      "SELECT repo_id, status, last_seen FROM repos WHERE node_id = ?", params = list(nid))
-    # canonical: active before non-active, then newest last_seen, then repo_id ascending.
-    active <- grp$status == "active"
-    a <- ifelse(active, 0L, 1L)
-    o <- order(a, grp$last_seen, grp$repo_id, decreasing = c(FALSE, TRUE, FALSE), method = "radix")
-    canonical <- grp$repo_id[o[1]]
-    ids <- grp$repo_id
+  # Every column, derived from the table's own shape. This named seven of ten
+  # and then deleted the rows and wrote the seven back, so markers and both
+  # commit counts were destroyed on every merge that folded a renamed repo.
+  # The loss was permanent: select_incremental_repos never revisits a repo
+  # that is already published, so nothing would have measured them again.
+  cols <- paste(sprintf('"%s"', names(.ai_empty_signals())), collapse = ", ")
+  for (nid in unique(shared$node_id)) {
+    ids <- shared$repo_id[shared$node_id == nid]
     ph <- paste(rep("?", length(ids)), collapse = ",")
-    # Every column, derived from the table's own shape. This named seven of ten
-    # and then deleted the rows and wrote the seven back, so markers and both
-    # commit counts were destroyed on every merge that folded a renamed repo.
-    # The loss was permanent: select_incremental_repos never revisits a repo
-    # that is already published, so nothing would have measured them again.
-    cols <- paste(sprintf('"%s"', names(.ai_empty_signals())), collapse = ", ")
     involved <- DBI::dbGetQuery(con, sprintf(
       "SELECT %s FROM vcs_ai_signals WHERE repo_id IN (%s)", cols, ph),
       params = as.list(ids))
@@ -532,12 +553,16 @@ reconcile_ai_identity <- function(con) {
     # and nothing else. jpstat lost its summary rollup, nhdplusTools's onset and
     # markers moved to hydrogeofetch, and it repeated every week, which is why the
     # merge log's prior count sat two rows under the published table.
-    stale <- if (any(active)) grp$repo_id[!active] else setdiff(ids, canonical)
-    onto <- involved$repo_id %in% c(canonical, stale)
-    folded <- involved[onto, , drop = FALSE]
-    folded$repo_id <- rep(canonical, nrow(folded))
-    rows <- rbind(involved[!onto, , drop = FALSE],
-                  ai_onset_reducer(.ai_empty_signals(), folded))
+    stale <- intersect(names(map), ids)
+    rows <- involved
+    if (length(stale)) {
+      canonical <- unname(map[stale[1]])
+      onto <- involved$repo_id %in% c(canonical, stale)
+      folded <- involved[onto, , drop = FALSE]
+      folded$repo_id <- rep(canonical, nrow(folded))
+      rows <- rbind(involved[!onto, , drop = FALSE],
+                    ai_onset_reducer(.ai_empty_signals(), folded))
+    }
     was_hollow <- sum(.ai_is_hollow(rows))
     rows <- heal_hollow_siblings(rows)
     healed <- healed + (was_hollow - sum(.ai_is_hollow(rows)))
@@ -547,7 +572,26 @@ reconcile_ai_identity <- function(con) {
   }
   if (healed > 0L)
     message(sprintf("ai identity: filled %d empty row(s) from an active sibling slug", healed))
-  invisible(TRUE)
+}
+
+# The weekly read's tables and the model tallies, narrowed to the renamed repositories,
+# carried to the current names and written back, with one log line per table that moved rows.
+.reconcile_ai_state <- function(con, map) {
+  if (!length(map)) return(invisible(0L))
+  ids <- unique(c(names(map), unname(map)))
+  ph <- paste(rep("?", length(ids)), collapse = ",")
+  tables <- Filter(function(t) DBI::dbExistsTable(con, t), c(names(.ai_repo_keys()), "vcs_ai_models"))
+  state <- stats::setNames(lapply(tables, function(t) DBI::dbGetQuery(con,
+    sprintf('SELECT * FROM "%s" WHERE repo_id IN (%s)', t, ph), params = as.list(ids))), tables)
+  carried <- carry_renamed_state(state, map)
+  for (t in tables) {
+    moved <- sum(state[[t]]$repo_id %in% names(map))
+    if (!moved) next
+    DBI::dbExecute(con, sprintf('DELETE FROM "%s" WHERE repo_id IN (%s)', t, ph), params = as.list(ids))
+    if (nrow(carried[[t]])) DBI::dbWriteTable(con, t, carried[[t]], append = TRUE)
+    message(sprintf("ai identity: %s, %d row(s) moved from an old name, %d of them folded into the current name's rows",
+                    t, moved, nrow(state[[t]]) - nrow(carried[[t]])))
+  }
 }
 
 #' Fill each row that carries no evidence from the rows its sibling slugs hold for the
@@ -1529,6 +1573,26 @@ build_release_notes <- function(summary, changed_shards, tag) {
   do.call(paste, c(parts, list(sep = "\t")))
 }
 
+# The AI state tables keyed by repo_id, with their primary keys. A rename folds their rows
+# onto the current name, so the gate counts the published side by key after the same map.
+.ai_repo_keys <- function() list(
+  vcs_ai_repo_reads = "repo_id",
+  vcs_ai_search_log = c("repo_id", "rule_key"),
+  vcs_ai_account_counts = c("repo_id", "tool", "identity_set"),
+  vcs_ai_review_signals = c("repo_id", "tool"),
+  vcs_ai_outside_prs = c("repo_id", "pr_number", "tool"))
+
+# The published rows of `t` counted once per key, with every old repo_id read as the current
+# name the outgoing repos table maps it to. `a` when the published table cannot be read.
+.gate_n_by_current_name <- function(pc, nc, t, key, a) {
+  prev <- .gate_rows(pc, t)
+  if (is.null(prev) || !all(key %in% names(prev))) return(a)
+  map <- ai_canonical_repo_map(.gate_rows(nc, "repos"))
+  k <- match(prev$repo_id, names(map))
+  prev$repo_id[!is.na(k)] <- unname(map[k[!is.na(k)]])
+  length(unique(.gate_key(prev, key)))
+}
+
 #' The rule for a table that only ever accumulates.
 #'
 #' What the gate was written for. A row that is in the published build and not
@@ -1545,6 +1609,8 @@ build_release_notes <- function(summary, changed_shards, tag) {
 .regress_row_count <- function(t, pc, nc, tol) {
   a <- .gate_n(pc, t); b <- .gate_n(nc, t)
   if (is.na(a) || is.na(b) || a == 0) return(character(0))
+  key <- .ai_repo_keys()[[t]]
+  if (!is.null(key)) a <- .gate_n_by_current_name(pc, nc, t, key, a)
   if (b < a * (1 - tol)) sprintf("%s: %d rows, was %d", t, b, a) else character(0)
 }
 

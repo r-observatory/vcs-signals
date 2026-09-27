@@ -1033,18 +1033,21 @@ ai_onset_reducer <- function(prior_rows, incoming_rows) {
   if (by == 0L) .ai_date_cmp(on, stored_on) else by
 }
 
+# The read state's column groups, each moved whole with the date that says when it was read.
+.ai_read_groups <- function() list(
+  commits_read_on = c("commits_read_on", "commits_read_through", "commits_ruleset", "commits_read",
+                      "commits_window_complete", "commits_history_complete"),
+  prs_read_on = c("prs_read_on", "prs_newest_created_at", "prs_walk_complete", "prs_walk_started_on",
+                  "prs_walk_cursor"),
+  accounts_counted_on = "accounts_counted_on",
+  last_failed_on = c("last_failed_on", "last_failure"))
+
 #' Fold this run's read state over the stored state, one column group at a time: a group moves
 #' only when this run read it and is not behind, the commit group judged by its watermark first. Pure.
 fold_repo_reads <- function(prior, incoming) {
   empty <- .ai_empty_reads()
   prior <- .ai_bind_like(empty, list(prior)); incoming <- .ai_bind_like(empty, list(incoming))
-  groups <- list(
-    commits_read_on = c("commits_read_on", "commits_read_through", "commits_ruleset", "commits_read",
-                        "commits_window_complete", "commits_history_complete"),
-    prs_read_on = c("prs_read_on", "prs_newest_created_at", "prs_walk_complete", "prs_walk_started_on",
-                    "prs_walk_cursor"),
-    accounts_counted_on = "accounts_counted_on",
-    last_failed_on = c("last_failed_on", "last_failure"))
+  groups <- .ai_read_groups()
   for (i in seq_len(nrow(incoming))) {
     k <- match(incoming$repo_id[i], prior$repo_id)
     if (is.na(k)) { prior <- rbind(prior, incoming[i, , drop = FALSE]); next }
@@ -1196,6 +1199,70 @@ fold_models <- function(prior, deep, cheap, rebuilt_repos = NULL, reads = NULL) 
   }
   rownames(out) <- NULL
   out
+}
+
+#' A renamed repository's rows in the weekly read's tables and in vcs_ai_models, carried
+#' from its old repo_ids to the current one `map` names (old to current, from
+#' ai_canonical_repo_map) and folded by each table's rule, with none left under an old name.
+#' `state` holds any of those tables by name. A table with no old-name row comes back as it
+#' came. Pure.
+carry_renamed_state <- function(state, map) {
+  if (!length(map)) return(state)
+  old <- function(df) df$repo_id %in% names(map)
+  # The current name's rows go first, so they win every tie.
+  own_first <- function(df) {
+    moved <- df[old(df), , drop = FALSE]
+    moved$repo_id <- unname(map[moved$repo_id])
+    rbind(df[!old(df), , drop = FALSE], moved)
+  }
+  rules <- list(
+    vcs_ai_review_signals = function(df) fold_review_rows(.ai_empty_review(), own_first(df)),
+    vcs_ai_outside_prs = function(df) fold_outside_prs(.ai_empty_outside(), own_first(df)),
+    # Both names counted the same commits, so the newest count wins, never a sum.
+    vcs_ai_account_counts = function(df)
+      fold_account_counts(.ai_empty_counts(), own_first(df), counted_repos = character(0)),
+    vcs_ai_search_log = function(df) fold_search_log(.ai_empty_log(), own_first(df)),
+    vcs_ai_repo_reads = function(df) .ai_newest_read_groups(own_first(df)),
+    vcs_ai_models = function(df) .ai_models_one_name(df, map))
+  for (t in intersect(names(state), names(rules))) {
+    df <- state[[t]]
+    if (is.null(df) || !any(old(df))) next
+    out <- rules[[t]](df)
+    rownames(out) <- NULL
+    state[[t]] <- out
+  }
+  state
+}
+
+# One read row per repo_id, each column group whole from the row whose group is newest (the
+# first row on a tie), so a watermark never sits beside another row's completeness flag. Pure.
+.ai_newest_read_groups <- function(df) {
+  df <- .ai_bind_like(.ai_empty_reads(), list(df))
+  groups <- .ai_read_groups()
+  out <- lapply(split(df, factor(df$repo_id, levels = unique(df$repo_id))), function(g) {
+    row <- g[1, , drop = FALSE]
+    for (d in names(groups)) {
+      v <- g[[d]]
+      if (all(is.na(v))) next
+      row[, groups[[d]]] <- g[which(v == max(v, na.rm = TRUE))[1], groups[[d]], drop = FALSE]
+    }
+    row
+  })
+  do.call(rbind, unname(out))
+}
+
+# A model tally describes the history one read examined, so two are never combined: per tool
+# the current name keeps its own rows, and only a tool it has none for takes the rows of one
+# old name, the first in the map's order. Pure.
+.ai_models_one_name <- function(df, map) {
+  old <- df$repo_id %in% names(map)
+  own <- df[!old, , drop = FALSE]
+  moved <- df[old, , drop = FALSE]
+  rank <- match(moved$repo_id, names(map))
+  moved$repo_id <- unname(map[moved$repo_id])
+  pair <- paste(moved$repo_id, moved$tool, sep = "\r")
+  first <- stats::ave(rank, pair, FUN = min)
+  rbind(own, moved[rank == first & !(pair %in% paste(own$repo_id, own$tool, sep = "\r")), , drop = FALSE])
 }
 
 #' Commit-credit (msg.) rules with their tool, revision and search mode. Pure.
