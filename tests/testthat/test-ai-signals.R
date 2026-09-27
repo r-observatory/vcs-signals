@@ -34,20 +34,6 @@ test_that("scan_ignore_tokens returns typed empty frame on no match", {
   expect_true(all(c("tool","tier","marker","agnostic") %in% names(out)))
 })
 
-test_that("match_bot_identity matches allowlist exactly, rejects denylist and lookalikes", {
-  # AI_BOT_ALLOWLIST, not AI_PR_AGENT_LOGINS: this list feeds the REST commit
-  # search, whose author: qualifier wants the "[bot]" suffix that GraphQL strips.
-  # The two lists look alike and want opposite shapes; see the note in config.R.
-  out <- match_bot_identity(c("NoReply@Anthropic.com", "someone@example.com"),
-                            c("dependabot[bot]", "devin-ai-integration[bot]"))
-  expect_setequal(out$tool, c("claude", "devin"))
-  expect_true(all(out$tier == "A"))
-  # a lookalike substring must not match
-  expect_equal(nrow(match_bot_identity("noreply@anthropic.com.evil.net", character(0))), 0)
-  # denylisted bot alone yields nothing
-  expect_equal(nrow(match_bot_identity(character(0), "renovate[bot]")), 0)
-})
-
 test_that("scan_trailers requires the canonical identity, rejects a human named Claude", {
   yes <- scan_trailers(c("feat: x\n\nCo-authored-by: Claude <noreply@anthropic.com>"))
   expect_equal(yes$tool, "claude"); expect_equal(yes$tier, "B")
@@ -186,6 +172,57 @@ test_that("reducer: an exact LATER than a floor is a contradiction - keep the fl
                           row("claude","2024-05-05",0L,"B",0L,"2024-05-05")),   # exact 2024 (contradicts)
     "contradiction")
   expect_equal(o$first_seen_date, "2023-01-01"); expect_equal(o$first_seen_censored, 1L)
+})
+
+test_that("one tool's rules dated differently keep the earliest as a floor without a warning", {
+  # mlr-org/mlr3tuning's week: a commit's address bounds the start, a pull request's footer dates later.
+  found <- cbind(repo_id = "github.com/mlr-org/mlr3tuning",
+                 .ai_found(c("claude", "claude"), c("B", "PB"), c("msg.claude.address", "pr.claude.footer"),
+                           onset = c("2026-03-17T07:23:36Z", "2026-06-11T09:25:27Z"),
+                           onset_censored = c(1L, 0L)))
+  expect_no_warning(r <- build_cheap_rows(found, "2026-09-27"))
+  expect_equal(r$first_seen_date, "2026-03-17T07:23:36Z")
+  expect_equal(r$first_seen_censored, 1L)
+  ev <- data.frame(tool = c("claude", "claude"), tier = c("B", "PB"),
+                   marker = c("msg.claude.address", "pr.claude.footer"), agnostic = 0L,
+                   stringsAsFactors = FALSE)
+  on <- data.frame(tool = ev$tool, marker = ev$marker,
+                   first_seen_date = c("2026-03-17T07:23:36Z", "2026-06-11T09:25:27Z"),
+                   first_seen_censored = c(1L, 0L), stringsAsFactors = FALSE)
+  expect_no_warning(d <- build_ai_detail("github.com/mlr-org/mlr3tuning", ev, on, "2026-09-27"))
+  expect_equal(d$first_seen_date, "2026-03-17T07:23:36Z")
+  expect_equal(d$first_seen_censored, 1L)
+})
+
+test_that("a value dated exactly after its own floor still warns", {
+  mk <- function(date, cens) cbind(row("claude", date, cens, "B", 0L, "2026-09-27"),
+                                   markers = "msg.claude.coauthor", stringsAsFactors = FALSE)
+  expect_warning(
+    o <- ai_onset_reducer(mk("2026-03-17T07:23:36Z", 1L), mk("2026-05-01T00:00:00Z", 0L)),
+    "contradiction")
+  expect_equal(o$first_seen_date, "2026-03-17T07:23:36Z"); expect_equal(o$first_seen_censored, 1L)
+})
+
+test_that("a joined value is never matched rule by rule against a joined floor", {
+  # admixr2's read on 2026-09-27: searches date the commit credits, and the shared ignore lines stay floors.
+  rid <- "github.com/leidenpharmacology/admixr2"
+  keys <- c("gitignore:.claude", "gitignore:CLAUDE.md", "rbuildignore:CLAUDE.md", "msg.claude.address",
+            "msg.claude.coauthor", "pr.claude.footer", "pr.claude.session")
+  ev <- data.frame(tool = "claude", tier = c("D", "D", "D", "B", "B", "PB", "PB"), marker = keys, agnostic = 0L,
+                   stringsAsFactors = FALSE)
+  on <- data.frame(tool = "claude", marker = keys,
+                   first_seen_date = c(rep("2026-09-27T23:59:59Z", 3), rep("2026-07-16T23:15:41Z", 2),
+                                       "2026-09-10T07:52:38Z", "2026-09-12T07:39:57Z"),
+                   first_seen_censored = c(1L, 1L, 1L, 0L, 0L, 0L, 0L), stringsAsFactors = FALSE)
+  read <- build_ai_detail(rid, ev, on, "2026-09-27")
+  expect_equal(read$first_seen_date, "2026-07-16T23:15:41Z"); expect_equal(read$first_seen_censored, 0L)
+  prior <- data.frame(repo_id = rid, tool = "claude", first_seen_date = "2026-05-29T12:05:12Z",
+                      first_seen_censored = 1L, evidence_tiers = "B,D",
+                      markers = paste0("B,gitignore:.claude,gitignore:CLAUDE.md,",
+                                       "rbuildignore:.claude,rbuildignore:CLAUDE.md"),
+                      authored = 0L, last_confirmed_date = "2026-09-20", stringsAsFactors = FALSE)
+  expect_no_warning(o <- ai_onset_reducer(prior, read))
+  expect_equal(o$first_seen_date, "2026-05-29T12:05:12Z"); expect_equal(o$first_seen_censored, 1L)
 })
 
 test_that("reducer keeps distinct tools as distinct rows", {
@@ -442,97 +479,17 @@ test_that("build_onset_map leaves an unresolved onset NA and feeds build_ai_deta
   expect_setequal(strsplit(detail$evidence_tiers, ",")[[1]], c("B", "D"))
 })
 
-test_that("select_incremental_repos keeps only repos with a tool not in the published detail", {
-  flagged <- data.frame(
-    repo_id = c("github.com/a/x", "github.com/b/y", "github.com/c/z"),
-    owner = c("a", "b", "c"), name = c("x", "y", "z"),
-    node_id = c("R_a", "R_b", "R_c"), is_fork = 0L,
-    parent = NA_character_, pr_onset_date = NA_character_, stringsAsFactors = FALSE)
-  evidence <- data.frame(
-    repo_id = c("github.com/a/x", "github.com/b/y", "github.com/c/z", "github.com/c/z"),
-    tool = c("claude", "cursor", "claude", "copilot"),
-    tier = c("D", "D", "D", "PR"),
-    marker = c("CLAUDE.md", ".cursor", "CLAUDE.md", "PR"),
-    agnostic = 0L, stringsAsFactors = FALSE)
-  # A/claude and C/claude are already published; B/cursor and C/copilot are new.
-  published <- data.frame(
-    repo_id = c("github.com/a/x", "github.com/c/z"), tool = c("claude", "claude"),
-    first_seen_date = c("2024-01-01", "2024-02-01"), first_seen_censored = 0L,
-    evidence_tiers = "D", authored = 0L, last_confirmed_date = c("2024-01-01", "2024-02-01"),
-    stringsAsFactors = FALSE)
-
-  keep <- select_incremental_repos(flagged, evidence, published)
-  expect_setequal(keep, c("github.com/b/y", "github.com/c/z"))  # B new tool, C adopted a 2nd
-  expect_false("github.com/a/x" %in% keep)                      # all A's tools already onset
-})
-
-test_that("select_incremental_repos treats an empty published detail as everything-is-new", {
-  flagged <- data.frame(repo_id = "github.com/a/x", owner = "a", name = "x",
-                        node_id = "R_a", is_fork = 0L, parent = NA_character_,
-                        pr_onset_date = NA_character_, stringsAsFactors = FALSE)
-  evidence <- data.frame(repo_id = "github.com/a/x", tool = "claude", tier = "D",
-                         marker = "CLAUDE.md", agnostic = 0L, stringsAsFactors = FALSE)
-  keep <- select_incremental_repos(flagged, evidence, .ai_empty_signals())
-  expect_equal(keep, "github.com/a/x")
-})
-
-test_that("select_incremental_repos treats a newly-adopted agents-md as a new tool (no special-casing)", {
-  flagged <- data.frame(repo_id = "github.com/a/x", owner = "a", name = "x",
-                        node_id = "R_a", is_fork = 0L, parent = NA_character_,
-                        pr_onset_date = NA_character_, stringsAsFactors = FALSE)
-  evidence <- data.frame(repo_id = "github.com/a/x", tool = "agents-md", tier = "D",
-                         marker = "AGENTS.md", agnostic = 1L, stringsAsFactors = FALSE)
-  # agents-md not yet published -> selected; then published -> not re-selected.
-  expect_equal(select_incremental_repos(flagged, evidence, .ai_empty_signals()),
-               "github.com/a/x")
-  published <- data.frame(repo_id = "github.com/a/x", tool = "agents-md",
-                          first_seen_date = "2024-01-01", first_seen_censored = 0L,
-                          evidence_tiers = "D", authored = 0L,
-                          last_confirmed_date = "2024-01-01", stringsAsFactors = FALSE)
-  expect_equal(select_incremental_repos(flagged, evidence, published), character(0))
-})
-
-test_that("select_confirmation_rows emits last-confirmed-only rows for already-published tools still detected", {
-  evidence <- data.frame(
-    repo_id = c("github.com/a/x", "github.com/b/y", "github.com/c/z", "github.com/c/z"),
-    tool = c("claude", "cursor", "claude", "copilot"),
-    tier = c("D", "D", "D", "PR"),
-    marker = c("CLAUDE.md", ".cursor", "CLAUDE.md", "PR"),
-    agnostic = 0L, stringsAsFactors = FALSE)
-  # A/claude and C/claude are already published; B/cursor and C/copilot are new (no
-  # confirmation row for those - select_incremental_repos already re-onsets them).
-  published <- data.frame(
-    repo_id = c("github.com/a/x", "github.com/c/z"), tool = c("claude", "claude"),
-    first_seen_date = c("2024-01-01", "2024-02-01"), first_seen_censored = 0L,
-    evidence_tiers = "D", authored = 0L, last_confirmed_date = c("2024-01-01", "2024-02-01"),
-    stringsAsFactors = FALSE)
-
-  rows <- select_confirmation_rows(evidence, published, "2026-07-16")
-  expect_setequal(paste(rows$repo_id, rows$tool),
-                  c("github.com/a/x claude", "github.com/c/z claude"))
-  expect_true(all(is.na(rows$first_seen_date)))
-  expect_true(all(is.na(rows$evidence_tiers)))
-  expect_equal(rows$first_seen_censored, c(0L, 0L))
-  expect_equal(rows$authored, c(0L, 0L))
-  expect_equal(rows$last_confirmed_date, rep("2026-07-16", 2))
-})
-
-test_that("select_confirmation_rows returns the empty 7-col frame when nothing is published yet", {
-  evidence <- data.frame(repo_id = "github.com/a/x", tool = "claude", tier = "D",
-                         marker = "CLAUDE.md", agnostic = 0L, stringsAsFactors = FALSE)
-  rows <- select_confirmation_rows(evidence, .ai_empty_signals(), "2026-07-16")
-  expect_equal(nrow(rows), 0)
-  expect_equal(names(rows), names(.ai_empty_signals()))
-})
+# The shape the old weekly gate wrote for a tool it saw again: a date and nothing else.
+.confirm_rows <- function(repo, tool, today)
+  data.frame(repo_id = repo, tool = tool, first_seen_date = NA_character_, first_seen_censored = 0L,
+             evidence_tiers = NA_character_, authored = 0L, last_confirmed_date = today, stringsAsFactors = FALSE)
 
 test_that("a confirmation row reduces against the prior published row: onset frozen, last_confirmed advances", {
   prior <- data.frame(repo_id = "github.com/a/x", tool = "claude",
                       first_seen_date = "2024-01-01", first_seen_censored = 0L,
                       evidence_tiers = "D", authored = 0L,
                       last_confirmed_date = "2024-01-01", stringsAsFactors = FALSE)
-  evidence <- data.frame(repo_id = "github.com/a/x", tool = "claude", tier = "D",
-                         marker = "CLAUDE.md", agnostic = 0L, stringsAsFactors = FALSE)
-  confirm <- select_confirmation_rows(evidence, prior, "2026-07-16")
+  confirm <- .confirm_rows(prior$repo_id, prior$tool, "2026-07-16")
 
   reduced <- ai_onset_reducer(prior, confirm)
   expect_equal(nrow(reduced), 1)
@@ -553,10 +510,7 @@ test_that("a confirmation row whose key has no prior row creates nothing", {
                       authored_commits = NA_integer_, assisted_commits = NA_integer_,
                       last_confirmed_date = "2024-01-01", stringsAsFactors = FALSE)
   published <- rbind(prior, transform(prior, repo_id = "github.com/b/y"))
-  evidence <- data.frame(repo_id = c("github.com/a/x", "github.com/b/y"), tool = "claude",
-                         tier = "D", marker = "CLAUDE.md", agnostic = 0L,
-                         stringsAsFactors = FALSE)
-  confirm <- select_confirmation_rows(evidence, published, "2026-07-16")   # 7 columns
+  confirm <- .confirm_rows(published$repo_id, published$tool, "2026-07-16")   # 7 columns
   deep <- transform(prior, repo_id = "github.com/c/z", tool = "cursor",
                     last_confirmed_date = "2026-07-16")
 
@@ -565,7 +519,7 @@ test_that("a confirmation row whose key has no prior row creates nothing", {
               assisted_commits = NA_integer_)[names(prior)], deep))
   expect_setequal(paste(kept$repo_id, kept$tool),
                   c("github.com/a/x claude", "github.com/c/z cursor"))
-  # The 7-column frame select_confirmation_rows itself returns is read the same way.
+  # The 7-column frame itself is read the same way.
   expect_equal(paste(drop_unanchored_confirmations(prior, confirm)$repo_id), "github.com/a/x")
 
   reduced <- ai_onset_reducer(prior, kept)
@@ -595,7 +549,7 @@ test_that("a row is empty only when its onset, tiers and markers are all blank",
                      authored = 0L, authored_commits = NA_integer_, assisted_commits = NA_integer_,
                      last_confirmed_date = "2026-09-20", stringsAsFactors = FALSE)
   expect_identical(.ai_is_hollow(rows), c(TRUE, TRUE, FALSE, FALSE, FALSE))
-  # With no markers column, as select_confirmation_rows writes, only the other two count.
+  # Rows without the "markers" column, as the old gate wrote them, count only the other two.
   expect_identical(.ai_is_hollow(rows[setdiff(names(rows), "markers")]),
                    c(TRUE, TRUE, FALSE, FALSE, TRUE))
   expect_equal(drop_unanchored_confirmations(.ai_empty_signals(), rows)$tool,
@@ -784,13 +738,15 @@ test_that("every tool that signs commits has a trailer rule keyed on its address
     jules     = "Co-authored-by: google-labs-jules[bot] <1+google-labs-jules[bot]@users.noreply.github.com>",
     windsurf  = "Co-authored-by: Windsurf Cascade <cascade@windsurf.ai>",
     gemini    = "Co-Authored-By: Gemini 2.5 Flash <noreply@google.com>",
-    gemini2   = "Co-authored-by: gemini-code-assist[bot] <1+gemini-code-assist[bot]@users.noreply.github.com>",
     aider     = "Co-authored-by: aider (openai/DeepSeek-R1) <aider@aider.chat>"
   )
   for (nm in names(real)) {
     hit <- scan_trailers(real[[nm]])
     expect_true(nrow(hit) > 0, info = paste(nm, real[[nm]]))
   }
+  # Gemini Code Assist accepting a review suggestion is a review credit, not Gemini writing code.
+  expect_equal(nrow(scan_trailers(
+    "Co-authored-by: gemini-code-assist[bot] <1+gemini-code-assist[bot]@users.noreply.github.com>")), 0L)
 
   # Humans who share a name with an agent must not be flagged. These appeared in
   # the same searches as the agents above.
@@ -870,10 +826,10 @@ test_that("an ignore marker names which ignore file it came from", {
 test_that("a path in both ignore files is recorded twice, on purpose", {
   # The pair is a real fact about the repository. They collapse per (repo, tool)
   # downstream, so two rows here cost nothing and carry more.
-  r <- scan_ignore_tokens(c(".claude"), c(".claude"))
+  r <- scan_ignore_tokens(c(".cursor"), c(".cursor"))
   expect_equal(nrow(r), 2L)
-  expect_setequal(r$marker, c("gitignore:.claude", "rbuildignore:.claude"))
-  expect_true(all(r$tool == "claude"))
+  expect_setequal(r$marker, c("gitignore:.cursor", "rbuildignore:.cursor"))
+  expect_true(all(r$tool == "cursor"))
 })
 
 test_that("an ambient marker in an ignore file stays out of the AI evidence", {
@@ -1014,4 +970,197 @@ test_that("token presence is judged by the same rule that detected it", {
   expect_false(ignore_text_has_token("codex_output\n", ".codex"))
   expect_false(ignore_text_has_token(NA, ".claude"))
   expect_false(ignore_text_has_token("", ".claude"))
+})
+
+test_that("a .github/agents folder names Copilot only when it holds a Markdown agent file", {
+  expect_false("copilot" %in% classify_tree_markers(character(0), c("agents", "agents/README"))$tool)
+  expect_true("copilot" %in% classify_tree_markers(character(0), c("agents", "agents/x.agent.md"))$tool)
+})
+
+test_that("a .gemini folder holding only review settings is Gemini Code Assist, not Gemini", {
+  review <- c(".gemini", ".gemini/config.yaml", ".gemini/styleguide.md")
+  expect_equal(classify_gemini_dir(review), "review")
+  expect_false("gemini" %in% classify_tree_markers(review, character(0))$tool)
+  expect_equal(match_review_files(review)$tool, "gemini-code-assist")
+  expect_equal(match_review_files(review)$marker, ".gemini")
+  authoring <- c(".gemini", ".gemini/settings.json", ".gemini/styleguide.md")
+  expect_equal(classify_gemini_dir(authoring), "authoring")
+  expect_true("gemini" %in% classify_tree_markers(authoring, character(0))$tool)
+  expect_equal(nrow(match_review_files(authoring)), 0L)
+  # A folder whose listing came back empty says nothing about Code Assist.
+  expect_equal(classify_gemini_dir(".gemini"), "authoring")
+})
+
+test_that("an ignore line for a .gemini folder of review settings adds no Gemini row", {
+  # synthesizebio/rsynthbio: review settings in .gemini and a `.gemini/*` line in .Rbuildignore.
+  tree <- list(root_entries = c(".gemini", ".gemini/config.yaml", ".gemini/styleguide.md", "DESCRIPTION"),
+               github_entries = character(0), gitignore_lines = character(0),
+               rbuildignore_lines = ".gemini/*")
+  f <- assemble_repo_evidence(tree, scanned_on = "2026-09-27")
+  expect_false("gemini" %in% f$tool)
+  expect_equal(f$tool[f$role == "review"], "gemini-code-assist")
+  expect_false(repo_has_ai_signal(f))
+  expect_equal(nrow(scan_ignore_tokens(character(0), ".gemini/*", tree$root_entries)), 0L)
+  # No folder committed, or a Gemini CLI folder: the line still names Gemini.
+  expect_equal(scan_ignore_tokens(character(0), ".gemini/*")$marker, "rbuildignore:.gemini")
+  expect_equal(scan_ignore_tokens(character(0), ".gemini/*", c(".gemini", ".gemini/settings.json"))$marker,
+               "rbuildignore:.gemini")
+})
+
+test_that("a CodeRabbit file is a review tool and never a coding tool", {
+  root <- c(".coderabbit.yaml", "DESCRIPTION")
+  expect_equal(nrow(classify_tree_markers(root, character(0))), 0L)
+  expect_equal(match_review_files(root)$tool, "coderabbit")
+  expect_equal(match_review_files(c(".coderabbit.yml"))$marker, ".coderabbit.yml")
+  expect_false("coderabbit" %in% ai_rule_inventory()$tool)
+})
+
+test_that("each new folder or file names the tool that writes it", {
+  cases <- list(
+    list(root = ".kiro", tool = "kiro"), list(root = ".devin", tool = "devin"),
+    list(root = ".devinignore", tool = "devin"),
+    list(root = c(".posit", ".posit/assistant"), tool = "posit-assistant"),
+    list(root = c(".positai", ".positai/settings.json"), tool = "posit-assistant"),
+    list(root = c(".positai", ".positai/plans"), tool = "posit-assistant"),
+    list(root = c(".positai", ".positai/agents"), tool = "posit-assistant"),
+    list(root = "opencode.json", tool = "opencode"), list(root = ".opencode", tool = "opencode"),
+    list(root = "QWEN.md", tool = "qwen"), list(root = ".qwen", tool = "qwen"),
+    list(root = ".kilocode", tool = "kilo"), list(root = ".kilo", tool = "kilo"),
+    list(root = "WARP.md", tool = "warp"), list(root = ".jules", tool = "jules"),
+    list(root = ".openhands", tool = "openhands"), list(root = ".openhands_instructions", tool = "openhands"),
+    list(root = ".trae", tool = "trae"), list(root = ".augment", tool = "augment"),
+    list(root = "CRUSH.md", tool = "crush"), list(root = ".goosehints", tool = "goose"),
+    list(root = ".factory", tool = "factory"), list(root = ".vibe", tool = "vibe"))
+  for (cs in cases)
+    expect_true(cs$tool %in% classify_tree_markers(cs$root, character(0))$tool,
+                info = paste(cs$root, collapse = " "))
+  for (gh in c("instructions", "prompts", "chatmodes", "skills", "workflows/copilot-setup-steps.yml"))
+    expect_true("copilot" %in% classify_tree_markers(character(0), c("workflows", gh))$tool, info = gh)
+  # A bare .positai is written by the editor whatever the user does.
+  expect_equal(nrow(classify_tree_markers(".positai", character(0))), 0L)
+})
+
+test_that("the Copilot setup workflow is dated through its real path", {
+  expect_equal(marker_repo_path("workflows/copilot-setup-steps.yml"),
+               ".github/workflows/copilot-setup-steps.yml")
+  expect_equal(marker_repo_path("agents"), ".github/agents")
+})
+
+test_that("ignore lines are matched however the path is spelled", {
+  cases <- list(
+    c("/.kiro/", "kiro"), c(".claude/*", "claude"), c("^[.]claude$", "claude"),
+    c("\\.cursor(/|$)", "cursor"), c("!.cursor/environment.json", "cursor"),
+    c("**/.windsurf/**", "windsurf"), c("CLAUDE.MD", "claude"), c(".aider*", "aider"),
+    c(".claude/settings.local.json", "claude"), c(".cursor  # editor rules", "cursor"))
+  for (cs in cases) {
+    got <- scan_ignore_tokens(cs[1], character(0))
+    expect_true(cs[2] %in% got$tool, info = cs[1])
+  }
+  expect_equal(nrow(scan_ignore_tokens("cursor", character(0))), 0L)      # no dot, no path
+  expect_equal(nrow(scan_ignore_tokens("AGENTS.md", character(0))), 0L)   # names no tool
+  expect_equal(scan_ignore_tokens(".aider*", character(0))$marker, "gitignore:.aider*")
+  expect_equal(scan_ignore_tokens(character(0), ".aider*")$marker, "rbuildignore:.aider*")
+})
+
+test_that("a line ending in a carriage return still matches", {
+  expect_true("claude" %in% scan_ignore_tokens(c(".claude\r", "*.o\r"), character(0))$tool)
+})
+
+test_that("lines an editor writes on its own produce nothing, the committed folder still counts", {
+  for (line in c(".posit/assistant", "/.posit/assistant/", "^\\.posit/assistant$",
+                 ".positai", ".positai/settings.json"))
+    expect_equal(nrow(scan_ignore_tokens(line, line)), 0L, info = line)
+  expect_true("posit-assistant" %in%
+              classify_tree_markers(c(".posit", ".posit/assistant"), character(0))$tool)
+  expect_equal(nrow(scan_ignore_tokens(character(0), "^\\.claude$")), 0L)
+  expect_true("claude" %in% scan_ignore_tokens(".claude", character(0))$tool)
+})
+
+test_that("a root ignore line that shares its name with a Copilot .github folder names nothing", {
+  for (line in c("prompts/", "/prompts/", "^prompts$", "prompts/*.md", "skills/", "skills",
+                 "^agents$", "chatmodes", "instructions/"))
+    expect_equal(nrow(scan_ignore_tokens(line, line)), 0L, info = line)
+  expect_true("copilot" %in% classify_tree_markers(character(0), c("prompts", "skills"))$tool)
+})
+
+test_that("the bisect reads an ignore file the way the scanner does", {
+  expect_true(ignore_text_has_token("# tools\r\n/.kiro/\r\n", ".kiro"))
+  expect_true(ignore_text_has_token(".aider*\n", ".aider*"))
+  expect_false(ignore_text_has_token(".aider.conf.yml\n", ".aider*"))
+  expect_true(ignore_text_has_token("!.cursor/environment.json\n", ".cursor"))
+})
+
+.one_pr_node <- function(number, head, created, assoc = "OWNER", cross = FALSE, login = "maintainer", body = "x")
+  list(number = number, createdAt = created, author = list(login = login, `__typename` = "User"),
+       authorAssociation = assoc, isCrossRepository = cross, headRefName = head, body = body)
+
+test_that("a week's findings come from files, ignore lines, pull requests, commits and account counts", {
+  tree <- list(root_entries = c("CLAUDE.md", ".coderabbit.yaml"), github_entries = character(0),
+               gitignore_lines = ".aider*", rbuildignore_lines = character(0))
+  act <- list(prs = .ai_pr_nodes_frame(list(
+                .one_pr_node(9L, "cursor/add-tests-a1b2", "2026-08-28T09:43:30Z", assoc = "NONE", cross = TRUE))),
+              commits = ai_commit("fe5c63c"))
+  acc <- data.frame(tool = "copilot", commits = 3L, newest_commit_date = "2026-09-01T00:00:00Z",
+                    stringsAsFactors = FALSE)
+  f <- assemble_repo_evidence(tree, act, acc, scanned_on = "2026-10-04")
+  expect_equal(names(f), names(.ai_empty_found()))
+  claude <- f[f$marker == "CLAUDE.md", ]
+  expect_equal(claude$onset, "2026-10-04T23:59:59Z"); expect_equal(claude$onset_censored, 1L)
+  expect_equal(f$role[f$tool == "coderabbit"], "review")
+  expect_true("gitignore:.aider*" %in% f$marker)
+  cur <- f[f$tool == "cursor" & f$role == "authoring", ]
+  expect_equal(cur$rule_key, "msg.cursor.made-with"); expect_equal(cur$onset, "2026-03-18T09:27:20Z")
+  expect_equal(cur$onset_censored, 1L)
+  expect_equal(f$role[f$tool == "cursor" & f$tier == "PB"], "outside")
+  cop <- f[f$tool == "copilot", ]
+  expect_equal(cop$tier, "A"); expect_equal(cop$onset, "2026-09-01T00:00:00Z")
+  whole <- assemble_repo_evidence(tree, act, acc, scanned_on = "2026-10-04", whole_history = TRUE)
+  expect_equal(whole$onset_censored[whole$rule_key %in% "msg.cursor.made-with"], 0L)
+})
+
+test_that("review files and outside pull requests never admit a repository on their own", {
+  review_only <- assemble_repo_evidence(list(root_entries = ".coderabbit.yml"))
+  expect_false(repo_has_ai_signal(review_only))
+  outside_only <- assemble_repo_evidence(list(), list(prs = .ai_pr_nodes_frame(list(
+    .one_pr_node(927L, "cursor/kotoba-nanoarrow-binding-4119", "2026-08-28T09:43:30Z", assoc = "NONE", cross = TRUE)))))
+  expect_false(repo_has_ai_signal(outside_only))
+  expect_equal(nrow(build_cheap_rows(cbind(repo_id = "g", outside_only), "2026-10-04")), 0L)
+  rv <- review_rows(review_only, "github.com/o/r", "2026-10-04")
+  expect_equal(rv$tool, "coderabbit"); expect_equal(rv$markers, ".coderabbit.yml"); expect_equal(rv$evidence_tiers, "D")
+})
+
+test_that("rows built from a week's findings carry exact pull request dates and censored file dates", {
+  f <- assemble_repo_evidence(list(root_entries = "CLAUDE.md"), list(prs = .ai_pr_nodes_frame(list(
+    .one_pr_node(2L, "claude/review-package-vignettes-8clehs", "2026-07-15T03:42:49Z")))), scanned_on = "2026-10-04")
+  f$repo_id <- "github.com/temuulene/mongolstats"
+  rows <- build_cheap_rows(f, "2026-10-04")
+  expect_equal(nrow(rows), 1L)
+  expect_equal(rows$first_seen_date, "2026-07-15T03:42:49Z"); expect_equal(rows$first_seen_censored, 0L)
+  expect_setequal(strsplit(rows$evidence_tiers, ",")[[1]], c("D", "PB"))
+  expect_setequal(strsplit(rows$markers, ",")[[1]], c("CLAUDE.md", "pr.claude.branch"))
+  expect_equal(rows$last_confirmed_date, "2026-10-04")
+})
+
+test_that("a week's findings are dated by the oldest match and keep the newest one", {
+  # Newest first, the order GitHub returns commits and pull requests in.
+  commit <- function(oid, at) list(oid = oid, committedDate = at, author = list(name = "p", email = "p@e.org"),
+                                   message = "Fix\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>")
+  act <- list(prs = .ai_pr_nodes_frame(list(.one_pr_node(5L, "claude/tidy-docs", "2026-08-01T00:00:00Z"),
+                                            .one_pr_node(4L, "claude/add-tests", "2026-07-01T00:00:00Z"))),
+              commits = .ai_commit_nodes_frame(list(commit("b2", "2026-09-20T00:00:00Z"),
+                                                    commit("a1", "2026-03-01T00:00:00Z"))))
+  acc <- data.frame(tool = "copilot", commits = 3L, newest_commit_date = "2026-09-01T00:00:00Z",
+                    stringsAsFactors = FALSE)
+  f <- assemble_repo_evidence(list(), act, acc, scanned_on = "2026-10-04")
+  credit <- f[f$tool == "claude" & f$tier == "B", ]
+  expect_setequal(credit$rule_key, c("msg.claude.coauthor", "msg.claude.address"))
+  expect_equal(credit$onset, rep("2026-03-01T00:00:00Z", 2L))
+  expect_equal(credit$newest_at, rep("2026-09-20T00:00:00Z", 2L))
+  expect_equal(credit$onset_censored, c(1L, 1L))
+  pr <- f[f$tool == "claude" & f$tier == "PB", ]
+  expect_equal(pr$marker, "pr.claude.branch")
+  expect_equal(pr$onset, "2026-07-01T00:00:00Z"); expect_equal(pr$newest_at, "2026-08-01T00:00:00Z")
+  expect_equal(pr$onset_censored, 0L)
+  account <- f[f$tool == "copilot", ]
+  expect_equal(account$onset_censored, 1L); expect_equal(account$newest_at, "2026-09-01T00:00:00Z")
 })

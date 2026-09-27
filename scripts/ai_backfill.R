@@ -5,14 +5,14 @@
 # onset scan, and .github/workflows/ai-weekly.yml, the weekly incremental that swaps gate for
 # gate-incremental):
 #   enumerate -> full active github roster from the published summary's repos table (one job)
-#   cheap     -> Tier-D marker + PR-agent pass over one mod-N shard, write a flagged partial
-#                (matrix job)
-#   gate      -> union every cheap shard's flagged partials into one flagged-roster (one job)
-#   gate-incremental -> like gate, but narrow the flagged roster to repos carrying a tool not
-#                yet in the published vcs_ai_signals detail (the weekly incremental gate used
-#                by .github/workflows/ai-weekly.yml in place of gate)
-#   deep      -> commit-history onset scan over one mod-N shard of the flagged roster,
-#                build vcs_ai_signals detail rows (matrix job)
+#   cheap     -> every repository's contents, recent pull requests and commits, and account
+#                counts over one mod-N shard, written to the cheap partial (matrix job)
+#   gate      -> union the cheap partials into the flagged roster and write the week's search
+#                list, and on a full gate work within the campaign (one job)
+#   gate-incremental -> write the same list without a campaign (the weekly gate used by
+#                .github/workflows/ai-weekly.yml in place of gate)
+#   deep      -> ask the shard's share of the week's search list and write its dated rows,
+#                search log, account counts and campaign (matrix job)
 #   merge     -> reconcile node_id identity, reduce prior+incoming onsets, rebuild the
 #                summary rollups, and republish (one job)
 if (!exists("STARGAZER_PAGE"))       source("scripts/config.R")
@@ -27,6 +27,11 @@ suppressPackageStartupMessages({ library(DBI); library(RSQLite) })
 AI_ROSTER_TABLE <- "roster"
 
 # ---- roster IO --------------------------------------------------------------
+# Read watermarks the cheap pass plans each repository's read from.
+.AI_ROSTER_READ_COLS <- c("commits_read_on", "commits_read_through", "commits_ruleset",
+                          "commits_history_complete", "prs_newest_created_at", "prs_walk_complete",
+                          "prs_walk_started_on", "prs_walk_cursor")
+
 write_ai_roster <- function(path, roster_df, roster_cran = NULL) {
   if (file.exists(path)) unlink(path)
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
@@ -34,10 +39,12 @@ write_ai_roster <- function(path, roster_df, roster_cran = NULL) {
   DBI::dbExecute(con, "PRAGMA journal_mode=DELETE")
   DBI::dbExecute(con, sprintf("CREATE TABLE %s (
     repo_id TEXT PRIMARY KEY, owner TEXT NOT NULL, name TEXT NOT NULL,
-    node_id TEXT, done INTEGER NOT NULL DEFAULT 0)", AI_ROSTER_TABLE))
-  if (nrow(roster_df) > 0)
-    DBI::dbWriteTable(con, AI_ROSTER_TABLE,
-                      roster_df[c("repo_id", "owner", "name", "node_id", "done")], append = TRUE)
+    node_id TEXT, done INTEGER NOT NULL DEFAULT 0,
+    commits_read_on TEXT, commits_read_through TEXT, commits_ruleset TEXT,
+    commits_history_complete INTEGER, prs_newest_created_at TEXT, prs_walk_complete INTEGER,
+    prs_walk_started_on TEXT, prs_walk_cursor TEXT)", AI_ROSTER_TABLE))
+  cols <- intersect(c("repo_id", "owner", "name", "node_id", "done", .AI_ROSTER_READ_COLS), names(roster_df))
+  if (nrow(roster_df) > 0) DBI::dbWriteTable(con, AI_ROSTER_TABLE, roster_df[cols], append = TRUE)
   # Rebuilt every week from one CRAN read, so no week depends on an earlier copy.
   DBI::dbExecute(con, "CREATE TABLE roster_cran (repo_id TEXT NOT NULL, package TEXT NOT NULL,
     cran_version TEXT NOT NULL, PRIMARY KEY (repo_id, package))")
@@ -133,6 +140,120 @@ tree_query_canary <- function(io) {
   invisible(TRUE)
 }
 
+# ---- weekly document canary and read state ----------------------------------
+.ai_canary_repos <- function(slugs)
+  data.frame(repo_id = paste0("github.com/", slugs), owner = sub("/.*$", "", slugs),
+             name = sub("^[^/]*/", "", slugs), stringsAsFactors = FALSE)
+
+#' Send the weekly documents for repositories whose answers are known, and stop the run
+#' when GitHub no longer returns them. The contents check comes first.
+ai_query_canary <- function(io) {
+  tree_query_canary(io)
+  cfg <- AI_QUERY_CANARY
+  fail <- function(fmt, ...) stop(sprintf(paste0("AI query canary: ", fmt), ...), call. = FALSE)
+  ask <- function(q, label) {
+    get <- function() tryCatch(io$graphql(q), error = function(e) list(.err = conditionMessage(e)))
+    res <- get()
+    # As in the contents check, only a request that threw (a 502 or a timeout) is sent again.
+    if (!is.null(res$.err)) {
+      (if (is.function(io$sleep)) io$sleep else Sys.sleep)(AI_BATCH_RETRY_WAIT_S)
+      res <- get()
+    }
+    if (!is.null(res$.err)) fail("the %s document failed: %s", label, res$.err)
+    if (is.null(res$data)) fail("the %s document returned no data: %s", label, .fetch_first_error(res))
+    if (!is.null(res$errors) && !errors_are_alias_not_found(res$errors))
+      fail("the %s document returned an error: %s", label, .fetch_first_error(res))
+    res
+  }
+  acc_repos <- .ai_canary_repos(cfg$accounts)
+  counts <- parse_account_counts(ask(build_account_count_query(acc_repos), "account-count"), acc_repos)
+  for (rid in acc_repos$repo_id)
+    if (is.null(counts[[rid]])) fail("%s came back empty in the account-count document", rid)
+  n <- function(slug, tool) {
+    d <- counts[[paste0("github.com/", slug)]]; v <- d$commits[d$tool == tool]
+    if (length(v)) v else 0L
+  }
+  if (n("ss3sim/ss3sim", "claude") != 0L)
+    fail("ss3sim reads %d commits by Claude's accounts where 0 is right: a github-actions address reached the filter",
+         n("ss3sim/ss3sim", "claude"))
+  if (n("ss3sim/ss3sim", "amazonq") < 2L)
+    fail("ss3sim reads %d commits by Amazon Q's account, at least 2 expected", n("ss3sim/ss3sim", "amazonq"))
+  if (n("johnpaulgosling/addivortes", "cursor") < cfg$addivortes_cursor_floor)
+    fail(paste0("addivortes reads %d commits by Cursor's accounts, at least %d expected: ",
+                "the account filter may no longer count cursoragent@cursor.com's commits"),
+         n("johnpaulgosling/addivortes", "cursor"), cfg$addivortes_cursor_floor)
+  act_repos <- .ai_canary_repos(cfg$activity)
+  act <- parse_activity(ask(build_activity_query(act_repos), "activity"), act_repos)
+  for (rid in act_repos$repo_id) {
+    a <- act[[rid]]
+    if (is.null(a)) fail("%s came back empty in the activity document", rid)
+    if (!all(c("number", "created_at", "login", "association", "cross_repo", "head_ref") %in% names(a$prs)) ||
+        !all(c("oid", "committed_at", "message", "author_name", "author_email") %in% names(a$commits)))
+      fail("%s: the activity document's pull request or commit frame lacks a column", rid)
+  }
+  # Floors that only grow: the read takes pull requests in any state, #49 among them, and
+  # the newest commits with no since, so an empty list is a fault in the reply.
+  rows <- function(slug, part) NROW(act[[paste0("github.com/", slug)]][[part]])
+  if (rows("ericrayanderson/shinyglass", "prs") < 1L)
+    fail("ericrayanderson/shinyglass read no pull requests in the activity document, at least 1 expected")
+  if (rows("ss3sim/ss3sim", "commits") < 1L)
+    fail("ss3sim/ss3sim read no commits in the activity document, at least 1 expected")
+  fixed <- ask(build_fixed_object_query(cfg$prs, cfg$commits), "fixed-object")$data
+  pr <- function(k) fixed[[sprintf("p%d", k)]]$pullRequest
+  cm <- function(k) fixed[[sprintf("c%d", k)]]$object
+  for (k in seq_along(cfg$prs)) if (is.null(pr(k - 1L)))
+    fail("%s#%s came back empty in the fixed-object document", cfg$prs[[k]][1], cfg$prs[[k]][2])
+  for (k in seq_along(cfg$commits)) if (is.null(cm(k - 1L)))
+    fail("%s@%s came back empty in the fixed-object document", cfg$commits[[k]][1], substr(cfg$commits[[k]][2], 1, 7))
+  sg <- classify_prs(.ai_pr_nodes_frame(list(pr(0L))))
+  if (!(nrow(sg) == 1L && sg$tool == "cursor" && sg$code == "PB" && sg$role == "authoring"))
+    fail("ericrayanderson/shinyglass #49 no longer reads as a pull request Cursor wrote for its maintainer")
+  na <- assemble_repo_evidence(list(), list(prs = .ai_pr_nodes_frame(list(pr(1L)))))
+  if (!any(na$role == "outside" & na$tool == "cursor"))
+    fail("apache/arrow-nanoarrow #927 no longer reads as a Cursor pull request from outside the project")
+  if (nrow(build_cheap_rows(cbind(repo_id = "github.com/apache/arrow-nanoarrow", na), "canary")) > 0L)
+    fail("apache/arrow-nanoarrow #927 would count as the package's own Cursor use")
+  if (!("msg.cursor.made-with" %in% match_commit_findings(.ai_commit_nodes_frame(list(cm(0L))))$rule_key))
+    fail("xrobin/pROC fe5c63c no longer matches its Made-with: Cursor line")
+  bg <- unique(match_commit_findings(.ai_commit_nodes_frame(list(cm(1L))))$tool)
+  if (!identical(bg, "antigravity"))
+    fail("alyssafrazee/ballgown ab1da7b names %s, where Antigravity alone is right",
+         if (length(bg)) paste(bg, collapse = ", ") else "no tool")
+  message("AI query canary: passed")
+  invisible(TRUE)
+}
+
+#' pipeline_state, which lives in the recent shard. An empty vector when there is no
+#' release yet; a stop when there is one and its shard cannot be read.
+.ai_read_pipeline_state <- function(io, dir) {
+  dir.create(dir, showWarnings = FALSE, recursive = TRUE)
+  if (!isTRUE(io$download("vcs-signals-recent.db", dir))) {
+    if (isTRUE(io$release_exists()))
+      stop("could not download vcs-signals-recent.db to read the pipeline state; stopping rather than ",
+           "taking lost state for a first run", call. = FALSE)
+    return(character(0))
+  }
+  con <- DBI::dbConnect(RSQLite::SQLite(), file.path(dir, "vcs-signals-recent.db"))
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  if (!DBI::dbExistsTable(con, "pipeline_state")) return(character(0))
+  st <- DBI::dbReadTable(con, "pipeline_state")
+  stats::setNames(st$value, st$key)
+}
+
+#' Once the state tables have been published, a summary without them is a lost table,
+#' never a first run: a reset would re-read everything and lose the REST-only counts.
+.ai_state_guard <- function(con, state) {
+  since <- unname(state["ai_state_tables_since"])
+  if (!length(since) || is.na(since)) return(invisible(TRUE))
+  for (t in c("vcs_ai_repo_reads", "vcs_ai_search_log", "vcs_ai_account_counts")) {
+    n <- if (DBI::dbExistsTable(con, t)) DBI::dbGetQuery(con, sprintf('SELECT COUNT(*) AS n FROM "%s"', t))$n else 0L
+    if (n == 0L)
+      stop(sprintf(paste0("the published summary has no %s rows although the weekly AI read has kept them ",
+                          "since %s; stopping so a lost table is never read as a first run"), t, since), call. = FALSE)
+  }
+  invisible(TRUE)
+}
+
 # ---- enumerate --------------------------------------------------------------
 #' Build the FULL active github roster from the published summary's embedded repos
 #' table (NOT the star-filtered vcs_signals_summary that run_enumerate uses): the
@@ -148,14 +269,15 @@ tree_query_canary <- function(io) {
 #' so the squatter is never scanned under this row's repo_id. Same download as
 #' backfill.R's enumerate.
 run_enumerate_ai <- function(io, out_dir) {
-  # Before any read: a broken contents query stops the pass here, not twelve shards later.
-  tree_query_canary(io)
+  # Before any read: a broken weekly document stops the pass here, not twelve shards later.
+  ai_query_canary(io)
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   if (!isTRUE(io$download("vcs-signals-summary.db", out_dir)))
     stop("could not download vcs-signals-summary.db from the published release; nothing to enumerate")
   summary_path <- file.path(out_dir, "vcs-signals-summary.db")
   con <- DBI::dbConnect(RSQLite::SQLite(), summary_path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
+  .ai_state_guard(con, .ai_read_pipeline_state(io, file.path(out_dir, "_state")))
   rows <- DBI::dbGetQuery(con,
     "SELECT repo_id, owner, name, node_id FROM repos WHERE host = 'github' AND status = 'active'")
   roster <- data.frame(repo_id = rows$repo_id, owner = rows$owner, name = rows$name,
@@ -198,6 +320,12 @@ run_enumerate_ai <- function(io, out_dir) {
   }
   if (length(drop_idx) > 0) roster <- roster[-drop_idx, , drop = FALSE]
 
+  # Last week's read watermarks, so each repository's read can be planned.
+  if (DBI::dbExistsTable(con, "vcs_ai_repo_reads")) {
+    rd <- DBI::dbReadTable(con, "vcs_ai_repo_reads")
+    m <- match(roster$repo_id, rd$repo_id)
+    for (cn in .AI_ROSTER_READ_COLS) roster[[cn]] <- rd[[cn]][m]
+  }
   rp <- DBI::dbGetQuery(con, "SELECT repo_id, package FROM repo_packages WHERE origin = 'cran'")
   roster_cran <- build_roster_cran(io, rp, roster$repo_id)
   message(sprintf("ai enumerate: %d active github repos, %d CRAN package versions to compare",
@@ -214,27 +342,41 @@ run_enumerate_ai <- function(io, out_dir) {
   data.frame(repo_id = character(), tool = character(), tier = character(),
              marker = character(), agnostic = integer(), stringsAsFactors = FALSE)
 
-write_flagged_partial <- function(path, flagged_df, evidence_df) {
+write_flagged_partial <- function(path, flagged_df, evidence_df, work = NULL, campaign = NULL) {
   if (file.exists(path)) unlink(path)
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   DBI::dbExecute(con, "PRAGMA journal_mode=DELETE")
-  DBI::dbExecute(con, "CREATE TABLE flagged (repo_id TEXT PRIMARY KEY, owner TEXT, name TEXT,
-    node_id TEXT, is_fork INTEGER, parent TEXT, pr_onset_date TEXT)")
-  DBI::dbExecute(con, "CREATE TABLE evidence (repo_id TEXT, tool TEXT, tier TEXT,
-    marker TEXT, agnostic INTEGER)")
-  if (nrow(flagged_df) > 0) DBI::dbWriteTable(con, "flagged", flagged_df, append = TRUE)
-  if (nrow(evidence_df) > 0) DBI::dbWriteTable(con, "evidence", evidence_df, append = TRUE)
+  DBI::dbWriteTable(con, "flagged", .ai_bind_like(.ai_empty_flagged(), list(flagged_df)), overwrite = TRUE)
+  DBI::dbWriteTable(con, "evidence", .ai_bind_like(cbind(repo_id = character(0), .ai_empty_found()),
+                                                   list(evidence_df)), overwrite = TRUE)
+  # A roster written without a list keeps no work table, so the search pass can tell it
+  # from a week with nothing to do.
+  if (!is.null(work))
+    DBI::dbWriteTable(con, "work", .ai_bind_like(.ai_empty_work(), list(work)), overwrite = TRUE)
+  if (!is.null(campaign))
+    DBI::dbWriteTable(con, "campaign", .ai_bind_like(data.frame(since = character(), stringsAsFactors = FALSE),
+                                                     list(campaign)), overwrite = TRUE)
   DBI::dbExecute(con, "VACUUM")
   invisible(path)
+}
+
+# One table of a partial, or NULL when the partial predates it.
+.ai_part_table <- function(path, table) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  if (DBI::dbExistsTable(con, table)) DBI::dbReadTable(con, table) else NULL
 }
 
 read_flagged <- function(path) {
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
-  list(
-    flagged  = if (DBI::dbExistsTable(con, "flagged")) DBI::dbReadTable(con, "flagged") else .ai_empty_flagged(),
-    evidence = if (DBI::dbExistsTable(con, "evidence")) DBI::dbReadTable(con, "evidence") else .ai_empty_ev())
+  get <- function(t, empty) if (DBI::dbExistsTable(con, t)) DBI::dbReadTable(con, t) else empty
+  # NULL work means a roster written before the list existed, not an empty week.
+  list(flagged  = get("flagged", .ai_empty_flagged()),
+       evidence = get("evidence", .ai_empty_ev()),
+       work     = get("work", NULL),
+       campaign = get("campaign", data.frame(since = character(), stringsAsFactors = FALSE)))
 }
 
 # ---- dev-tooling partial IO -------------------------------------------------
@@ -315,168 +457,296 @@ contents_shard_stops <- function(n_failed, attempted)
   n_failed >= TREE_DROP_MIN && n_failed >= TREE_DROP_MAX_SHARE * attempted
 
 # ---- cheap pass -------------------------------------------------------------
-#' Cheap Tier-D marker + PR-agent pass over one even mod-N shard of the roster. Batches
-#' TIER_D_BATCH repos through fetch_tree_markers + fetch_pr_agents, assembles evidence,
-#' and writes only the flagged repos (repo_has_ai_signal) to a two-table partial. A repo
-#' whose contents read fails is listed in the dev-tooling partial's failures table, gets
-#' no dev-tooling row, and enough of them stop the shard. Before each batch, a
-#' graphql_rate_remaining(io) preflight (mirrors update.R:130-137) pauses the shard when
-#' the budget is below AI_POINT_RESERVE, so an exhausted token stops the pass cleanly
-#' instead of reporting the rest of the shard as failed; the unscanned tail of this
-#' shard is picked up by the next workflow_dispatch (enumerate + cheap re-run
-#' deterministically over the same shard). fetch_tree_markers/fetch_pr_agents already
-#' pace themselves with BATCH_DELAY_S, so this loop does not sleep again per batch.
+# One repository's vcs_dev_tooling row, or NULL when its contents read failed or it is gone.
+.ai_dev_tooling_row <- function(tree, rid, today, cran_links) {
+  if (is.null(tree) || is.na(tree$is_fork)) return(NULL)
+  dv <- classify_dev_tooling(tree$root_entries, tree$github_entries, repo = tree)
+  bad <- attr(dv, "rbuildignore_bad_lines")
+  cmp <- compare_repo_version(dv$repo_desc_package, dv$repo_desc_version,
+                              cran_links[cran_links$repo_id == rid, c("package", "cran_version")])
+  dv$cran_version_at_scan <- cmp$cran_version_at_scan
+  dv$repo_version_vs_cran <- cmp$repo_version_vs_cran
+  dv$repo_id <- rid
+  dv$last_scanned <- today
+  dv$ruleset_version <- DEV_TOOLING_RULESET_VERSION
+  out <- dv[c("repo_id", "last_scanned", "ruleset_version", dev_tooling_columns())]
+  attr(out, "rbuildignore_bad_lines") <- bad
+  out
+}
+
+# Stops the shard when its contents failures say the query itself is broken.
+.ai_shard_stop <- function(failed_df, scanned, i, N) {
+  n_contents <- sum(failed_df$query == "contents")
+  if (!contents_shard_stops(n_contents, scanned)) return(invisible(FALSE))
+  first <- failed_df[failed_df$query == "contents", , drop = FALSE]
+  stop(sprintf(paste0("ai cheap shard %d/%d: the contents read failed for %d of %d repositories, ",
+                      "so the query itself is broken. First: %s. First message: %s"),
+               i, N, n_contents, scanned, paste(utils::head(first$repo_id, 5L), collapse = ", "),
+               first$error[1]), call. = FALSE)
+}
+
+# Every table the cheap partial carries, empty, in the shape the merge reads.
+.ai_cheap_tables <- function() list(
+  flagged = .ai_empty_flagged(),
+  evidence = cbind(repo_id = character(0), .ai_empty_found()),
+  repo_reads = cbind(.ai_empty_reads(), reached_first = integer()),
+  account_counts = .ai_empty_counts(), review = .ai_empty_review(), outside_prs = .ai_empty_outside(),
+  models = cbind(.ai_empty_models(), mode = character(), read_after = character()),
+  search_log = cbind(.ai_empty_log(), mode = character(), read_after = character()))
+
+write_cheap_partial <- function(path, tables) {
+  if (file.exists(path)) unlink(path)
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  DBI::dbExecute(con, "PRAGMA journal_mode=DELETE")
+  proto <- .ai_cheap_tables()
+  for (nm in names(proto))
+    DBI::dbWriteTable(con, nm, .ai_bind_like(proto[[nm]], list(tables[[nm]])), overwrite = TRUE)
+  DBI::dbExecute(con, "VACUUM")
+  invisible(path)
+}
+
+# One document over a slice of the roster; every failure lands in sink$failures. A
+# response the parser cannot read fails the slice for this document only.
+.ai_fetch_doc <- function(io, repos, label, fetch, breaker, sink) {
+  if (!nrow(repos)) return(list())
+  got <- tryCatch(fetch(io, repos, breaker), error = function(e) list(results = list(),
+    failed = .fetch_failed_frame(repos$repo_id, label, substr(conditionMessage(e), 1L, 200L), .utc_now())))
+  if (!is.null(got$failed) && nrow(got$failed)) sink$failures[[length(sink$failures) + 1L]] <- got$failed
+  got$results %||% list()
+}
+
+# Follow-up commit pages for the repositories whose read needs them. A repository whose
+# page fails drops its whole activity read, so its watermark stays where it was.
+.ai_follow_commits <- function(io, repos, plans, act, breaker, sink) {
+  st <- list()
+  for (r in seq_len(nrow(repos))) {
+    a <- act[[repos$repo_id[r]]]
+    if (is.null(a)) next
+    st[[repos$repo_id[r]]] <- list(commits = a$commits, has_next = a$commits_has_next,
+                                   cursor = a$commits_end_cursor, pages = 0L, plan = plans[[r]])
+  }
+  repeat {
+    due <- names(st)[vapply(st, function(s)
+      more_commit_pages(s$plan, .ai_earliest_chr(s$commits$committed_at), s$has_next, s$pages), logical(1))]
+    if (!length(due)) break
+    sub <- repos[match(due, repos$repo_id), c("repo_id", "owner", "name"), drop = FALSE]
+    sub$after <- vapply(due, function(k) as.character(st[[k]]$cursor), character(1))
+    sub$since <- vapply(due, function(k) as.character(st[[k]]$plan$since), character(1))
+    got <- .ai_fetch_doc(io, sub, "activity", function(io, rp, b)
+      fetch_aliased(io, rp, AI_COMMIT_PAGE_BATCH, build_commit_page_query, parse_commit_pages, "activity", b),
+      breaker, sink)
+    for (k in due) {
+      pg <- got[[k]]
+      if (is.null(pg)) { st[[k]] <- NULL; next }
+      st[[k]]$commits <- rbind(st[[k]]$commits, pg$commits)
+      st[[k]]$has_next <- pg$has_next; st[[k]]$cursor <- pg$end_cursor; st[[k]]$pages <- st[[k]]$pages + 1L
+    }
+  }
+  st
+}
+
+# The one-off walk through older pull requests, and weekly catch-up pages, within the
+# shard's point budget. A failed page keeps its cursor for next week.
+.ai_walk_prs <- function(io, repos, pr_plans, breaker, sink, budget) {
+  w <- list()
+  for (k in names(pr_plans)) if (isTRUE(pr_plans[[k]]$walk))
+    w[[k]] <- list(prs = .ai_pr_nodes_frame(list()), has_next = TRUE, cursor = pr_plans[[k]]$after,
+                   reached_stop = FALSE, plan = pr_plans[[k]])
+  repeat {
+    due <- names(w)[vapply(w, function(x) !x$reached_stop && !isTRUE(x$failed) &&
+                             more_pr_pages(x$plan, .ai_earliest_chr(x$prs$created_at), x$has_next, budget$points),
+                           logical(1))]
+    if (!length(due)) break
+    for (grp in unname(chunk(due, AI_PR_WALK_BATCH))) {
+      if (budget$points <= 0) break
+      sub <- repos[match(grp, repos$repo_id), c("repo_id", "owner", "name"), drop = FALSE]
+      sub$after <- vapply(grp, function(k) as.character(w[[k]]$cursor), character(1))
+      got <- .ai_fetch_doc(io, sub, "walk", function(io, rp, b)
+        fetch_aliased(io, rp, AI_PR_WALK_BATCH, build_pr_walk_query, parse_pr_walk, "walk", b), breaker, sink)
+      budget$points <- budget$points - 1L
+      for (k in grp) {
+        pg <- got[[k]]
+        if (is.null(pg)) { w[[k]]$failed <- TRUE; next }
+        w[[k]]$prs <- rbind(w[[k]]$prs, pg$prs)
+        w[[k]]$has_next <- pg$has_next; w[[k]]$cursor <- pg$end_cursor
+        # The same stop more_pr_pages reads, so a catch-up ending on the stored pull request is done.
+        w[[k]]$reached_stop <- any(pg$prs$created_at <= w[[k]]$plan$stop_before, na.rm = TRUE)
+      }
+    }
+  }
+  w
+}
+
+#' The weekly read of one mod-N shard: every repository's contents, newest pull requests
+#' and commits, and its tools' account counts, matched locally, with follow-up pages and
+#' the pull request walk. Everything the next run and the merge need is written to the
+#' cheap partial; a repository whose read failed keeps last week's state.
 run_cheap <- function(io, out_dir, roster_path, i, N, batch_size = TIER_D_BATCH) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   roster <- load_ai_roster(roster_path)
   cran_links <- load_roster_cran(roster_path)
   mine <- roster[shard_rows(nrow(roster), i, N), , drop = FALSE]
   message(sprintf("ai cheap shard %d/%d: %d of %d repos", i, N, nrow(mine), nrow(roster)))
-
-  flagged <- list(); evrows <- list(); dev_rows <- list(); scanned <- 0L
-  failed <- list(); bad_rbi_lines <- 0L
-  # One breaker for the whole shard, so a fault repeated across chunks still trips it.
-  contents_breaker <- new_fetch_breaker()
   today <- format(Sys.Date())
+  # One breaker per document for the whole shard, so a fault repeated across chunks trips it.
+  brk <- list(contents = new_fetch_breaker(limit = AI_BREAKER_LIMIT),
+              activity = new_fetch_breaker(limit = AI_BREAKER_LIMIT),
+              accounts = new_fetch_breaker(limit = AI_BREAKER_LIMIT),
+              walk = new_fetch_breaker(limit = AI_BREAKER_LIMIT))
+  proto <- .ai_cheap_tables()
+  sink <- new.env()
+  for (nm in c(names(proto), "dev", "failures")) sink[[nm]] <- list()
+  budget <- new.env(); budget$points <- AI_PR_WALK_POINTS
+  scanned <- 0L; bad_rbi_lines <- 0L; capped <- 0L
+  put <- function(nm, df) if (!is.null(df) && nrow(df)) sink[[nm]][[length(sink[[nm]]) + 1L]] <- df
   for (idx in unname(chunk(seq_len(nrow(mine)), batch_size))) {
     rl <- graphql_rate_remaining(io)
     if (rl < AI_POINT_RESERVE) {
-      message(sprintf(
-        "ai cheap shard %d/%d: graphql rate remaining (%s) below reserve (%d); pausing after %d of %d repos",
-        i, N, rl, AI_POINT_RESERVE, scanned, nrow(mine)))
+      message(sprintf("ai cheap shard %d/%d: graphql rate remaining (%s) below reserve (%d); pausing after %d of %d repos",
+                      i, N, rl, AI_POINT_RESERVE, scanned, nrow(mine)))
       break
     }
     repos <- mine[idx, , drop = FALSE]
-    fetched <- tryCatch(fetch_tree_markers(io, repos, batch_size, breaker = contents_breaker),
-      error = function(e) list(results = list(), failed = .fetch_failed_frame(
-        repos$repo_id, "contents", substr(conditionMessage(e), 1L, 200L), .utc_now())))
-    failed[[length(failed) + 1L]] <- fetched$failed
-    trees <- fetched$results
-    prs   <- tryCatch(fetch_pr_agents(io, repos, batch_size), error = function(e) NULL)
+    plans <- lapply(seq_len(nrow(repos)), function(r) plan_commit_read(repos[r, , drop = FALSE]))
+    repos$since <- vapply(plans, function(p) as.character(p$since), character(1))
+    n_failed_before <- length(sink$failures)
+    trees <- .ai_fetch_doc(io, repos, "contents", function(io, rp, b) fetch_tree_markers(io, rp, batch_size, b),
+                           brk$contents, sink)
+    act <- .ai_fetch_doc(io, repos, "activity", fetch_activity, brk$activity, sink)
+    accts <- .ai_fetch_doc(io, repos, "accounts", fetch_account_counts, brk$accounts, sink)
+    cm <- .ai_follow_commits(io, repos, plans, act, brk$activity, sink)
+    pr_plans <- stats::setNames(lapply(repos$repo_id, function(rid)
+      if (rid %in% names(cm)) plan_pr_pages(repos[repos$repo_id == rid, , drop = FALSE], act[[rid]]) else list(walk = FALSE)),
+      repos$repo_id)
+    walks <- .ai_walk_prs(io, repos, pr_plans, brk$walk, sink, budget)
+    # Only this chunk's repositories can have failed in this chunk.
+    failed_now <- .ai_bind_like(.fetch_failed_frame(),
+                                utils::tail(sink$failures, length(sink$failures) - n_failed_before))
     for (r in seq_len(nrow(repos))) {
-      rid <- repos$repo_id[r]
-      tree <- trees[[rid]]
-      pr   <- if (is.null(prs)) NULL else prs[[rid]]
-      # A failed or gone repository gets no row, so its prior row and last_scanned stand.
-      if (!is.null(tree) && !is.na(tree$is_fork)) {
-        dv <- classify_dev_tooling(tree$root_entries, tree$github_entries, repo = tree)
-        bad_rbi_lines <- bad_rbi_lines + attr(dv, "rbuildignore_bad_lines")
-        cmp <- compare_repo_version(dv$repo_desc_package, dv$repo_desc_version,
-                                    cran_links[cran_links$repo_id == rid, c("package", "cran_version")])
-        dv$cran_version_at_scan <- cmp$cran_version_at_scan
-        dv$repo_version_vs_cran <- cmp$repo_version_vs_cran
-        dv$repo_id <- rid
-        dv$last_scanned <- today
-        dv$ruleset_version <- DEV_TOOLING_RULESET_VERSION
-        dev_rows[[length(dev_rows) + 1L]] <- dv[c("repo_id", "last_scanned", "ruleset_version", dev_tooling_columns())]
+      rid <- repos$repo_id[r]; prev <- repos[r, , drop = FALSE]
+      tree <- trees[[rid]]; cnt <- if (rid %in% names(accts)) accts[[rid]] else NULL
+      dv <- .ai_dev_tooling_row(tree, rid, today, cran_links)
+      if (!is.null(dv)) { bad_rbi_lines <- bad_rbi_lines + attr(dv, "rbuildignore_bad_lines"); put("dev", dv) }
+      read_row <- data.frame(repo_id = rid, stringsAsFactors = FALSE)
+      activity <- NULL; whole <- FALSE
+      if (rid %in% names(cm)) {
+        a <- act[[rid]]; c_st <- cm[[rid]]; w <- walks[[rid]]
+        st <- next_commit_read_state(prev, plans[[r]], c_st$commits, c_st$has_next, today)
+        capped <- capped + as.integer(st$commits_window_complete == 0L)
+        walked <- if (is.null(w)) NULL else list(has_next = w$has_next, end_cursor = w$cursor, reached_stop = w$reached_stop)
+        ps <- next_pr_read_state(prev, a, if (is.null(w)) list(walk = FALSE) else w$plan, walked, today)
+        read_row <- cbind(read_row, as.data.frame(c(st, ps), stringsAsFactors = FALSE))
+        prs <- if (is.null(w)) a$prs else rbind(a$prs, w$prs)
+        activity <- list(prs = prs, commits = c_st$commits)
+        whole <- isTRUE(st$commits_history_complete == 1L)
+        mode <- read_count_mode(plans[[r]], st)
+        after <- if (identical(mode, "add")) as.character(.ai_col1(prev, "commits_read_through")) else NA_character_
+        hits <- match_commit_findings(c_st$commits)
+        put("search_log", read_log_rows(hits, rid, today, mode, after))
+        mr <- read_model_rows(rid, c_st$commits, hits, mode, after)
+        if (nrow(mr)) { mr$repo_id <- rid; put("models", mr) }
+        put("outside_prs", outside_pr_rows(classify_prs(prs), rid, today))
       }
-      if (is.null(tree) && is.null(pr)) next            # both channels errored -> deferred
-      ev <- assemble_repo_evidence(tree, pr)
-      if (!repo_has_ai_signal(ev)) next
-      flagged[[length(flagged) + 1L]] <- data.frame(
-        repo_id = rid, owner = repos$owner[r], name = repos$name[r], node_id = repos$node_id[r],
-        is_fork = as.integer(isTRUE(tree$is_fork)),
+      if (!is.null(cnt)) {
+        read_row$accounts_counted_on <- today
+        if (nrow(cnt)) put("account_counts", data.frame(repo_id = rid, tool = cnt$tool, identity_set = "graphql",
+          commits = cnt$commits, newest_commit_date = cnt$newest_commit_date, measured_on = today,
+          stringsAsFactors = FALSE))
+      }
+      mine_failed <- failed_now[failed_now$repo_id == rid, , drop = FALSE]
+      if (nrow(mine_failed)) {
+        read_row$last_failed_on <- today
+        read_row$last_failure <- substr(paste0(mine_failed$query[1], ": ", mine_failed$error[1]), 1, 200)
+      }
+      put("repo_reads", read_row)
+      if (is.null(tree) && is.null(activity) && is.null(cnt)) next
+      found <- assemble_repo_evidence(tree, activity, cnt, scanned_on = today, whole_history = whole)
+      put("review", review_rows(found, rid, today))
+      if (!repo_has_ai_signal(found)) next
+      put("flagged", data.frame(repo_id = rid, owner = repos$owner[r], name = repos$name[r],
+        node_id = repos$node_id[r], is_fork = as.integer(isTRUE(tree$is_fork)),
         parent = if (is.null(tree)) NA_character_ else (tree$parent %||% NA_character_),
-        pr_onset_date = earliest_agent_pr_date(pr),
-        stringsAsFactors = FALSE)
-      ev$repo_id <- rid
-      ev$agnostic <- as.integer(ev$agnostic)
-      evrows[[length(evrows) + 1L]] <- ev[c("repo_id", "tool", "tier", "marker", "agnostic")]
+        pr_onset_date = earliest_agent_pr_date(activity), stringsAsFactors = FALSE))
+      put("evidence", cbind(repo_id = rid, found))
     }
     scanned <- scanned + nrow(repos)
   }
-  failed_df <- if (length(failed)) do.call(rbind, failed) else .fetch_failed_frame()
-  flagged_df <- if (length(flagged)) do.call(rbind, flagged) else .ai_empty_flagged()
-  ev_df <- if (length(evrows)) do.call(rbind, evrows) else .ai_empty_ev()
-  write_flagged_partial(file.path(out_dir, sprintf("vcs-ai-cheap-%d.db", i)), flagged_df, ev_df)
-  dev_df <- if (length(dev_rows)) do.call(rbind, dev_rows) else .devtool_empty_shard()
-  write_dev_tooling_partial(file.path(out_dir, sprintf("vcs-dev-tooling-%d.db", i)), dev_df, failed_df)
-  message(sprintf("ai cheap shard %d/%d: %d flagged repos, %d evidence rows, %d dev-tooling rows",
-                  i, N, nrow(flagged_df), nrow(ev_df), nrow(dev_df)))
-  message(sprintf("ai cheap shard %d/%d: %d repositories failed (contents %d), %d not read this week",
-                  i, N, length(unique(failed_df$repo_id)), sum(failed_df$query == "contents"),
-                  nrow(mine) - scanned))
+  tables <- lapply(stats::setNames(names(proto), names(proto)), function(nm) .ai_bind_like(proto[[nm]], sink[[nm]]))
+  write_cheap_partial(file.path(out_dir, sprintf("vcs-ai-cheap-%d.db", i)), tables)
+  dev_df <- if (length(sink$dev)) do.call(rbind, sink$dev) else .devtool_empty_shard()
+  # The failure frame rides the dev-tooling partial, which every merge job downloads.
+  f <- .ai_bind_like(.fetch_failed_frame(), sink$failures)
+  write_dev_tooling_partial(file.path(out_dir, sprintf("vcs-dev-tooling-%d.db", i)), dev_df, f)
+  message(sprintf("ai cheap shard %d/%d: %d flagged repos, %d dev-tooling rows, %d walk queries left",
+                  i, N, nrow(tables$flagged), nrow(dev_df), budget$points))
+  message(sprintf(paste0("ai cheap shard %d/%d: %d repositories failed (contents %d, activity %d, accounts %d, ",
+                         "walk %d), %d not read this week, %d commit window(s) stopped at the page cap"),
+                  i, N, length(unique(f$repo_id)), sum(f$query == "contents"), sum(f$query == "activity"),
+                  sum(f$query == "accounts"), sum(f$query == "walk"), nrow(mine) - scanned, capped))
   if (bad_rbi_lines > 0L)
     message(sprintf("ai cheap shard %d/%d: %d .Rbuildignore line(s) did not compile and were skipped",
                     i, N, bad_rbi_lines))
-  n_contents <- sum(failed_df$query == "contents")
-  if (contents_shard_stops(n_contents, scanned)) {
-    first <- failed_df[failed_df$query == "contents", , drop = FALSE]
-    stop(sprintf(paste0("ai cheap shard %d/%d: the contents read failed for %d of %d repositories, ",
-                        "so the query itself is broken. First: %s. First message: %s"),
-                 i, N, n_contents, scanned, paste(utils::head(first$repo_id, 5L), collapse = ", "),
-                 first$error[1]), call. = FALSE)
-  }
+  .ai_shard_stop(f, scanned, i, N)
 }
 
 # ---- gate -------------------------------------------------------------------
-#' Union every cheap shard's flagged partial into one smaller flagged-roster the deep
-#' matrix shards over. Dedups flagged rows by repo_id and evidence rows by
-#' (repo_id, tool, marker), so a repo split across a shard boundary is folded once.
-run_gate <- function(out_dir, parts_dir) {
+#' The published tables the gate plans from. A release whose summary cannot be read stops
+#' the gate: planning from nothing would put every repository back on the list.
+.ai_read_published_detail <- function(io, out_dir) {
+  empty <- list(signals = .ai_empty_signals(), search_log = .ai_empty_log(),
+                repo_reads = .ai_empty_reads(), account_counts = .ai_empty_counts())
+  if (!isTRUE(io$download("vcs-signals-summary.db", out_dir))) {
+    if (isTRUE(io$release_exists()))
+      stop("release 'current' exists but vcs-signals-summary.db could not be downloaded; the gate ",
+           "stops rather than plan the week from nothing", call. = FALSE)
+    return(empty)
+  }
+  con <- DBI::dbConnect(RSQLite::SQLite(), file.path(out_dir, "vcs-signals-summary.db"))
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  get <- function(t, e) if (DBI::dbExistsTable(con, t)) .ai_bind_like(e, list(DBI::dbReadTable(con, t))) else e
+  list(signals = get("vcs_ai_signals", empty$signals), search_log = get("vcs_ai_search_log", empty$search_log),
+       repo_reads = get("vcs_ai_repo_reads", empty$repo_reads),
+       account_counts = get("vcs_ai_account_counts", empty$account_counts))
+}
+
+#' Union the cheap partials into the flagged roster and write the week's search work.
+#' A full gate works on a campaign: the stored one, or one dated today.
+run_gate <- function(io, out_dir, parts_dir, full = TRUE) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   parts <- list.files(parts_dir, pattern = "^vcs-ai-cheap-.*\\.db$", full.names = TRUE)
-  fl <- lapply(parts, function(p) read_flagged(p)$flagged)
-  ev <- lapply(parts, function(p) read_flagged(p)$evidence)
-  flagged_df <- if (length(fl)) do.call(rbind, fl) else .ai_empty_flagged()
-  ev_df <- if (length(ev)) do.call(rbind, ev) else .ai_empty_ev()
+  fr <- lapply(parts, read_flagged)
+  flagged_df <- .ai_bind_like(.ai_empty_flagged(), lapply(fr, `[[`, "flagged"))
   flagged_df <- flagged_df[!duplicated(flagged_df$repo_id), , drop = FALSE]
-  ev_df <- ev_df[!duplicated(paste(ev_df$repo_id, ev_df$tool, ev_df$marker, sep = "\r")), , drop = FALSE]
-  write_flagged_partial(file.path(out_dir, "vcs-ai-flagged-roster.db"), flagged_df, ev_df)
-  message(sprintf("ai gate: %d flagged repos, %d evidence rows across %d shard(s)",
-                  nrow(flagged_df), nrow(ev_df), length(parts)))
-}
-
-#' Read the published vcs_ai_signals detail (the incremental baseline) out of the current
-#' release's summary shard. Returns the typed 0-row frame when no release exists yet (first
-#' ever weekly run) or the table is absent, so the gate treats every flagged repo as new
-#' rather than erroring - absence is never read as "clean".
-.ai_read_published_detail <- function(io, out_dir) {
-  if (!isTRUE(io$download("vcs-signals-summary.db", out_dir))) return(.ai_empty_signals())
-  p <- file.path(out_dir, "vcs-signals-summary.db")
-  con <- DBI::dbConnect(RSQLite::SQLite(), p)
-  on.exit(DBI::dbDisconnect(con), add = TRUE)
-  if (!DBI::dbExistsTable(con, "vcs_ai_signals")) return(.ai_empty_signals())
-  DBI::dbReadTable(con, "vcs_ai_signals")
-}
-
-#' The weekly incremental gate. Unions the cheap partials into the full flagged roster with
-#' run_gate verbatim, then narrows it to only the repos carrying a tool not yet present in the
-#' published vcs_ai_signals detail (select_incremental_repos), so the deep matrix re-onsets
-#' only genuinely new adoptions - re-detecting an already-published tool's ONSET would be a
-#' no-op through ai_onset_reducer. The published detail is the sole baseline (no separate
-#' last-week store). Before narrowing, also computes select_confirmation_rows over the FULL
-#' evidence frame and writes it with export_ai_shard (the same writer run_deep uses) as
-#' out_dir/vcs-ai-shard-confirm.db, so an already-published tool's last_confirmed_date still
-#' advances even though its repo is skipped below - without that, the skip branch would freeze
-#' last_confirmed_date at the onset date forever, since run_deep is the only other path that
-#' stamps it. The name rides run_merge's unchanged vcs-ai-shard-*.db glob (ai_backfill.R:347),
-#' so no merge code changes; only the workflow (Task 4) has to route the file into the merge
-#' job's parts directory. A week with no new adoptions narrows the flagged roster to empty; the
-#' deep matrix then produces empty shards and run_merge folds prior + nothing + confirmations =
-#' prior with last_confirmed refreshed. Rewrites the same vcs-ai-flagged-roster.db the deep
-#' matrix reads, so no downstream job changes to that artifact.
-run_gate_incremental <- function(io, out_dir, parts_dir) {
-  run_gate(out_dir, parts_dir)                       # full flagged roster (B2 verbatim)
-  roster_path <- file.path(out_dir, "vcs-ai-flagged-roster.db")
-  fr <- read_flagged(roster_path)
-  published <- .ai_read_published_detail(io, out_dir)
-  keep <- select_incremental_repos(fr$flagged, fr$evidence, published)
-
+  ev_df <- .ai_bind_like(cbind(repo_id = character(0), .ai_empty_found()), lapply(fr, `[[`, "evidence"))
+  # rule_key keeps the commits of a REST-only address apart from those of the GraphQL addresses.
+  ev_df <- ev_df[!duplicated(paste(ev_df$repo_id, ev_df$tool, ev_df$tier, ev_df$marker, ev_df$role,
+                                   ev_df$rule_key, sep = "\r")), , drop = FALSE]
+  pub <- .ai_read_published_detail(io, out_dir)
+  reads <- fold_repo_reads(pub$repo_reads, .ai_bind_like(.ai_empty_reads(),
+                                                         lapply(parts, .ai_part_table, table = "repo_reads")))
   today <- format(Sys.Date())
-  confirm_rows <- select_confirmation_rows(fr$evidence, published, today)
-  export_ai_shard(file.path(out_dir, "vcs-ai-shard-confirm.db"), confirm_rows)
-
-  flagged_df <- fr$flagged[fr$flagged$repo_id %in% keep, , drop = FALSE]
-  ev_df      <- fr$evidence[fr$evidence$repo_id %in% keep, , drop = FALSE]
-  write_flagged_partial(roster_path, flagged_df, ev_df)
-  message(sprintf(
-    "ai gate (incremental): %d of %d flagged repos carry a new tool since the last publish, %d confirmation rows",
-    nrow(flagged_df), nrow(fr$flagged), nrow(confirm_rows)))
+  since <- NA_character_
+  if (isTRUE(full)) {
+    stored <- unname(.ai_read_pipeline_state(io, file.path(out_dir, "_state"))["ai_campaign_since"])
+    since <- campaign_start(TRUE, if (length(stored)) stored else NA_character_, today)
+  }
+  work <- select_deep_work(flagged_df, ev_df, pub$signals, pub$search_log, reads, pub$account_counts,
+                           campaign_since = since, today = today, full = full)
+  write_flagged_partial(file.path(out_dir, "vcs-ai-flagged-roster.db"), flagged_df, ev_df, work = work,
+                        campaign = data.frame(since = since, stringsAsFactors = FALSE))
+  counts <- table(factor(work$reason, levels = names(AI_WORK_PRIORITY)))
+  message(sprintf("ai gate: %d flagged repos across %d shard(s), %d searches or datings to do (%s)%s",
+                  nrow(flagged_df), length(parts), nrow(work),
+                  paste(sprintf("%s %d", names(counts), as.integer(counts)), collapse = ", "),
+                  if (is.na(since)) "" else sprintf(", campaign since %s", since)))
 }
+
+#' The weekly gate: the same work list without a campaign.
+run_gate_incremental <- function(io, out_dir, parts_dir) run_gate(io, out_dir, parts_dir, full = FALSE)
 
 # ---- deep onset shard IO ----------------------------------------------------
-export_ai_shard <- function(path, rows, model_rows = NULL) {
+export_ai_shard <- function(path, rows, model_rows = NULL, extra = list()) {
   if (file.exists(path)) unlink(path)
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
@@ -485,402 +755,303 @@ export_ai_shard <- function(path, rows, model_rows = NULL) {
   if (nrow(rows) > 0) DBI::dbWriteTable(con, "vcs_ai_signals", rows, append = TRUE)
   if (!is.null(model_rows) && nrow(model_rows) > 0)
     DBI::dbWriteTable(con, "vcs_ai_models", model_rows, append = TRUE)
+  for (nm in names(extra)) DBI::dbWriteTable(con, nm, extra[[nm]], overwrite = TRUE)
   DBI::dbExecute(con, "VACUUM")
   invisible(path)
 }
 
-#' Structured author-email commit search query for a bot-identity tool, or NA when the
-#' tool has no email in AI_BOT_ALLOWLIST (marker-only tools like cursor/gemini/windsurf).
-#' The author-email qualifier is an EXACT match, so a hit is a confirmed Tier-A onset,
-#' unlike a fuzzy message-token search (a floor). Internal.
-#' Every Tier-A search term for a tool, one per allowlisted identity.
-#'
-#' The allowlist holds two shapes and only one was ever searched: an email
-#' (noreply@anthropic.com) and a bot login (copilot-swe-agent[bot], cursor[bot],
-#' devin-ai-integration[bot], google-labs-jules[bot], openhands-agent). The old
-#' helper filtered on grepl("@"), so five of the six identities were silently
-#' skipped and no Copilot, Cursor, Devin, Jules or OpenHands commit could ever be
-#' found by Tier A, however well the query was formed.
-#'
-#' An email goes to author-email:, a login to author:. Returns character(0) when a
-#' tool has no allowlisted identity, so the caller simply searches nothing.
+#' First-date searches for a tool's accounts: REST author-email is exact, so a hit dates
+#' the account's first commit here. The REST-only address has its own count search.
 .ai_author_queries <- function(tool) {
-  ids <- names(AI_BOT_ALLOWLIST)[AI_BOT_ALLOWLIST == tool]
-  if (!length(ids)) return(character(0))
-  vapply(ids, function(id) {
-    if (grepl("@", id, fixed = TRUE)) paste0("author-email:", id) else paste0("author:", id)
-  }, character(1), USE.NAMES = FALSE)
+  a <- Find(function(x) identical(x$tool, tool), AI_ACCOUNTS)
+  if (is.null(a)) return(character(0))
+  paste0("author-email:", c(a$graphql, a$linked))
 }
 
 # ---- deep onset scan --------------------------------------------------------
-#' Deep onset scan over one even mod-N shard of the flagged roster. Per repo:
-#'   (0) a graphql_rate_remaining(io) preflight (mirrors update.R:130-137 and run_cheap's,
-#'       Task 7): when the budget is below AI_POINT_RESERVE, pause the shard rather than
-#'       let fetch_marker_onset fail closed to NA onset rows that never recover across
-#'       deterministic re-runs;
-#'   (1) date each COMMITTED Tier-D marker exactly by paging its REAL repo path's history
-#'       (marker_repo_path prepends .github/ for a github-located marker; fetch_marker_onset,
-#'       GraphQL budget) - a fault leaves that marker's onset NA (build_ai_detail tolerates
-#'       it). An IGNORE-TOKEN marker names a .gitignore/.Rbuildignore entry, not a committed
-#'       path, so it is NOT queried; it takes an honest censored floor of today via
-#'       build_onset_map;
-#'   (2) for each flagged bot-identity tool, one author-email commit search (io$search_hit,
-#'       REST-search budget) - a hit is an EXACT Tier-A onset and adds a Tier-A evidence
-#'       row (authored = 1, since an author-email match means the bot itself authored the
-#'       commit) so a marker + a bot commit corroborate to two tiers;
-#'   (3) the PR onset carried from the cheap pass (exact);
-#' then build_onset_map + apply_fork_guard (a fork censors every Tier-D onset to a floor)
-#' + build_ai_detail collapse each tool through ai_onset_reducer, taking the tighter onset.
-#' Writes the 7-col vcs_ai_signals partial. Template-seed (first-commit) detection is left
-#' to first_commit_touches = character(0) here; only the fork guard fires in B2.
-#' Repos whose published onset row was already confirmed today.
-#'
-#' A full gate hands every shard the entire flagged roster, so a second dispatch
-#' would otherwise spend its whole budget redoing what the first one finished and
-#' never reach the tail. This reads the roster's own confirmation dates, which
-#' the pipeline already maintains, rather than inventing a campaign marker.
-#'
-#' Returns NULL when there is nothing to read, which the caller treats as "skip
-#' nothing" rather than as "everything is done".
-load_confirmed_today <- function(roster_path, today = format(Sys.Date())) {
-  db <- file.path(dirname(roster_path), "vcs-signals-summary.db")
-  if (!file.exists(db)) return(NULL)
-  con <- tryCatch(DBI::dbConnect(RSQLite::SQLite(), db), error = function(e) NULL)
-  if (is.null(con)) return(NULL)
-  on.exit(DBI::dbDisconnect(con), add = TRUE)
-  if (!DBI::dbExistsTable(con, "vcs_ai_signals")) return(NULL)
-  tryCatch(
-    DBI::dbGetQuery(con,
-      "SELECT DISTINCT repo_id FROM vcs_ai_signals WHERE last_confirmed_date = ?",
-      params = list(today))$repo_id,
-    error = function(e) NULL)
+# One search_log row for one search's answer. A refusal has no count; a hit with no
+# count returned still holds the commit that proves at least one.
+.ai_log_row <- function(rid, key, rev, hit, verified, today) {
+  outcome <- if (isTRUE(hit$unavailable)) "refused"
+             else if (!is.na(.nn(hit$date, NA_character_)) || isTRUE(.nn(hit$total_count, 0L) > 0L)) "hit"
+             else "none"
+  data.frame(repo_id = rid, rule_key = key, rule_rev = as.integer(rev), ruleset_version = AI_RULESET_VERSION,
+             asked_on = today, outcome = outcome,
+             total_count = switch(outcome, refused = NA_integer_, none = 0L,
+                                  hit = as.integer(.nn(hit$total_count, 1L))),
+             verified = if (outcome == "hit") as.integer(isTRUE(verified)) else NA_integer_,
+             incomplete = as.integer(.nn(hit$incomplete, 0L)),
+             first_hit_on = if (outcome == "hit") substr(.nn(hit$date, NA_character_), 1, 10) else NA_character_,
+             source = "search", stringsAsFactors = FALSE)
 }
 
+# vcs_ai_signals rows for one repository from this run's dates: the week's findings for
+# the tools it worked on, files dated from their history, and every dated search hit.
+.ai_deep_rows <- function(rid, s, evidence, repo, today) {
+  tools <- unique(c(s$tools, if (!is.null(s$extra)) s$extra$tool))
+  ev <- evidence[evidence$repo_id == rid & evidence$role == "authoring" & evidence$tool %in% tools &
+                 !(evidence$marker %in% ai_non_naming_pr_keys()), , drop = FALSE]
+  onset <- ev$onset; cens <- as.integer(ev$onset_censored); cens[is.na(cens)] <- 0L
+  fill <- is.na(onset) & ev$tier %in% c("PR", "PB") & !is.na(repo$pr_onset_date)
+  onset[fill] <- repo$pr_onset_date; cens[fill] <- 0L
+  for (j in which(ev$tier == "D" & ev$marker %in% names(s$marker_dates))) {
+    onset[j] <- s$marker_dates[[ev$marker[j]]]
+    cens[j] <- if (ai_is_ignore_marker(ev$marker[j]) && !(ev$marker[j] %in% s$exact_ignores)) 1L else 0L
+  }
+  raw <- data.frame(tool = ev$tool, tier = ev$tier, marker = ev$marker, agnostic = as.integer(ev$agnostic %in% TRUE),
+                    authored = as.integer(ev$tier == "A"), stringsAsFactors = FALSE)
+  onsets <- data.frame(tool = ev$tool, marker = ev$marker, first_seen_date = onset,
+                       first_seen_censored = cens, stringsAsFactors = FALSE)
+  x <- s$extra
+  if (!is.null(x) && nrow(x)) {
+    raw <- rbind(raw, data.frame(tool = x$tool, tier = x$tier, marker = x$marker, agnostic = 0L,
+                                 authored = as.integer(x$tier == "A"), stringsAsFactors = FALSE))
+    onsets <- rbind(onsets, data.frame(tool = x$tool, marker = x$marker, first_seen_date = x$date,
+                                       first_seen_censored = as.integer(!x$confirmed), stringsAsFactors = FALSE))
+  }
+  if (!nrow(raw)) return(.ai_empty_signals())
+  onsets <- onsets[order(is.na(onsets$first_seen_date), onsets$first_seen_date), , drop = FALSE]
+  guarded <- apply_fork_guard(raw, isTRUE(repo$is_fork == 1L), repo$parent, character(0))
+  build_ai_detail(rid, guarded, onsets, today)
+}
+
+#' Works the gate's list most urgent first, so a stop at the budget or the point reserve leaves
+#' only the least urgent items for the next run, and logs every answer so the merge derives the counts.
 run_deep <- function(io, out_dir, roster_path, i, N,
                      marker_delay = BACKFILL_DELAY_S, search_delay = SEARCH_DELAY_S) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   fr <- read_flagged(roster_path)
-  flagged <- fr$flagged; evidence <- fr$evidence
-  mine <- flagged[shard_rows(nrow(flagged), i, N), , drop = FALSE]
-  message(sprintf("ai deep shard %d/%d: %d of %d flagged repos", i, N, nrow(mine), nrow(flagged)))
+  flagged <- fr$flagged
+  evidence <- .ai_bind_like(cbind(repo_id = character(0), .ai_empty_found()), list(fr$evidence))
+  evidence$role[is.na(evidence$role)] <- "authoring"
   today <- format(Sys.Date())
-
-  acc <- list()
-  unavailable <- 0L   # searches the API refused, kept apart from searches that missed
-  model_rows <- list()   # one row per repo per tool per model named in a trailer
-
-  # A shard that runs past the job's timeout is cancelled, and a cancelled job
-  # skips its upload step, so every repo it scanned is discarded. The first full
-  # re-scan lost all twelve shards that way: 181 repos at eleven searches and six
-  # seconds a search is 3.3 hours before overhead, against a 240 minute cap.
-  #
-  # Stopping short of the cap turns that into a partial shard that is uploaded
-  # and folded, which is the same bargain run_cheap already takes when the point
-  # budget runs low. The tail is picked up by the next dispatch.
+  mine_ids <- flagged$repo_id[shard_rows(nrow(flagged), i, N)]
+  # A roster written before the list existed reads as every tool dated and every rule asked.
+  work <- if (!is.null(fr$work)) fr$work else select_deep_work(flagged, evidence, NULL, NULL, NULL, NULL, today = today)
+  work <- work[work$repo_id %in% mine_ids, , drop = FALSE]
+  work <- work[order(work$priority, work$repo_id), , drop = FALSE]
+  message(sprintf("ai deep shard %d/%d: %d item(s) for %d of %d flagged repos", i, N, nrow(work),
+                  length(unique(work$repo_id)), nrow(flagged)))
+  rules <- c(AI_TRAILER_PATTERNS, AI_AUTHOR_SUFFIXES, AI_REVIEW_RULES)
+  state <- list(); logs <- list(); why <- character(0); counts <- list(); credits <- list()
+  put_log <- function(row, reason) { logs[[length(logs) + 1L]] <<- row; why <<- c(why, reason) }
+  search <- function(repo, q) tryCatch(io$search_hit(repo$owner, repo$name, q, search_delay),
+                                       error = function(e) list(date = NA_character_, unavailable = TRUE))
   deadline <- Sys.time() + AI_DEEP_BUDGET_S
-  stopped_early <- FALSE
-  skipped <- 0L
-  # Repos whose published row was already confirmed today, i.e. by an earlier
-  # dispatch of this same campaign.
-  done_today <- tryCatch(load_confirmed_today(roster_path), error = function(e) NULL)
-  for (r in seq_len(nrow(mine))) {
+  stopped_early <- FALSE; done_why <- character(0)
+  for (k in seq_len(nrow(work))) {
     if (Sys.time() >= deadline) {
       stopped_early <- TRUE
-      message(sprintf(
-        "ai deep shard %d/%d: stopping at %d of %d repos, %.0f min budget reached; the rest ride the next dispatch",
-        i, N, r - 1L, nrow(mine), AI_DEEP_BUDGET_S / 60))
+      message(sprintf("ai deep shard %d/%d: stopping at %d of %d items, %.0f min budget reached; the rest ride the next run",
+                      i, N, k - 1L, nrow(work), AI_DEEP_BUDGET_S / 60))
       break
     }
-    rl <- graphql_rate_remaining(io)
-    if (rl < AI_POINT_RESERVE) {
-      message(sprintf(
-        "ai deep shard %d/%d: graphql rate remaining (%s) below reserve (%d); pausing after %d of %d repos",
-        i, N, rl, AI_POINT_RESERVE, r - 1L, nrow(mine)))
-      break
+    it <- work[k, ]; rid <- it$repo_id
+    # Only dating spends GraphQL points, and a failed probe reads as none left and pauses the
+    # shard, so the reserve is checked before a dating item only.
+    if (identical(it$reason, "onset")) {
+      rl <- graphql_rate_remaining(io)
+      if (rl < AI_POINT_RESERVE) {
+        message(sprintf("ai deep shard %d/%d: graphql rate remaining (%s) below reserve (%d); pausing after %d of %d items",
+                        i, N, rl, AI_POINT_RESERVE, k - 1L, nrow(work)))
+        break
+      }
     }
-    rid <- mine$repo_id[r]; owner <- mine$owner[r]; name <- mine$name[r]
-    # Already scanned in this campaign. A full gate hands every shard the whole
-    # roster, so without this a second dispatch would spend its budget redoing
-    # the repos the first one finished and never reach the tail. Keyed on the
-    # published confirmation date rather than a campaign marker, because that is
-    # a fact the pipeline already records.
-    if (!is.null(done_today) && rid %in% done_today) { skipped <- skipped + 1L; next }
-
-    ev <- evidence[evidence$repo_id == rid, c("tool", "tier", "marker", "agnostic"), drop = FALSE]
-    if (nrow(ev) == 0) next
-    ev$authored <- 0L   # only a Tier-A author-email hit below sets authored = 1
-    # Cheap-pass evidence is markers and PRs: no commit search ran for it, so both
-    # counts are "nobody asked" rather than zero. The tier-A and tier-B blocks
-    # below append rows that carry real numbers.
-    ev$authored_commits <- NA_integer_
-    ev$assisted_commits <- NA_integer_
-
-    # (1) Tier-D onsets, keyed by the FULL evidence marker string. A COMMITTED marker (its
-    #     marker is the tree entry name) is dated exactly by paging its REAL repo path's
-    #     history - marker_repo_path prepends .github/ for a github-located marker, which
-    #     GraphQL history(path:) resolves for files, nested paths, and directories alike. An
-    #     IGNORE-TOKEN marker ("gitignore:<path>" / "rbuildignore:<path>") names an entry in
-    #     that file rather than a
-    #     committed path, so its history cannot be dated: it takes an honest censored floor of
-    #     today (build_onset_map stamps first_seen_censored = 1), and no history call is spent
-    #     on a path that does not exist in the tree.
-    marker_dates <- list()
-    exact_ignores <- character(0)
-    for (marker in unique(ev$marker[ev$tier == "D"])) {
-      if (ai_is_ignore_marker(marker)) {
-        # Bisect the ignore file's own history for the commit that added the line.
-        # Stamping the scan date instead is what left most of the onset table sitting
-        # on whichever day we last ran, and it is the reason the curve can only chart
-        # a third of the detections.
-        parts <- strsplit(marker, ":", fixed = TRUE)[[1]]
-        file  <- if (identical(parts[1], "rbuildignore")) ".Rbuildignore" else ".gitignore"
-        token <- paste(parts[-1], collapse = ":")
-        got <- tryCatch(fetch_ignore_onset(io, owner, name, file, token, delay = marker_delay),
-                        error = function(e) list(date = NA_character_, exact = FALSE))
-        if (!is.na(got$date) && isTRUE(got$exact)) {
-          marker_dates[[marker]] <- got$date
-          exact_ignores <- c(exact_ignores, marker)
-        } else if (!is.na(got$date)) {
-          # Present at the oldest revision we can see, so the line predates the history.
-          # A tighter floor than the scan date, and still a floor.
-          marker_dates[[marker]] <- got$date
-        } else {
-          # End-of-day instant so a same-day committed exact sorts BEFORE this floor and
-          # dominates it in the reducer; a bare date-only "today" would be a lexicographic
-          # prefix of any same-day instant and wrongly win.
-          marker_dates[[marker]] <- paste0(today, "T23:59:59Z")
+    repo <- flagged[flagged$repo_id == rid, , drop = FALSE][1, ]
+    s <- state[[rid]] %||% list(tools = character(0), marker_dates = list(), exact_ignores = character(0), extra = NULL)
+    add_extra <- function(tool, tier, marker, date, confirmed)
+      s$extra <<- rbind(s$extra, data.frame(tool = tool, tier = tier, marker = marker, date = date,
+                                            confirmed = confirmed, stringsAsFactors = FALSE))
+    if (identical(it$reason, "onset")) {
+      s$tools <- unique(c(s$tools, it$tool))
+      ev <- evidence[evidence$repo_id == rid & evidence$tool == it$tool & evidence$role == "authoring", , drop = FALSE]
+      for (marker in unique(ev$marker[ev$tier == "D"])) {
+        if (ai_is_ignore_marker(marker)) {
+          parts <- strsplit(marker, ":", fixed = TRUE)[[1]]
+          file <- if (identical(parts[1], "rbuildignore")) ".Rbuildignore" else ".gitignore"
+          got <- tryCatch(fetch_ignore_onset(io, repo$owner, repo$name, file, paste(parts[-1], collapse = ":"),
+                                             delay = marker_delay),
+                          error = function(e) list(date = NA_character_, exact = FALSE))
+          # An unreadable history falls back to the end of today, a floor that still sorts
+          # after any exact date the same day.
+          s$marker_dates[[marker]] <- if (!is.na(got$date)) got$date else paste0(today, "T23:59:59Z")
+          if (!is.na(got$date) && isTRUE(got$exact)) s$exact_ignores <- c(s$exact_ignores, marker)
+          next
         }
-        next
+        d <- tryCatch(fetch_marker_onset(io, repo$owner, repo$name, marker_repo_path(marker), delay = marker_delay),
+                      error = function(e) NA_character_)
+        if (!is.na(d)) s$marker_dates[[marker]] <- d
       }
-      d <- tryCatch(fetch_marker_onset(io, owner, name, marker_repo_path(marker), delay = marker_delay),
-                    error = function(e) NA_character_)
-      if (!is.na(d)) marker_dates[[marker]] <- d
+      if (any(ev$tier == "A")) for (q in .ai_author_queries(it$tool)) {
+        hit <- search(repo, q)
+        put_log(.ai_log_row(rid, paste0("author.", sub("^author-email:", "", q)), 1L, hit, TRUE, today), it$reason)
+        if (!isTRUE(hit$unavailable) && !is.na(.nn(hit$date, NA_character_))) add_extra(it$tool, "A", "A", hit$date, TRUE)
+      }
+    } else if (startsWith(it$rule_key, "account.")) {
+      addr <- sub("^account\\.", "", it$rule_key)
+      hit <- search(repo, paste0("author-email:", addr))
+      put_log(.ai_log_row(rid, it$rule_key, 1L, hit, TRUE, today), it$reason)
+      n <- as.integer(.nn(hit$total_count, NA_integer_))
+      if (!isTRUE(hit$unavailable) && !is.na(n) && n > 0L)
+        counts[[length(counts) + 1L]] <- data.frame(repo_id = rid, tool = it$tool, identity_set = addr, commits = n,
+          newest_commit_date = NA_character_, measured_on = today, stringsAsFactors = FALSE)
+      if (!isTRUE(hit$unavailable) && !is.na(.nn(hit$date, NA_character_))) add_extra(it$tool, "A", "A", hit$date, TRUE)
+    } else {
+      rule <- Find(function(r) identical(r$key, it$rule_key), rules)
+      if (is.null(rule)) next
+      tier <- if (startsWith(rule$key, "name.")) "C" else "B"
+      hit <- search(repo, rule$query)
+      is_hit <- !isTRUE(hit$unavailable) && !is.na(.nn(hit$date, NA_character_))
+      v <- if (is_hit) verify_search_hit(rule, tier, hit) else list(tool = rule$tool, confirmed = FALSE)
+      put_log(.ai_log_row(rid, rule$key, rule$rev, hit, v$confirmed, today), it$reason)
+      # Review credits are logged only: they never name a tool that wrote the package.
+      if (is_hit && !startsWith(rule$key, "review.") && !is.na(v$tool)) {
+        add_extra(v$tool, tier, if (isTRUE(v$confirmed)) rule$key else tier, hit$date, isTRUE(v$confirmed))
+        if (isTRUE(v$confirmed) && !is.null(hit$items) && nrow(hit$items) > 0) {
+          n <- .nn(hit$total_count, NA_integer_)
+          # A search GitHub cut short returned part of the credits, so its tally is never the whole one.
+          whole <- (is.na(n) || n <= nrow(hit$items)) && !isTRUE(hit$incomplete == 1L)
+          credits[[length(credits) + 1L]] <- data.frame(repo_id = rid, tool = v$tool, date = hit$items$date,
+            message = hit$items$message, whole = whole, stringsAsFactors = FALSE)
+        }
+      }
     }
-
-    # (2) Tier-A author-email commit onsets (exact) for flagged bot-identity tools.
-    commit_onsets <- NULL; extra_ev <- NULL
-    for (tool in unique(ev$tool[!as.logical(ev$agnostic)])) {
-      # Every allowlisted identity for the tool, not just an email-shaped one.
-      #
-      # Routed through search_hit, which reports a refusal as a refusal. The old
-      # transport collapsed both outcomes onto NA, so a throttled tier-A search
-      # published as "this bot has never committed here" with exactly the
-      # confidence of a measured absence. Tiers B and C already keep them apart;
-      # tier A is the one that was still guessing, and it is the tier whose
-      # zeros the canary reports.
-      hits <- character(0)
-      # The author qualifier is an exact match, so its total_count is the number
-      # of commits this identity authored here. A refused search contributes
-      # nothing, leaving the count NA rather than 0.
-      n_authored <- NA_integer_
-      asked <- FALSE
-      for (term in .ai_author_queries(tool)) {
-        hit <- tryCatch(io$search_hit(owner, name, term, search_delay),
-                        error = function(e) list(date = NA_character_, unavailable = TRUE))
-        if (isTRUE(hit$unavailable)) { unavailable <- unavailable + 1L; next }
-        asked <- TRUE
-        n_authored <- .ai_max_count(c(n_authored, .nn(hit$total_count, NA_integer_)))
-        d <- .nn(hit$date, NA_character_)
-        if (!is.na(d)) hits <- c(hits, d)
-      }
-      # A search that ran and matched nothing is a measured zero, and writing NA
-      # there would claim nobody looked. A hit whose count did not come back is
-      # not zero either: we are holding the commit that proves at least one.
-      if (asked && is.na(n_authored)) n_authored <- if (length(hits)) 1L else 0L
-      if (!length(hits)) {
-        # Asked, and the answer was none. That is a measured zero and it belongs
-        # on the tool's existing evidence rather than being dropped with the
-        # onset: writing NA here would claim nobody looked, which is the
-        # honest-NA rule broken in the direction people forget. No tier-A row is
-        # added, because nothing was detected.
-        if (asked) ev$authored_commits[ev$tool == tool] <- n_authored
-        next
-      }
-      # The earliest across identities: a bot that changed login keeps its onset.
-      commit_onsets <- rbind(commit_onsets, data.frame(tool = tool, tier = "A",
-        first_seen_date = min(hits), confirmed = TRUE, stringsAsFactors = FALSE))
-      extra_ev <- rbind(extra_ev, data.frame(tool = tool, tier = "A", marker = "A",
-        agnostic = 0L, authored = 1L, authored_commits = n_authored,
-        assisted_commits = NA_integer_, stringsAsFactors = FALSE))
-    }
-    # (2b) Tier-B commit trailers and Tier-C author suffixes. These were written into
-    #      the ruleset and never called from any scan, so every published detection was
-    #      a config marker and an AI co-author line was invisible. Each rule is searched
-    #      literally, then verified against its real pattern: a verified hit carries an
-    #      exact onset, an unverified one still counts as evidence but only dates a floor.
-    #      Searched per repo because the flagged roster is what this pass walks.
-    for (spec in c(lapply(AI_TRAILER_PATTERNS, function(r) list(rule = r, tier = "B")),
-                   lapply(AI_AUTHOR_SUFFIXES,  function(r) list(rule = r, tier = "C")))) {
-      q <- spec$rule$query
-      if (is.null(q) || is.na(q) || !nzchar(q)) next
-      hit <- tryCatch(io$search_hit(owner, name, q, search_delay),
-                      error = function(e) list(date = NA_character_, unavailable = TRUE))
-      # A refused question is not an absence of trailers. Count it, leave the repo
-      # without a tier-B row, and record nothing either way: the alternative is what
-      # happened on the first run, where throttling produced a confident zero across
-      # the whole roster.
-      if (isTRUE(hit$unavailable)) { unavailable <- unavailable + 1L; next }
-      if (is.na(.nn(hit$date, NA_character_))) next
-      v <- verify_search_hit(spec$rule, spec$tier, hit)
-      # The count is kept only when the hit verifies against the rule's real
-      # pattern. The query is deliberately fuzzy so the search will find the
-      # trailer at all, which means an unverified hit is evidence the search
-      # matched something we cannot vouch for, and its total_count would be
-      # counting that too. A floor we cannot defend is worse than no number.
-      n_assisted <- if (isTRUE(v$confirmed)) .nn(hit$total_count, NA_integer_) else NA_integer_
-      # The page we already fetched names the model on three tools' trailers.
-      # Only read it off a verified hit, for the same reason the count is: an
-      # unverified hit matched something we cannot vouch for.
-      if (isTRUE(v$confirmed) && !is.null(hit$items) && nrow(hit$items) > 0) {
-        complete <- is.na(n_assisted) || n_assisted <= nrow(hit$items)
-        mr <- build_ai_model_rows(rid, v$tool, hit$items, window_complete = complete)
-        if (nrow(mr) > 0) model_rows[[length(model_rows) + 1L]] <- mr
-      }
-      commit_onsets <- rbind(commit_onsets, data.frame(tool = v$tool, tier = v$tier,
-        first_seen_date = hit$date, confirmed = v$confirmed, stringsAsFactors = FALSE))
-      extra_ev <- rbind(extra_ev, data.frame(tool = v$tool, tier = v$tier, marker = v$tier,
-        agnostic = 0L, authored = 0L, authored_commits = NA_integer_,
-        assisted_commits = as.integer(n_assisted), stringsAsFactors = FALSE))
-    }
-
-    full_ev <- rbind(ev, extra_ev)
-
-    # (3) assemble + guard + collapse.
-    onsets <- build_onset_map(full_ev, marker_dates, commit_onsets, mine$pr_onset_date[r],
-                              exact_markers = exact_ignores)
-    guarded <- apply_fork_guard(full_ev, isTRUE(mine$is_fork[r] == 1L), mine$parent[r], character(0))
-    detail <- build_ai_detail(rid, guarded, onsets, today)
-    if (nrow(detail) > 0) acc[[length(acc) + 1L]] <- detail
+    state[[rid]] <- s
+    done_why <- c(done_why, it$reason)
   }
-  rows <- if (length(acc)) do.call(rbind, acc) else .ai_empty_signals()
-  models_df <- if (length(model_rows)) do.call(rbind, model_rows) else .ai_empty_models()
-  export_ai_shard(file.path(out_dir, sprintf("vcs-ai-shard-%d.db", i)), rows, models_df)
-  if (skipped > 0L)
-    message(sprintf("ai deep shard %d/%d: skipped %d repo(s) already confirmed today",
-                    i, N, skipped))
-  if (stopped_early)
-    message(sprintf("ai deep shard %d/%d: PARTIAL, dispatch again to continue", i, N))
+  rows <- .ai_bind_like(.ai_empty_signals(), lapply(names(state), function(rid)
+    .ai_deep_rows(rid, state[[rid]], evidence, flagged[flagged$repo_id == rid, , drop = FALSE][1, ], today)))
+  # Rules match the same commits, so a repository and tool get one tally over every page they matched.
+  models_df <- pool_model_rows(if (length(credits)) do.call(rbind, credits) else NULL)
+  log_df <- .ai_bind_like(.ai_empty_log(), logs)
+  export_ai_shard(file.path(out_dir, sprintf("vcs-ai-shard-%d.db", i)), rows, models_df,
+                  extra = list(search_log = log_df, account_counts = .ai_bind_like(.ai_empty_counts(), counts),
+                               campaign = .ai_bind_like(data.frame(since = character(), stringsAsFactors = FALSE),
+                                                        list(fr$campaign))))
+  by_reason <- table(factor(done_why, levels = names(AI_WORK_PRIORITY)))
+  message(sprintf("ai deep shard %d/%d: %d item(s) done (%s)", i, N, length(done_why),
+                  paste(sprintf("%s %d", names(by_reason), as.integer(by_reason)), collapse = ", ")))
+  # Asked, matched, none and refused for each reason, as the shard's own record of its searches.
+  for (rs in intersect(names(AI_WORK_PRIORITY), unique(why))) {
+    o <- log_df$outcome[why == rs]
+    message(sprintf("ai deep shard %d/%d:   %s: %d asked, %d matched, %d none, %d refused",
+                    i, N, rs, length(o), sum(o == "hit"), sum(o == "none"), sum(o == "refused")))
+  }
+  if (stopped_early) message(sprintf("ai deep shard %d/%d: PARTIAL, the rest ride the next run", i, N))
   if (nrow(models_df) > 0)
-    message(sprintf("ai deep shard %d/%d: %d model row(s) across %d repo(s)",
-                    i, N, nrow(models_df), length(unique(models_df$repo_id))))
-  message(sprintf("ai deep shard %d/%d: %d onset detail rows", i, N, nrow(rows)))
-  # Said out loud, because a run that could not ask is not a run that found nothing,
-  # and the difference is invisible in the published table.
-  if (unavailable > 0L) {
-    message(sprintf(
-      "ai deep shard %d/%d: WARNING %d commit search(es) were refused (rate limit or error); ",
-      i, N, unavailable),
-      "tiers A, B and C are UNDER-COUNTED for this shard, not absent")
-  }
+    message(sprintf("ai deep shard %d/%d: %d model row(s) across %d repo(s)", i, N, nrow(models_df),
+                    length(unique(models_df$repo_id))))
+  message(sprintf("ai deep shard %d/%d: %d dated row(s)", i, N, nrow(rows)))
+  refused <- sum(log_df$outcome == "refused")
+  if (refused > 0L)
+    message(sprintf("ai deep shard %d/%d: WARNING %d commit search(es) were refused (rate limit or error); ", i, N, refused),
+            "commit counts for this shard are UNDER-COUNTED, not absent")
 }
 
 # ---- merge ------------------------------------------------------------------
-#' Fold every deep shard's vcs_ai_signals partial into the published onset table and
-#' republish. Seeds the working DB from the recent shard (which already carries the prior
-#' vcs_ai_signals; no explicit protect_history_pull here, since vcs_ai_signals has no year
-#' component and publish()'s own internal pull handles the change-gate), then:
-#' reconcile_ai_identity carries a no-longer-active slug's onsets onto the canonical repo_id
-#' of its node_id and fills empty rows from an active sibling slug (PK-safe, before the
-#' reduce); drop_unanchored_confirmations discards confirmations with no row to confirm;
-#' ai_onset_reducer merges the reconciled prior set with the
-#' incoming partials by the six column rules; the working vcs_ai_signals is
-#' DELETE-and-rewritten with the fully-reduced set (never blanket-deleted and re-detected -
-#' the rows are immutable, the DELETE only follows the R-side reduce); the summary rollups
-#' are rebuilt so ai_* columns reflect the merge. Publishes with touched_years =
-#' character(0), so no year shard is re-exported.
+#' Fold the week's search shards and weekly read partials into every published AI table and republish.
+#' Both stops run after publishing, so an alarm costs a red build and not a week of stale data.
 run_merge <- function(io, out_dir, parts_dir) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   working_path <- file.path(out_dir, "_ai_merge_working.db")
   seed <- seed_working_db(io, out_dir, working_path)
-
   con <- DBI::dbConnect(RSQLite::SQLite(), working_path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   ensure_repo_schema(con)
   ensure_series_schema(con)
-
-  # No explicit protect_history_pull here (unlike backfill.R::run_merge): vcs_ai_signals
-  # has no year component, so there is no year-shard content to fold in or protect;
-  # seed_working_db already carries the prior vcs_ai_signals via the recent shard, and
-  # publish() makes its own protect_history_pull whenever the release this merge was
-  # seeded from lists any assets, which is the pull the change-gate and the regression
-  # gate compare against.
-  # An explicit call here would just download the full published history twice.
   reconcile_ai_identity(con)
+  today <- format(Sys.Date())
+  have <- function(t, empty) if (DBI::dbExistsTable(con, t)) .ai_bind_like(empty, list(DBI::dbReadTable(con, t))) else empty
+  put <- function(t, df) {
+    DBI::dbExecute(con, sprintf('DELETE FROM "%s"', t))
+    if (nrow(df)) DBI::dbWriteTable(con, t, df, append = TRUE)
+  }
+  deep <- list.files(parts_dir, pattern = "^vcs-ai-shard-.*\\.db$", full.names = TRUE)
+  cheap <- list.files(parts_dir, pattern = "^vcs-ai-cheap-.*\\.db$", full.names = TRUE)
+  from <- function(paths, t, empty) .ai_bind_like(empty, lapply(paths, .ai_part_table, table = t))
+  # A cheap partial from before the weekly read has no read state, and its findings carry no dates.
+  current <- cheap[vapply(cheap, function(p) !is.null(.ai_part_table(p, "repo_reads")), logical(1))]
+  message(sprintf("ai merge: %d search shard(s), %d weekly read partial(s), %d from older code left out",
+                  length(deep), length(cheap), length(cheap) - length(current)))
 
-  prior <- if (DBI::dbExistsTable(con, "vcs_ai_signals")) DBI::dbReadTable(con, "vcs_ai_signals")
-           else .ai_empty_signals()
+  prior <- have("vcs_ai_signals", .ai_empty_signals())
+  found <- from(current, "evidence", cbind(repo_id = character(0), .ai_empty_found()))
+  found$role[is.na(found$role)] <- "authoring"
+  incoming <- rbind(from(deep, "vcs_ai_signals", .ai_empty_signals()), build_cheap_rows(found, today))
 
-  parts <- list.files(parts_dir, pattern = "^vcs-ai-shard-.*\\.db$", full.names = TRUE)
-  part_rows <- lapply(parts, function(p) {
-    pcon <- DBI::dbConnect(RSQLite::SQLite(), p)
-    on.exit(DBI::dbDisconnect(pcon), add = TRUE)
-    if (!DBI::dbExistsTable(pcon, "vcs_ai_signals")) return(.ai_empty_signals())
-    DBI::dbReadTable(pcon, "vcs_ai_signals")
-  })
-  incoming <- if (length(part_rows)) do.call(rbind, part_rows) else .ai_empty_signals()
-  # A confirmation whose key the prior set does not hold would otherwise be written
-  # out as a row carrying only a date, and nothing afterwards would ever fill it.
+  # A weekly add counts from the watermark stored before this run, so the log and models read that one.
+  reads_prior <- have("vcs_ai_repo_reads", .ai_empty_reads())
+  reads_in <- from(cheap, "repo_reads", cbind(.ai_empty_reads(), reached_first = integer()))
+  reads <- fold_repo_reads(reads_prior, reads_in)
+  rebuilt <- rebuilt_log_repos(reads, reads_in)
+  counted <- !is.na(reads_in$accounts_counted_on)
+  counts <- fold_account_counts(have("vcs_ai_account_counts", .ai_empty_counts()),
+                                rbind(from(cheap, "account_counts", .ai_empty_counts()),
+                                      from(deep, "account_counts", .ai_empty_counts())),
+                                counted_repos = stats::setNames(reads_in$accounts_counted_on[counted],
+                                                                reads_in$repo_id[counted]))
+  log_in <- cbind(.ai_empty_log(), mode = character(), read_after = character())
+  log <- fold_search_log(have("vcs_ai_search_log", .ai_empty_log()),
+                         rbind(from(cheap, "search_log", log_in), from(deep, "search_log", log_in)),
+                         rebuilt_repos = rebuilt, reads = reads_prior)
+  review <- fold_review_rows(have("vcs_ai_review_signals", .ai_empty_review()), from(cheap, "review", .ai_empty_review()))
+  outside <- fold_outside_prs(have("vcs_ai_outside_prs", .ai_empty_outside()), from(cheap, "outside_prs", .ai_empty_outside()))
+
+  moved <- ai_reclassify_rows(prior, found, log, reads, outside)
+  prior <- moved$signals
+  review <- fold_review_rows(review, moved$review)
+
   n_incoming <- nrow(incoming)
   incoming <- drop_unanchored_confirmations(prior, incoming)
   if (nrow(incoming) < n_incoming)
-    message(sprintf("ai merge: dropped %d confirmation row(s) with no prior row to confirm",
-                    n_incoming - nrow(incoming)))
-
+    message(sprintf("ai merge: dropped %d row(s) with no prior row to confirm", n_incoming - nrow(incoming)))
   reduced <- ai_onset_reducer(prior, incoming)
-  DBI::dbExecute(con, "DELETE FROM vcs_ai_signals")
-  if (nrow(reduced) > 0) DBI::dbWriteTable(con, "vcs_ai_signals", reduced, append = TRUE)
+  reduced <- derive_assisted_counts(derive_authored_counts(reduced, counts, reads), log, reads)
+  review <- derive_review_counts(review, log)
 
-  # Every one of the detection bugs was visible here as a channel at exactly zero
-  # across the roster, and nothing looked. This looks, per (tier, tool): a
-  # tier-level check would have seen tier A's 103 detections and called it healthy
-  # while four of its six identities had never produced one.
-  roster_n <- tryCatch(
-    DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM repos")$n[1], error = function(e) NA_integer_)
-  canary_unexplained <- ai_canary_check(reduced, roster_n = roster_n)
+  put("vcs_ai_signals", reduced)
+  put("vcs_ai_repo_reads", reads)
+  put("vcs_ai_account_counts", counts)
+  put("vcs_ai_search_log", log)
+  put("vcs_ai_review_signals", review)
+  put("vcs_ai_outside_prs", outside)
 
-  # The finding is published, not withheld. Failing before publish would hold
-  # back the dev-tooling and summary data too, none of which is implicated by a
-  # tool channel going quiet; a week of collateral staleness is a worse outcome
-  # than a red build beside fresh data. The run still fails, at the end.
-  silent_tbl <- ai_silent_channel_table(reduced)
-  DBI::dbExecute(con, "DELETE FROM vcs_ai_silent_channels")
-  if (nrow(silent_tbl) > 0)
-    DBI::dbWriteTable(con, "vcs_ai_silent_channels", silent_tbl, append = TRUE)
+  roster_n <- tryCatch(DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM repos")$n[1], error = function(e) NA_integer_)
+  canary_unexplained <- ai_canary_check(reduced, roster_n = roster_n, outside = outside)
+  put("vcs_ai_silent_channels", ai_silent_channel_table(reduced, outside = outside))
 
-  # Model rows, replaced wholesale from the shards that carry them. Not reduced
-  # like onsets: a model tally describes the window that was examined this run,
-  # and folding it into an older window would produce a count belonging to
-  # neither. A repo not covered this run keeps its previous rows.
-  model_parts <- lapply(parts, function(p) {
-    pcon <- DBI::dbConnect(RSQLite::SQLite(), p)
-    on.exit(DBI::dbDisconnect(pcon), add = TRUE)
-    if (!DBI::dbExistsTable(pcon, "vcs_ai_models")) return(.ai_empty_models())
-    DBI::dbReadTable(pcon, "vcs_ai_models")
-  })
-  models_in <- if (length(model_parts)) do.call(rbind, model_parts) else .ai_empty_models()
-  if (nrow(models_in) > 0) {
-    touched <- unique(models_in$repo_id)
-    ph <- paste(rep("?", length(touched)), collapse = ",")
-    DBI::dbExecute(con, sprintf("DELETE FROM vcs_ai_models WHERE repo_id IN (%s)", ph),
-                   params = as.list(touched))
-    DBI::dbWriteTable(con, "vcs_ai_models", models_in, append = TRUE)
-  }
-  message(sprintf("ai merge: %d model row(s) across %d repo(s)",
-                  nrow(models_in), length(unique(models_in$repo_id))))
+  models <- fold_models(have("vcs_ai_models", .ai_empty_models()), from(deep, "vcs_ai_models", .ai_empty_models()),
+                        from(cheap, "models", cbind(.ai_empty_models(), mode = character(), read_after = character())),
+                        rebuilt_repos = rebuilt, reads = reads_prior)
+  put("vcs_ai_models", models)
+  message(sprintf("ai merge: %d model row(s) across %d repo(s)", nrow(models), length(unique(models$repo_id))))
 
-  # Republish the rule inventory so a consumer can state each tier's breadth
-  # from data rather than asserting it.
   inv <- ai_rule_inventory()
   inv$ruleset_version <- AI_RULESET_VERSION
-  DBI::dbExecute(con, "DELETE FROM vcs_ai_rule_inventory")
-  DBI::dbWriteTable(con, "vcs_ai_rule_inventory", inv, append = TRUE)
+  put("vcs_ai_rule_inventory", inv)
+  put("vcs_ai_search_coverage", build_search_coverage(log, reads))
+  record_ruleset_history(con, today, AI_RULESET_VERSION, AI_RULESET_CHANGE_KEYS)
+  # Dated once the three tables enumerate guards hold rows, so an empty first publish is never read as a loss.
+  if (nrow(reads) && nrow(log) && nrow(counts))
+    DBI::dbExecute(con, "INSERT OR IGNORE INTO pipeline_state (key, value) VALUES ('ai_state_tables_since', ?)",
+                   params = list(today))
+  # A full gate's campaign date is kept until every flagged repository has been asked since.
+  camp <- unique(stats::na.omit(from(deep, "campaign", data.frame(since = character(), stringsAsFactors = FALSE))$since))
+  stored <- DBI::dbGetQuery(con, "SELECT value FROM pipeline_state WHERE key = 'ai_campaign_since'")$value
+  since <- if (length(stored)) stored[1] else if (length(camp)) camp[1] else NA_character_
+  if (!length(stored) && !is.na(since))
+    DBI::dbExecute(con, "INSERT INTO pipeline_state (key, value) VALUES ('ai_campaign_since', ?)", params = list(since))
+  flag_ids <- unique(from(cheap, "flagged", .ai_empty_flagged())$repo_id)
+  if (!is.na(since) && length(flag_ids) && campaign_finished(flag_ids, log, reads, since)) {
+    DBI::dbExecute(con, "DELETE FROM pipeline_state WHERE key = 'ai_campaign_since'")
+    message(sprintf("ai merge: the campaign since %s has asked every flagged repository", since))
+  }
   DBI::dbExecute(con, "DELETE FROM vcs_dev_tooling_rules")
   DBI::dbWriteTable(con, "vcs_dev_tooling_rules", dev_tooling_rules_table(), append = TRUE)
 
   # Rebuild the summary so ai_* rollups reflect the merged onsets. Non-AI columns come
   # from the seeded series_latest; descriptive + release facts carry forward from the
   # prior summary (no fresh gauge collection this run, so compute_release_facts = FALSE).
-  today <- format(Sys.Date())
   repos_all <- DBI::dbReadTable(con, "repos")
   rp_all <- DBI::dbReadTable(con, "repo_packages")
   series_all <- DBI::dbGetQuery(con, "SELECT repo_id, date, metric, value FROM signals_series")
@@ -927,9 +1098,11 @@ run_merge <- function(io, out_dir, parts_dir) {
   active_n <- tryCatch(DBI::dbGetQuery(con,
     "SELECT COUNT(*) n FROM repos WHERE host = 'github' AND status = 'active'")$n[1],
     error = function(e) NA_integer_)
-  message(sprintf("ai merge: %d repositories failed a read this week (contents %d) of %s on the roster",
-                  length(unique(fails$repo_id)), length(unique(fails$repo_id[fails$query == "contents"])),
-                  active_n))
+  per_doc <- function(q) length(unique(fails$repo_id[fails$query == q]))
+  message(sprintf(paste0("ai merge: %d repositories failed a read this week (contents %d, activity %d, ",
+                         "accounts %d, walk %d) of %s on the roster"),
+                  length(unique(fails$repo_id)), per_doc("contents"), per_doc("activity"), per_doc("accounts"),
+                  per_doc("walk"), active_n))
   failure_stop <- scan_failure_stop_message(fails, active_n)
 
   message(sprintf("ai merge: %d prior, %d incoming, %d reduced onset rows",
@@ -940,7 +1113,7 @@ run_merge <- function(io, out_dir, parts_dir) {
   # Raised after the data is out, so the alarm costs a red build and not a
   # week of stale dev-tooling rows.
   canary_stop <- if (nrow(canary_unexplained) > 0)
-    sprintf(paste0("AI detection canary: %d channel(s) detected nothing on the whole roster ",
+    sprintf(paste0("Silent-search check: %d search(es) matched nothing in any scanned repository ",
                    "and are not recorded in AI_SILENT_CHANNELS_KNOWN: %s. ",
                    "Either the rule is broken or the zero is real; record which, with a date."),
             nrow(canary_unexplained),
@@ -958,7 +1131,7 @@ main <- function(mode, out_dir, io = NULL) {
   if (is.null(io)) io <- list(
     graphql        = default_io(token)$graphql,
     search_hit     = function(owner, name, query, delay = SEARCH_DELAY_S)
-                       search_earliest_commit_hit(token, owner, name, query, delay),
+                       search_earliest_commit_hit(token, owner, name, query, delay, sleep = Sys.sleep),
     sleep          = function(seconds) Sys.sleep(seconds),
     cran_packages  = function() {
       db <- tools::CRAN_package_db()
@@ -972,7 +1145,7 @@ main <- function(mode, out_dir, io = NULL) {
   if (mode == "enumerate") {
     run_enumerate_ai(io, out_dir)
   } else if (mode == "canary") {
-    tree_query_canary(io)
+    ai_query_canary(io)
   } else if (mode == "cheap") {
     i <- suppressWarnings(as.integer(Sys.getenv("VCS_SHARD_I", "0")))
     N <- suppressWarnings(as.integer(Sys.getenv("VCS_SHARD_N", "1")))
@@ -981,7 +1154,7 @@ main <- function(mode, out_dir, io = NULL) {
     roster_dir <- Sys.getenv("VCS_ROSTER", out_dir)
     run_cheap(io, out_dir, file.path(roster_dir, "vcs-ai-roster.db"), i, N)
   } else if (mode == "gate") {
-    run_gate(out_dir, Sys.getenv("VCS_PARTS", "parts"))
+    run_gate(io, out_dir, Sys.getenv("VCS_PARTS", "parts"), full = TRUE)
   } else if (mode == "gate-incremental") {
     run_gate_incremental(io, out_dir, Sys.getenv("VCS_PARTS", "parts"))
   } else if (mode == "deep") {

@@ -1,0 +1,304 @@
+{
+  "data": {
+    "r0": {
+      "pullRequests": {
+        "totalCount": 3,
+        "pageInfo": {
+          "endCursor": null,
+          "hasNextPage": false
+        },
+        "nodes": [
+          {
+            "number": 49,
+            "createdAt": "2026-09-25T14:53:10Z",
+            "author": {
+              "login": "ericrayanderson",
+              "__typename": "User"
+            },
+            "authorAssociation": "OWNER",
+            "isCrossRepository": false,
+            "headRefName": "ci-pin-windows-r45",
+            "body": "<!-- CURSOR_AGENT_PR_BODY_BEGIN -->\n<!-- CURSOR_AGENT_PR_BODY_END -->\n<div><a href=\"https://cursor.com/agents/bc-b2709849-56d1-5132-858d-80abac133ecf?cursor_ref=pr_footer&cursor_cta=open_in_web\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cursor.com/assets/images/open-in-web-dark.png\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://cursor.com/assets/images/open-in-web-light.png\"><img alt=\"Open in Web\" width=\"114\" height=\"28\" src=\"https://cursor.com/assets/images/open-in-web-dark.png\"><\/picture><\/a>&nbsp;<a href=\"https://cursor.com/background-agent?bcId=bc-b2709849-56d1-5132-858d-80abac133ecf&cursor_ref=pr_footer&cursor_cta=open_in_cursor\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cursor.com/assets/images/open-in-cursor-dark.png\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://cursor.com/assets/images/open-in-cursor-light.png\"><img alt=\"Open in Cursor\" width=\"131\" height=\"28\" src=\"https://cursor.com/assets/images/open-in-cursor-dark.png\"><\/picture><\/a>&nbsp;<\/div>"
+          },
+          {
+            "number": 29,
+            "createdAt": "2026-08-21T14:01:40Z",
+            "author": {
+              "login": "ericrayanderson",
+              "__typename": "User"
+            },
+            "authorAssociation": "OWNER",
+            "isCrossRepository": false,
+            "headRefName": "cursor/bump-dev-version-55c7",
+            "body": "<!-- CURSOR_AGENT_PR_BODY_BEGIN -->\n<!-- CURSOR_AGENT_PR_BODY_END -->\n<div><a href=\"https://cursor.com/agents/bc-cbf27089-a1ac-4199-8707-512b4dac55c7?cursor_ref=pr_footer&cursor_cta=open_in_web\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cursor.com/assets/images/open-in-web-dark.png\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://cursor.com/assets/images/open-in-web-light.png\"><img alt=\"Open in Web\" width=\"114\" height=\"28\" src=\"https://cursor.com/assets/images/open-in-web-dark.png\"><\/picture><\/a>&nbsp;<a href=\"https://cursor.com/background-agent?bcId=bc-cbf27089-a1ac-4199-8707-512b4dac55c7&cursor_ref=pr_footer&cursor_cta=open_in_cursor\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cursor.com/assets/images/open-in-cursor-dark.png\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://cursor.com/assets/images/open-in-cursor-light.png\"><img alt=\"Open in Cursor\" width=\"131\" height=\"28\" src=\"https://cursor.com/assets/images/open-in-cursor-dark.png\"><\/picture><\/a>&nbsp;<\/div>"
+          },
+          {
+            "number": 34,
+            "createdAt": "2026-09-10T01:48:23Z",
+            "author": {
+              "login": "ericrayanderson",
+              "__typename": "User"
+            },
+            "authorAssociation": "OWNER",
+            "isCrossRepository": false,
+            "headRefName": "cursor/demo-qa-polish-7aa3",
+            "body": "<!-- CURSOR_AGENT_PR_BODY_BEGIN -->\n<!-- CURSOR_AGENT_PR_BODY_END -->\n<div><a href=\"https://cursor.com/agents/bc-d8e8527a-2cf8-5d51-9e77-ce6d03667aa3?cursor_ref=pr_footer&cursor_cta=open_in_web\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cursor.com/assets/images/open-in-web-dark.png\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://cursor.com/assets/images/open-in-web-light.png\"><img alt=\"Open in Web\" width=\"114\" height=\"28\" src=\"https://cursor.com/assets/images/open-in-web-dark.png\"><\/picture><\/a>&nbsp;<a href=\"https://cursor.com/background-agent?bcId=bc-d8e8527a-2cf8-5d51-9e77-ce6d03667aa3&cursor_ref=pr_footer&cursor_cta=open_in_cursor\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cursor.com/assets/images/open-in-cursor-dark.png\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://cursor.com/assets/images/open-in-cursor-light.png\"><img alt=\"Open in Cursor\" width=\"131\" height=\"28\" src=\"https://cursor.com/assets/images/open-in-cursor-dark.png\"><\/picture><\/a>&nbsp;<\/div>"
+          }
+        ]
+      },
+      "defaultBranchRef": null
+    },
+    "r1": {
+      "pullRequests": {
+        "totalCount": 1,
+        "pageInfo": {
+          "endCursor": null,
+          "hasNextPage": false
+        },
+        "nodes": [
+          {
+            "number": 2116,
+            "createdAt": "2026-09-25T16:16:38Z",
+            "author": {
+              "login": "cursor",
+              "__typename": "Bot"
+            },
+            "authorAssociation": "NONE",
+            "isCrossRepository": false,
+            "headRefName": "cursor/historical-ocr-training-bridges-1616",
+            "body": "## Summary\n<div><a href=\"https://cursor.com/agents/bc-5ecd8a42-4d4f-4160-9dc6-2c21f296517e?cursor_ref=pr_footer&cursor_cta=open_in_web\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cursor.com/assets/images/open-in-web-dark.png\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://cursor.com/assets/images/open-in-web-light.png\"><img alt=\"Open in Web\" width=\"114\" height=\"28\" src=\"https://cursor.com/assets/images/open-in-web-dark.png\"><\/picture><\/a>&nbsp;<a href=\"https://cursor.com/automations/7c6ec222-af7c-417c-b053-a570932ff8bf\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cursor.com/assets/images/view-automation-dark.png\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://cursor.com/assets/images/view-automation-light.png\"><img alt=\"View Automation\" width=\"141\" height=\"28\" src=\"https://cursor.com/assets/images/view-automation-dark.png\"><\/picture><\/a>&nbsp;<\/div>"
+          }
+        ]
+      },
+      "defaultBranchRef": null
+    },
+    "r2": {
+      "pullRequests": {
+        "totalCount": 1,
+        "pageInfo": {
+          "endCursor": null,
+          "hasNextPage": false
+        },
+        "nodes": [
+          {
+            "number": 275,
+            "createdAt": "2026-03-11T08:43:55Z",
+            "author": {
+              "login": "fabian-s",
+              "__typename": "User"
+            },
+            "authorAssociation": "COLLABORATOR",
+            "isCrossRepository": false,
+            "headRefName": "codex/fix-rcmdcheck-after-merge",
+            "body": "## Summary"
+          }
+        ]
+      },
+      "defaultBranchRef": null
+    },
+    "r3": {
+      "pullRequests": {
+        "totalCount": 1,
+        "pageInfo": {
+          "endCursor": null,
+          "hasNextPage": false
+        },
+        "nodes": [
+          {
+            "number": 8,
+            "createdAt": "2025-06-20T15:50:44Z",
+            "author": {
+              "login": "jsugarelli",
+              "__typename": "User"
+            },
+            "authorAssociation": "OWNER",
+            "isCrossRepository": false,
+            "headRefName": "codex/add-testthat-to-suggests-and-test-cases",
+            "body": "## Summary\nhttps://chatgpt.com/codex/tasks/task_e_685554275830832cb358c7dfc8450055"
+          }
+        ]
+      },
+      "defaultBranchRef": null
+    },
+    "r4": {
+      "pullRequests": {
+        "totalCount": 1,
+        "pageInfo": {
+          "endCursor": null,
+          "hasNextPage": false
+        },
+        "nodes": [
+          {
+            "number": 927,
+            "createdAt": "2026-08-28T09:43:30Z",
+            "author": {
+              "login": "com-junkawasaki",
+              "__typename": "User"
+            },
+            "authorAssociation": "NONE",
+            "isCrossRepository": true,
+            "headRefName": "cursor/kotoba-nanoarrow-binding-4119",
+            "body": "Adds `kotoba/` next to `python/` and `r/`."
+          }
+        ]
+      },
+      "defaultBranchRef": null
+    },
+    "r5": {
+      "pullRequests": {
+        "totalCount": 2,
+        "pageInfo": {
+          "endCursor": null,
+          "hasNextPage": false
+        },
+        "nodes": [
+          {
+            "number": 36,
+            "createdAt": "2026-04-23T23:09:03Z",
+            "author": {
+              "login": "anthropic-code-agent",
+              "__typename": "Bot"
+            },
+            "authorAssociation": "CONTRIBUTOR",
+            "isCrossRepository": false,
+            "headRefName": "claude/enhancement-prepare-sobol-release-standards",
+            "body": "Thanks for asking me to work on this. I will get started on it and keep this PR's description up to date as I form a plan and make progress."
+          },
+          {
+            "number": 43,
+            "createdAt": "2026-05-13T12:24:22Z",
+            "author": {
+              "login": "alrobles",
+              "__typename": "User"
+            },
+            "authorAssociation": "OWNER",
+            "isCrossRepository": false,
+            "headRefName": "devin/1778674112-enhancement-issues",
+            "body": "## Summary\nLink to Devin session: https://app.devin.ai/sessions/a91e8a220b4f43d4b31ea08fb704d6e6"
+          }
+        ]
+      },
+      "defaultBranchRef": null
+    },
+    "r6": {
+      "pullRequests": {
+        "totalCount": 1,
+        "pageInfo": {
+          "endCursor": null,
+          "hasNextPage": false
+        },
+        "nodes": [
+          {
+            "number": 24,
+            "createdAt": "2026-08-12T04:58:55Z",
+            "author": {
+              "login": "alrobles",
+              "__typename": "User"
+            },
+            "authorAssociation": "OWNER",
+            "isCrossRepository": false,
+            "headRefName": "devin/sync-sequential-fix",
+            "body": "## Summary\nLink to Devin session: https://app.devin.ai/sessions/0573b06eb7ec47f9928ff76d7aef562d"
+          }
+        ]
+      },
+      "defaultBranchRef": null
+    },
+    "r7": {
+      "pullRequests": {
+        "totalCount": 1,
+        "pageInfo": {
+          "endCursor": null,
+          "hasNextPage": false
+        },
+        "nodes": [
+          {
+            "number": 345,
+            "createdAt": "2024-11-28T17:09:10Z",
+            "author": {
+              "login": "zachmayer",
+              "__typename": "User"
+            },
+            "authorAssociation": "OWNER",
+            "isCrossRepository": false,
+            "headRefName": "openhands-fix-issue-344",
+            "body": "This pull request fixes #344."
+          }
+        ]
+      },
+      "defaultBranchRef": null
+    },
+    "r8": {
+      "pullRequests": {
+        "totalCount": 1,
+        "pageInfo": {
+          "endCursor": null,
+          "hasNextPage": false
+        },
+        "nodes": [
+          {
+            "number": 436,
+            "createdAt": "2025-05-09T15:34:05Z",
+            "author": {
+              "login": "amazon-q-developer",
+              "__typename": "Bot"
+            },
+            "authorAssociation": "CONTRIBUTOR",
+            "isCrossRepository": false,
+            "headRefName": "Q-DEV-issue-435-1746804828",
+            "body": "This pull request replaces the magrittr pipe operator (`%>%`) with the native R pipe operator (`|>`). It updates the required R version to 4.1 or higher since that is when the native pipe was introduced. The magrittr package dependency is also removed since it's no longer needed. This change helps modernize the codebase by using native R functionality rather than external package dependencies for this core syntax feature."
+          }
+        ]
+      },
+      "defaultBranchRef": null
+    },
+    "r9": {
+      "pullRequests": {
+        "totalCount": 1,
+        "pageInfo": {
+          "endCursor": null,
+          "hasNextPage": false
+        },
+        "nodes": [
+          {
+            "number": 2,
+            "createdAt": "2026-07-15T03:42:49Z",
+            "author": {
+              "login": "temuulene",
+              "__typename": "User"
+            },
+            "authorAssociation": "OWNER",
+            "isCrossRepository": false,
+            "headRefName": "claude/review-package-vignettes-8clehs",
+            "body": "## Summary\nhttps://claude.ai/code/session_018AGCmS6T7Bhqb8zLb5EHSe"
+          }
+        ]
+      },
+      "defaultBranchRef": null
+    },
+    "r10": {
+      "pullRequests": {
+        "totalCount": 1,
+        "pageInfo": {
+          "endCursor": null,
+          "hasNextPage": false
+        },
+        "nodes": [
+          {
+            "number": 1428,
+            "createdAt": "2026-09-24T23:58:02Z",
+            "author": {
+              "login": "itchyshin",
+              "__typename": "User"
+            },
+            "authorAssociation": "OWNER",
+            "isCrossRepository": false,
+            "headRefName": "cursor/receipt-refresh-1427-20260924",
+            "body": "## What and why\nMade with [Cursor](https://cursor.com)"
+          }
+        ]
+      },
+      "defaultBranchRef": null
+    }
+  }
+}

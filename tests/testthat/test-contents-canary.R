@@ -10,6 +10,9 @@ canary_release <- function() {
   DBI::dbExecute(scon, "INSERT INTO repos (repo_id,node_id,host,host_domain,owner,name,name_with_owner,supported,n_packages,first_seen,last_seen,status) VALUES
     ('github.com/a/keep',NULL,'github','github.com','a','keep','a/keep',1,1,'2024-01-01','2026-07-01','active')")
   DBI::dbDisconnect(scon)
+  # The state guard reads the recent shard; an empty one has no state yet.
+  rcon <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel, "vcs-signals-recent.db"))
+  ensure_series_schema(rcon); DBI::dbDisconnect(rcon)
   rel
 }
 
@@ -20,7 +23,8 @@ enumerate_with <- function(canary) {
       f <- list.files(rel, pattern = utils::glob2rx(pattern), full.names = TRUE)
       if (!length(f)) return(FALSE)
       file.copy(f, file.path(dir, basename(f)), overwrite = TRUE); TRUE },
-    graphql = with_contents_canary(function(query) list(data = list()), canary),
+    graphql = with_contents_canary(ai_canary_io()$graphql, canary),
+    release_exists = function() TRUE,
     sleep = function(s) invisible(NULL))
   out <- tempfile("out_"); dir.create(out)
   list(out = out, run = function() run_enumerate_ai(io, out))
@@ -142,8 +146,8 @@ test_that("no inheritor reporting its owner's template stops the run and names e
 
 test_that("the canary runs alone from the command line", {
   hit <- FALSE
-  io <- list(graphql = function(query) { hit <<- TRUE; contents_canary_ok() })
-  expect_message(main("canary", tempfile(), io = io), "passed")
+  io <- list(graphql = with_contents_canary(function(query) { hit <<- TRUE; ai_canary_io()$graphql(query) }))
+  expect_message(main("canary", tempfile(), io = io), "AI query canary: passed")
   expect_true(hit)
 })
 

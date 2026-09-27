@@ -77,13 +77,11 @@ jobs:
           merge-multiple: true
           run-id: ${{ inputs.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
-      # Optional for the same reason it is optional in ai-weekly: a full gate
-      # skips nobody, so run_gate writes no confirmation partial.
       - uses: actions/download-artifact@v8
-        continue-on-error: true
         with:
-          name: ai-confirm-shard
           path: parts
+          pattern: cheap-*
+          merge-multiple: true
           run-id: ${{ inputs.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/download-artifact@v8
@@ -103,10 +101,11 @@ jobs:
       - name: Refuse an empty parts directory
         run: |
           shards=$(find parts -name 'vcs-ai-shard-*.db' 2>/dev/null | wc -l | tr -d ' ')
+          cheap=$(find parts -name 'vcs-ai-cheap-*.db' 2>/dev/null | wc -l | tr -d ' ')
           tooling=$(find parts -name 'vcs-dev-tooling-*.db' 2>/dev/null | wc -l | tr -d ' ')
-          echo "run ${{ inputs.run_id }}: ${shards} ai shard(s), ${tooling} dev-tooling shard(s)"
-          if [ "$shards" -eq 0 ] && [ "$tooling" -eq 0 ]; then
-            echo "::error::No shards were downloaded from run ${{ inputs.run_id }}. Either the id is wrong or its artifacts have expired. Refusing to publish a merge with no incoming data." >&2
+          echo "run ${{ inputs.run_id }}: ${shards} search shard(s), ${cheap} weekly read partial(s), ${tooling} dev-tooling shard(s)"
+          if [ "$cheap" -eq 0 ]; then
+            echo "::error::No weekly read partials (vcs-ai-cheap-*.db) came from run ${{ inputs.run_id }}. Either the id is wrong or its artifacts have expired. Refusing to publish a merge that would advance no read state." >&2
             exit 1
           fi
 

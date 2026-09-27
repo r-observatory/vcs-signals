@@ -58,44 +58,6 @@ test_that("parse_tree_markers output feeds classify_tree_markers", {
   expect_true(all(ev$tier == "D"))
 })
 
-test_that("build_pr_agent_query aliases each repo, newest-first, author login + __typename", {
-  repos <- data.frame(owner = "o", name = "n", repo_id = "github.com/o/n", stringsAsFactors = FALSE)
-  q <- build_pr_agent_query(repos)
-  expect_match(q, 'r0: repository(owner: "o", name: "n")', fixed = TRUE)
-  # Newest first. Oldest-first plus a 2023 cutoff made any repo with more than
-  # fifty lifetime PRs structurally unable to yield PR evidence.
-  expect_match(q, "pullRequests(first: 50, orderBy: {field: CREATED_AT, direction: DESC})", fixed = TRUE)
-  expect_false(grepl("CREATED_AT, direction: ASC", q, fixed = TRUE))
-  expect_match(q, "pageInfo { endCursor hasNextPage }", fixed = TRUE)
-  expect_match(q, "author { login __typename } createdAt", fixed = TRUE)
-})
-
-test_that("parse_pr_agents surfaces login+typename, guards null author, never trusts Bot alone", {
-  repos <- data.frame(repo_id = c("github.com/a/a", "github.com/b/b", "github.com/c/c"),
-                      owner = c("a", "b", "c"), name = c("a", "b", "c"), stringsAsFactors = FALSE)
-  resp <- list(data = list(
-    r0 = list(pullRequests = list(
-      pageInfo = list(endCursor = "c1", hasNextPage = TRUE),
-      nodes = list(
-        list(author = list(login = "octocat", `__typename` = "User"), createdAt = "2021-01-01T00:00:00Z"),
-        list(author = list(login = "copilot-swe-agent", `__typename` = "Bot"), createdAt = "2024-05-01T00:00:00Z"),
-        list(author = list(login = "dependabot", `__typename` = "Bot"), createdAt = "2024-06-01T00:00:00Z"),
-        list(author = NULL, createdAt = "2024-07-01T00:00:00Z")))),
-    r1 = list(pullRequests = list(pageInfo = list(endCursor = NA, hasNextPage = FALSE), nodes = list())),
-    r2 = NULL))
-  out <- parse_pr_agents(resp, repos)
-  a <- out[["github.com/a/a"]]
-  expect_equal(nrow(a$prs), 4)
-  expect_true(a$has_next)
-  expect_equal(a$prs$login, c("octocat", "copilot-swe-agent", "dependabot", NA))   # null author -> NA
-  expect_equal(a$prs$typename[2], "Bot")
-  # detection uses the allowlist, so Dependabot (also __typename Bot) never flags
-  expect_equal(detect_pr_agents(a$prs$login)$tool, "copilot")
-  expect_equal(nrow(out[["github.com/b/b"]]$prs), 0)                           # empty repo
-  expect_false(out[["github.com/b/b"]]$has_next)
-  expect_equal(nrow(out[["github.com/c/c"]]$prs), 0)                           # null alias guarded
-})
-
 test_that("parse_search_commit reads the earliest-match date, NA on no match or bad body", {
   body <- '{"total_count":3,"items":[{"commit":{"committer":{"date":"2024-02-15T09:00:00Z"}}}]}'
   expect_equal(parse_search_commit(body), "2024-02-15T09:00:00Z")
@@ -173,7 +135,6 @@ test_that("fetch_marker_onset fails closed function-wide when a sibling predeces
   expect_true(is.na(fetch_marker_onset(io, "o", "n", ".cursor", delay = 0)))
 })
 
-# fetch_tree_markers / fetch_pr_agents (github.R) are impure batched transports below
-# the fence - no dedicated unit test here, same convention as fetch_contributor_count /
-# search_earliest_commit. Covered by run_cheap's fake-io test (Task 7) and the live
-# smoke documented in task-3-brief.md.
+# fetch_tree_markers, fetch_activity and fetch_account_counts (github.R) are impure batched
+# transports below the fence - no dedicated unit test here, same convention as fetch_contributor_count /
+# search_earliest_commit. Covered by the run_cheap tests in test-ai-backfill.R and test-fetch-retry.R.

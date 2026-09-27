@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       full_gate:
-        description: "Re-deep-scan every flagged repo, not only new-tool adoptions"
+        description: "Start a search campaign, or resume the open one: ask every search not asked since it began"
         type: boolean
         default: false
 permissions:
@@ -55,16 +55,8 @@ jobs:
   cheap:
     needs: enumerate
     runs-on: ubuntu-latest
-    # The weekly incremental still runs the FULL-roster cheap Tier-D marker + PR-login pass: a
-    # new tool can appear in any repo, so full-roster cheap detection is required every week.
-    # Only the deep matrix downstream of the gate shrinks to new-tool repos. The tree query is
-    # ~1 GraphQL point per aliased batch, but build_pr_agent_query's pullRequests(first: 50)
-    # makes a TIER_D_BATCH=10 batch cost ~6-7 points, so the full ~15k-repo roster is ~10k+
-    # points against the 5000/hr budget. A single token caps throughput near that budget, so
-    # the shards run one at a time (max-parallel 1); run_cheap's graphql_rate_remaining /
-    # AI_POINT_RESERVE preflight pauses a shard when the budget runs low, so a week that does
-    # not finish is picked up by the next dispatch (mod-N sharding re-attempts the same shard
-    # deterministically).
+    # Every repository on the roster is read each week through three documents (contents, activity,
+    # account counts) on one GraphQL token, so shards run one at a time and pause at AI_POINT_RESERVE.
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -127,16 +119,9 @@ jobs:
           path: parts
           pattern: cheap-*
           merge-multiple: true
-      # The incremental gate downloads the published vcs_ai_signals detail (the baseline) and
-      # narrows the flagged roster to repos carrying a tool not yet onset, so the deep matrix
-      # only re-onsets genuinely new adoptions. GH_TOKEN downloads the published summary asset.
-      # full_gate walks the whole flagged roster instead. Needed after a ruleset
-      # change, because the incremental gate keys on (repo_id, tool) already
-      # published and so never revisits a repo whose rules were wrong when it was
-      # scanned. It re-onsets rather than replaces: the reducer merges incoming
-      # evidence with prior, so nothing established is lost and a stale floor is
-      # overwritten by the exact date that supersedes it.
-      - name: Narrow flagged repos to new-tool adoptions
+      # The gate reads the published summary to plan the week's searches; full_gate
+      # also asks every rule not asked since its campaign began.
+      - name: Plan the week's searches
         env:
           VCS_SIGNALS_TOKEN: ${{ secrets.VCS_SIGNALS_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -145,38 +130,16 @@ jobs:
           FULL_GATE: ${{ inputs.full_gate }}
         run: |
           if [ "$FULL_GATE" = "true" ]; then
-            echo "full gate: re-deep-scanning every flagged repo"
+            echo "full gate: asking every search not asked since the campaign began"
             Rscript scripts/ai_backfill.R gate
           else
             Rscript scripts/ai_backfill.R gate-incremental
           fi
-      # The published summary rides along with the roster. The deep job needs it
-      # to know which repos an earlier dispatch of the same campaign already
-      # finished, and it has no token of its own to fetch anything. Without it
-      # every dispatch restarts each shard from repo 1 and the tail is never
-      # reached. Tolerates absence, because a first publish has none.
-      - name: Fetch the published summary for the deep pass
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release download current --repo ${{ github.repository }} \
-            --pattern 'vcs-signals-summary.db' --dir out --clobber || \
-            echo "no published summary yet; the deep pass will skip nothing"
       - uses: actions/upload-artifact@v7
         with:
           name: ai-flagged-roster
-          path: |
-            out/vcs-ai-flagged-roster.db
-            out/vcs-signals-summary.db
+          path: out/vcs-ai-flagged-roster.db
           if-no-files-found: error
-      # The confirmation-row partial (refreshes last_confirmed_date for already-published
-      # repos skipped from the deep matrix below, no new API calls). Uploaded separately from
-      # the flagged roster so the merge job can gather it alongside the deep shard-* artifacts.
-      - uses: actions/upload-artifact@v7
-        with:
-          name: ai-confirm-shard
-          path: out/vcs-ai-shard-confirm.db
-          if-no-files-found: ignore
 
   deep:
     needs: gate
@@ -262,20 +225,13 @@ jobs:
           path: parts
           pattern: shard-*
           merge-multiple: true
-      # Gathers the gate job's confirmation-row partial into the same parts directory. Its
-      # filename (vcs-ai-shard-confirm.db) already matches run_merge's unchanged
-      # vcs-ai-shard-*.db glob, so no merge code change is needed - it folds through
-      # ai_onset_reducer alongside the deep shards.
-      # Optional, and absent by design on a full gate. The confirmation partial
-      # refreshes last_confirmed_date for repos the incremental gate SKIPPED, and
-      # a full gate skips nobody, so run_gate never writes one. Downloading it
-      # unconditionally failed the merge after a 39-hour scan whose twelve deep
-      # shards had all succeeded.
+      # The weekly read partials carry the read state, counts, review and outside rows
+      # the merge publishes. Not optional: without them nothing advances.
       - uses: actions/download-artifact@v8
-        continue-on-error: true
         with:
-          name: ai-confirm-shard
           path: parts
+          pattern: cheap-*
+          merge-multiple: true
       - uses: actions/download-artifact@v8
         with:
           path: parts

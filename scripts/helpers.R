@@ -485,40 +485,55 @@ update_repo_node_ids <- function(con, resolved) {
   invisible(TRUE)
 }
 
-#' Carry vcs_ai_signals onset rows across repos that share an immutable node_id (a
-#' rename/transfer minted a second repo_id for the same GitHub repository, orphaning the
-#' old slug's onset). For each node_id held by 2+ repos, the canonical repo_id is the
-#' active, most-recently-seen one (tiebroken by repo_id ascending for determinism); every
-#' member that is not active is stale (every member but the canonical one, when none is
-#' active). The stale rows are re-keyed to the canonical repo_id and folded with its own
-#' through ai_onset_reducer, so a (canonical, tool) collision collapses by the onset
-#' rules (exact dominates a later floor, min of exacts, tier union, authored OR,
-#' last_confirmed max) instead of violating the (repo_id, tool) primary key that a blind
-#' UPDATE ... SET repo_id would hit. A second active member is not stale and keeps its
-#' rows; heal_hollow_siblings then fills any of them left empty. Structural: run on
-#' every merge, before the prior-vs-incoming onset reduce. No-op when no node_id is shared.
+#' Old repo_id to current repo_id per shared node_id: the current name is the active member with the newest
+#' last_seen, then the smallest repo_id; a second active member maps nowhere. Old names come newest first. Pure.
+ai_canonical_repo_map <- function(repos) {
+  none <- stats::setNames(character(0), character(0))
+  need <- c("repo_id", "node_id", "status", "last_seen")
+  if (is.null(repos) || !nrow(repos) || !all(need %in% names(repos))) return(none)
+  repos <- repos[!is.na(repos$node_id), need, drop = FALSE]
+  repos <- repos[repos$node_id %in% repos$node_id[duplicated(repos$node_id)], , drop = FALSE]
+  if (!nrow(repos)) return(none)
+  out <- lapply(split(repos, repos$node_id), function(g) {
+    active <- g$status %in% "active"
+    o <- order(ifelse(active, 0L, 1L), g$last_seen, g$repo_id,
+               decreasing = c(FALSE, TRUE, FALSE), method = "radix")
+    g <- g[o, , drop = FALSE]; active <- active[o]
+    stale <- if (any(active)) !active else seq_len(nrow(g)) > 1L
+    stats::setNames(rep(g$repo_id[1], sum(stale)), g$repo_id[stale])
+  })
+  unlist(unname(out))
+}
+
+#' Carry every AI table's rows from a renamed repository's old repo_ids to its current one, in one transaction
+#' before any partial is folded, so the new name never starts from a first read. A missing table is skipped.
 reconcile_ai_identity <- function(con) {
-  if (!DBI::dbExistsTable(con, "vcs_ai_signals")) return(invisible(FALSE))
-  dups <- DBI::dbGetQuery(con,
-    "SELECT node_id FROM repos WHERE node_id IS NOT NULL GROUP BY node_id HAVING COUNT(*) > 1")
-  if (nrow(dups) == 0) return(invisible(FALSE))
-  healed <- 0L
-  for (nid in dups$node_id) {
-    grp <- DBI::dbGetQuery(con,
-      "SELECT repo_id, status, last_seen FROM repos WHERE node_id = ?", params = list(nid))
-    # canonical: active before non-active, then newest last_seen, then repo_id ascending.
-    active <- grp$status == "active"
-    a <- ifelse(active, 0L, 1L)
-    o <- order(a, grp$last_seen, grp$repo_id, decreasing = c(FALSE, TRUE, FALSE), method = "radix")
-    canonical <- grp$repo_id[o[1]]
-    ids <- grp$repo_id
+  if (!DBI::dbExistsTable(con, "repos")) return(invisible(FALSE))
+  repos <- DBI::dbGetQuery(con, "SELECT repo_id, node_id, status, last_seen FROM repos")
+  nodes <- repos$node_id[!is.na(repos$node_id)]
+  shared <- repos[repos$node_id %in% nodes[duplicated(nodes)], , drop = FALSE]
+  if (!nrow(shared)) return(invisible(FALSE))
+  map <- ai_canonical_repo_map(repos)
+  DBI::dbWithTransaction(con, {
+    if (DBI::dbExistsTable(con, "vcs_ai_signals")) .reconcile_ai_signals(con, shared, map)
+    .reconcile_ai_state(con, map)
+  })
+  invisible(TRUE)
+}
+
+# The signals fold, one shared node_id at a time: the old names' rows reduced onto the
+# current name, then any empty row filled from an active sibling.
+.reconcile_ai_signals <- function(con, shared, map) {
+  healed <- 0L; moved <- 0L; merged <- 0L
+  # Every column, derived from the table's own shape. This named seven of ten
+  # and then deleted the rows and wrote the seven back, so "markers" and both
+  # commit counts were destroyed on every merge that folded a renamed repo.
+  # The loss was permanent: select_incremental_repos never revisits a repo
+  # that is already published, so nothing would have measured them again.
+  cols <- paste(sprintf('"%s"', names(.ai_empty_signals())), collapse = ", ")
+  for (nid in unique(shared$node_id)) {
+    ids <- shared$repo_id[shared$node_id == nid]
     ph <- paste(rep("?", length(ids)), collapse = ",")
-    # Every column, derived from the table's own shape. This named seven of ten
-    # and then deleted the rows and wrote the seven back, so markers and both
-    # commit counts were destroyed on every merge that folded a renamed repo.
-    # The loss was permanent: select_incremental_repos never revisits a repo
-    # that is already published, so nothing would have measured them again.
-    cols <- paste(sprintf('"%s"', names(.ai_empty_signals())), collapse = ", ")
     involved <- DBI::dbGetQuery(con, sprintf(
       "SELECT %s FROM vcs_ai_signals WHERE repo_id IN (%s)", cols, ph),
       params = as.list(ids))
@@ -532,12 +547,18 @@ reconcile_ai_identity <- function(con) {
     # and nothing else. jpstat lost its summary rollup, nhdplusTools's onset and
     # markers moved to hydrogeofetch, and it repeated every week, which is why the
     # merge log's prior count sat two rows under the published table.
-    stale <- if (any(active)) grp$repo_id[!active] else setdiff(ids, canonical)
-    onto <- involved$repo_id %in% c(canonical, stale)
-    folded <- involved[onto, , drop = FALSE]
-    folded$repo_id <- rep(canonical, nrow(folded))
-    rows <- rbind(involved[!onto, , drop = FALSE],
-                  ai_onset_reducer(.ai_empty_signals(), folded))
+    stale <- intersect(names(map), ids)
+    rows <- involved
+    if (length(stale)) {
+      canonical <- unname(map[stale[1]])
+      onto <- involved$repo_id %in% c(canonical, stale)
+      folded <- involved[onto, , drop = FALSE]
+      folded$repo_id <- rep(canonical, nrow(folded))
+      rows <- rbind(involved[!onto, , drop = FALSE],
+                    ai_onset_reducer(.ai_empty_signals(), folded))
+      moved <- moved + sum(involved$repo_id %in% stale)
+      merged <- merged + (nrow(involved) - nrow(rows))
+    }
     was_hollow <- sum(.ai_is_hollow(rows))
     rows <- heal_hollow_siblings(rows)
     healed <- healed + (was_hollow - sum(.ai_is_hollow(rows)))
@@ -545,9 +566,31 @@ reconcile_ai_identity <- function(con) {
                    params = as.list(ids))
     DBI::dbWriteTable(con, "vcs_ai_signals", rows, append = TRUE)
   }
+  if (moved > 0L)
+    message(sprintf("ai identity: vcs_ai_signals, %d row(s) moved from an old name, %d of them folded into the current name's rows",
+                    moved, merged))
   if (healed > 0L)
     message(sprintf("ai identity: filled %d empty row(s) from an active sibling slug", healed))
-  invisible(TRUE)
+}
+
+# The weekly read's tables and the model tallies, narrowed to the renamed repositories,
+# carried to the current names and written back, with one log line per table that moved rows.
+.reconcile_ai_state <- function(con, map) {
+  if (!length(map)) return(invisible(0L))
+  ids <- unique(c(names(map), unname(map)))
+  ph <- paste(rep("?", length(ids)), collapse = ",")
+  tables <- Filter(function(t) DBI::dbExistsTable(con, t), c(names(.ai_repo_keys()), "vcs_ai_models"))
+  state <- stats::setNames(lapply(tables, function(t) DBI::dbGetQuery(con,
+    sprintf('SELECT * FROM "%s" WHERE repo_id IN (%s)', t, ph), params = as.list(ids))), tables)
+  carried <- carry_renamed_state(state, map)
+  for (t in tables) {
+    moved <- sum(state[[t]]$repo_id %in% names(map))
+    if (!moved) next
+    DBI::dbExecute(con, sprintf('DELETE FROM "%s" WHERE repo_id IN (%s)', t, ph), params = as.list(ids))
+    if (nrow(carried[[t]])) DBI::dbWriteTable(con, t, carried[[t]], append = TRUE)
+    message(sprintf("ai identity: %s, %d row(s) moved from an old name, %d of them folded into the current name's rows",
+                    t, moved, nrow(state[[t]]) - nrow(carried[[t]])))
+  }
 }
 
 #' Fill each row that carries no evidence from the rows its sibling slugs hold for the
@@ -555,11 +598,8 @@ reconcile_ai_identity <- function(con) {
 #' row describes the same GitHub repository and a sibling's evidence is this row's
 #' evidence too.
 #'
-#' The empty rows already published cannot recover by being scanned:
-#' select_incremental_repos deep-scans only (repo_id, tool) keys that are not yet
-#' published, and an empty row's key is published, so it would only ever be confirmed.
-#' Stopping the fold leaves them empty for good; this is what repairs them, and it
-#' spends no API budget.
+#' The gate dates an empty published row only while its repository is flagged, at the cost
+#' of a search, while this fold repairs it at the merge from a sibling's rows for no API budget.
 #'
 #' Onset, censoring, tiers, markers, authorship and both counts come from the sibling
 #' (reduced by the onset rules when two or more siblings have evidence). The filled row
@@ -695,6 +735,7 @@ ensure_series_schema <- function(con) {
     authored INTEGER NOT NULL DEFAULT 0,
     authored_commits INTEGER, assisted_commits INTEGER,
     last_confirmed_date TEXT,
+    authored_measured_on TEXT, assisted_measured_on TEXT,
     PRIMARY KEY (repo_id, tool))")
   # A database written before markers existed keeps its rows; the column arrives empty
   # and fills on the next scan. Dropping and rebuilding would discard onset history.
@@ -710,6 +751,11 @@ ensure_series_schema <- function(con) {
   for (col in c("authored_commits", "assisted_commits")) {
     if (length(have) && !(col %in% have))
       DBI::dbExecute(con, sprintf("ALTER TABLE vcs_ai_signals ADD COLUMN %s INTEGER", col))
+  }
+  # The day each derived count was measured, so a later measurement can replace a larger old one.
+  for (col in c("authored_measured_on", "assisted_measured_on")) {
+    if (length(have) && !(col %in% have))
+      DBI::dbExecute(con, sprintf("ALTER TABLE vcs_ai_signals ADD COLUMN %s TEXT", col))
   }
   # Who owns each active GitHub repository now, as the daily gauge query saw it.
   # Keyed by the frozen repo_id; readers count a repository once by node_id.
@@ -774,7 +820,64 @@ ensure_series_schema <- function(con) {
     commits INTEGER, first_seen TEXT, last_seen TEXT,
     window_complete INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (repo_id, tool, provider, family, version, context_window))")
+  # Weekly read state per repository. Producer state: the next run reads it, no page does.
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_ai_repo_reads (
+    repo_id TEXT PRIMARY KEY,
+    commits_read_on TEXT, commits_read_through TEXT, commits_ruleset TEXT,
+    commits_read INTEGER, commits_window_complete INTEGER, commits_history_complete INTEGER,
+    prs_read_on TEXT, prs_newest_created_at TEXT, prs_walk_complete INTEGER,
+    prs_walk_started_on TEXT, prs_walk_cursor TEXT,
+    accounts_counted_on TEXT,
+    last_failed_on TEXT, last_failure TEXT) WITHOUT ROWID")
+  # Commits by each tool's accounts: one GraphQL count over its addresses, plus one row
+  # per address only REST can count. The sets are disjoint, so a tool's total is their sum.
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_ai_account_counts (
+    repo_id TEXT NOT NULL, tool TEXT NOT NULL, identity_set TEXT NOT NULL,
+    commits INTEGER NOT NULL, newest_commit_date TEXT, measured_on TEXT NOT NULL,
+    PRIMARY KEY (repo_id, tool, identity_set)) WITHOUT ROWID")
+  # The latest answer to every search asked, and every rule a whole-history read matched.
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_ai_search_log (
+    repo_id TEXT NOT NULL, rule_key TEXT NOT NULL, rule_rev INTEGER NOT NULL,
+    ruleset_version TEXT NOT NULL, asked_on TEXT NOT NULL,
+    outcome TEXT NOT NULL CHECK (outcome IN ('hit','none','refused')),
+    total_count INTEGER, verified INTEGER, incomplete INTEGER, first_hit_on TEXT,
+    source TEXT NOT NULL CHECK (source IN ('search','read')),
+    PRIMARY KEY (repo_id, rule_key)) WITHOUT ROWID")
+  # How far each commit search has reached, rolled up from the log for the page.
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_ai_search_coverage (
+    rule_key TEXT PRIMARY KEY, tool TEXT NOT NULL, channel TEXT NOT NULL,
+    rule_rev INTEGER NOT NULL, repos_asked INTEGER NOT NULL, repos_hit INTEGER NOT NULL,
+    repos_refused INTEGER NOT NULL, repos_read_whole INTEGER NOT NULL,
+    last_asked_on TEXT) WITHOUT ROWID")
+  # Review tools, kept apart from the tools that wrote the package.
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_ai_review_signals (
+    repo_id TEXT NOT NULL, tool TEXT NOT NULL, first_seen_date TEXT,
+    first_seen_censored INTEGER NOT NULL DEFAULT 0, evidence_tiers TEXT,
+    markers TEXT, assisted_commits INTEGER, assisted_measured_on TEXT,
+    last_confirmed_date TEXT,
+    PRIMARY KEY (repo_id, tool)) WITHOUT ROWID")
+  # Pull requests a tool wrote or opened for someone outside the project, one row each.
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_ai_outside_prs (
+    repo_id TEXT NOT NULL, pr_number INTEGER NOT NULL, tool TEXT NOT NULL,
+    found_via TEXT NOT NULL, created_at TEXT NOT NULL,
+    from_fork INTEGER NOT NULL, author_association TEXT NOT NULL,
+    last_confirmed_date TEXT NOT NULL,
+    PRIMARY KEY (repo_id, pr_number, tool)) WITHOUT ROWID")
+  # The day each ruleset was first published, and the page note it carries.
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_ai_ruleset_history (
+    ruleset_version TEXT PRIMARY KEY, first_published_on TEXT NOT NULL, change_key TEXT)
+    WITHOUT ROWID")
   invisible(TRUE)
+}
+
+#' Date the first publish of a ruleset, once. `keys` names the rulesets that carry a
+#' page note; any other version gets a NULL change_key.
+record_ruleset_history <- function(con, today, version, keys) {
+  key <- if (version %in% names(keys)) unname(keys[[version]]) else NA_character_
+  DBI::dbExecute(con, "INSERT OR IGNORE INTO vcs_ai_ruleset_history
+    (ruleset_version, first_published_on, change_key) VALUES (?, ?, ?)",
+    params = list(version, today, key))
+  invisible(NULL)
 }
 
 #' Rewrite vcs_repo_owner from today's gauge snapshot in one transaction. A row the
@@ -1469,6 +1572,26 @@ build_release_notes <- function(summary, changed_shards, tag) {
   do.call(paste, c(parts, list(sep = "\t")))
 }
 
+# The AI state tables keyed by repo_id, with their primary keys. A rename folds their rows
+# onto the current name, so the gate counts the published side by key after the same map.
+.ai_repo_keys <- function() list(
+  vcs_ai_repo_reads = "repo_id",
+  vcs_ai_search_log = c("repo_id", "rule_key"),
+  vcs_ai_account_counts = c("repo_id", "tool", "identity_set"),
+  vcs_ai_review_signals = c("repo_id", "tool"),
+  vcs_ai_outside_prs = c("repo_id", "pr_number", "tool"))
+
+# The published rows of `t` counted once per key, with every old repo_id read as the current
+# name the outgoing repos table maps it to. `a` when the published table cannot be read.
+.gate_n_by_current_name <- function(pc, nc, t, key, a) {
+  prev <- .gate_rows(pc, t)
+  if (is.null(prev) || !all(key %in% names(prev))) return(a)
+  map <- ai_canonical_repo_map(.gate_rows(nc, "repos"))
+  k <- match(prev$repo_id, names(map))
+  prev$repo_id[!is.na(k)] <- unname(map[k[!is.na(k)]])
+  length(unique(.gate_key(prev, key)))
+}
+
 #' The rule for a table that only ever accumulates.
 #'
 #' What the gate was written for. A row that is in the published build and not
@@ -1485,6 +1608,8 @@ build_release_notes <- function(summary, changed_shards, tag) {
 .regress_row_count <- function(t, pc, nc, tol) {
   a <- .gate_n(pc, t); b <- .gate_n(nc, t)
   if (is.na(a) || is.na(b) || a == 0) return(character(0))
+  key <- .ai_repo_keys()[[t]]
+  if (!is.null(key)) a <- .gate_n_by_current_name(pc, nc, t, key, a)
   if (b < a * (1 - tol)) sprintf("%s: %d rows, was %d", t, b, a) else character(0)
 }
 
@@ -1617,18 +1742,29 @@ build_release_notes <- function(summary, changed_shards, tag) {
           t, length(lost), paste(sub("\t", "/", lost), collapse = ", "))
 }
 
+#' The rule for vcs_ai_search_coverage, rebuilt from the log on every merge: a search may
+#' leave the table only when its rule has left the ruleset.
+.regress_search_coverage <- function(pc, nc) {
+  t <- "vcs_ai_search_coverage"
+  prev <- .gate_rows(pc, t); nxt <- .gate_rows(nc, t)
+  if (is.null(prev) || nrow(prev) == 0) return(character(0))
+  if (!exists(".ai_coverage_rules", mode = "function")) return(.regress_row_count(t, pc, nc, 0))
+  have <- if (is.null(nxt)) character(0) else nxt$rule_key
+  lost <- setdiff(intersect(prev$rule_key, .ai_coverage_rules()$rule_key), have)
+  if (!length(lost)) return(character(0))
+  sprintf("%s: %d search(es) the ruleset still has left the table: %s",
+          t, length(lost), paste(lost, collapse = ", "))
+}
+
 #' The rules for vcs_ai_models: what each repository keeps, and how many keep it.
 #'
-#' The merge replaces model rows per repository rather than reducing them,
-#' because a model tally describes the window that was examined this run and
-#' folding it into an older window produces a count belonging to neither. So a
-#' plain total row count is not an invariant here, and the first attempt at this
-#' replaced it with a count of repositories carrying model rows and stopped
-#' there. That check cannot fire on the path it was written for. The merge
-#' DELETEs only the repo_ids present in the incoming shards and then inserts
-#' those same shards, so every repository it touches is guaranteed at least one
-#' row back and COUNT(DISTINCT repo_id) is non-decreasing across a merge by
-#' construction. Deleting half the model rows while leaving every repository in
+#' The merge keeps one row per model. A week asks only some of a repository's
+#' rules, so a search raises a model's stored count and never removes a row, and
+#' only a read to the first commit replaces a repository's rows. So a plain total
+#' row count is not an invariant here, and the first attempt at this replaced it
+#' with a count of repositories carrying model rows and stopped there. That
+#' check cannot fire on the merge, where every repository a search touches keeps
+#' its rows. Deleting half the model rows while leaving every repository in
 #' place produced no finding at all, which is a table with no rule on it.
 #'
 #' What the row count was worth is per (repository, tool). The scan pages the
@@ -1652,15 +1788,15 @@ build_release_notes <- function(summary, changed_shards, tag) {
 #'   carried, so those rows were cut off at whatever page size was in force when
 #'   they were written and nothing can be said to be missing from them.
 #'
-#'   A pair that is gone from the outgoing table entirely is the throttle, not
-#'   the scan's reach: a refused search leaves the deep pass with no rows for
-#'   that tool and the merge writes back only what came, so the pair drops out
-#'   until the next scan. SEARCH_DELAY_S exists because that refusal is routine,
-#'   and refusing the publish over it would red most weeks.
+#'   A pair that is gone from the outgoing table entirely is not held. It began
+#'   as the throttle, when the merge wrote back only what a search brought and a
+#'   refused search dropped the pair until the next scan. The merge now keeps a
+#'   pair's rows through a refusal, so a pair leaves only when a read to the
+#'   first commit names none of its models.
 #'
 #' Exact, with no proportional allowance, because outside those two exemptions
 #' there is no ordinary churn to allow for: a search that fails is a refusal and
-#' lands in the second exemption, so a scan that came back and came back
+#' leaves the stored rows in place, so a scan that came back and came back
 #' shorter is either the ruleset reading less than it did or the repository's
 #' history having been rewritten under it. Both are worth a red run. A rebase
 #' over the oldest AI-trailer commits of one repository would refuse a publish,
@@ -1855,6 +1991,7 @@ summary_regressions <- function(prev_path, next_path, tol = 0.02) {
       vcs_ai_rule_inventory  = .regress_rule_inventory(pc, nc),
       vcs_ai_models          = .regress_ai_models(pc, nc, tol),
       repo_package_links     = .regress_package_links(pc, nc),
+      vcs_ai_search_coverage = .regress_search_coverage(pc, nc),
       # Rebuilt from config each merge: a smaller rule set is a ruleset change, not a loss.
       vcs_dev_tooling_rules  = character(0),
       vcs_repo_owner         = .regress_repo_owner(pc, nc),

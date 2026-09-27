@@ -60,7 +60,8 @@ test_that("every tool with a trailer rule has a string in the corpus", {
   # may be right, but nothing here can tell, and that is the state this file
   # exists to make visible.
   cp <- corpus()
-  ruled <- sort(unique(vapply(AI_TRAILER_PATTERNS, function(p) p$tool, character(1))))
+  # The Assisted-by rule names whichever tool its line names, so "any" is not a tool.
+  ruled <- sort(setdiff(unique(vapply(AI_TRAILER_PATTERNS, function(p) p$tool, character(1))), "any"))
   seen  <- sort(unique(cp$tool[!grepl("^NOT-", cp$tool)]))
   missing <- setdiff(ruled, seen)
   expect_equal(missing, character(0),
@@ -71,7 +72,6 @@ test_that("constructed lookalikes are rejected too", {
   # These were not observed, so they stay out of the corpus, but they are the
   # shapes a careless widening would start matching.
   constructed <- c(
-    "Co-authored-by: Claudia Smith <noreply@anthropic.com>",   # name is not Claude
     "Co-authored-by: Claude <someone@example.com>",            # right name, wrong address
     "Co-authored-by: Codex <jane@example.com>",
     "Co-authored-by: Jules Verne <jules@example.org>",

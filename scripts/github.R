@@ -719,55 +719,188 @@ tree_subtree_prefixes <- function(subtrees = TREE_SUBTREES) {
   list(root = unname(subtrees[!gh]), github = sub("^\\.github/", "", unname(subtrees[gh])))
 }
 
-#' One aliased multi-repo query for the newest 50 PRs per repo (CREATED_AT DESC),
-#' each with author { login __typename } and createdAt, plus pageInfo so the
-#' orchestrator can decide which repos need further paging toward the agent era.
-#' Always page 1: a single shared `after` cursor across aliases is meaningless,
-#' so per-repo follow-up paging is the orchestrator's job (Plan B2).
-#'
-#' NEWEST first. It used to ask for the fifty OLDEST while AI_PR_CUTOFF discards
-#' everything before 2023, so any repository with more than fifty lifetime pull
-#' requests was structurally unable to produce PR evidence: its whole page
-#' predated the agent era. cynkra/dm has 1,819 PRs, and page one under ASC spans
-#' July to October 2019. The same request under DESC spans 2026. Ordering costs
-#' nothing either way, and hasNextPage below now says when even fifty was not
-#' enough rather than leaving a truncated window looking like a complete one.
-build_pr_agent_query <- function(repos) {
-  parts <- vapply(seq_len(nrow(repos)), function(j) {
-    sprintf('r%d: repository(owner: "%s", name: "%s") {
-      pullRequests(first: 50, orderBy: {field: CREATED_AT, direction: DESC}) {
-        pageInfo { endCursor hasNextPage }
-        nodes { author { login __typename } createdAt }
-      }
-    }', j - 1L, repos$owner[j], repos$name[j])
-  }, character(1))
-  sprintf('query { %s }', paste(parts, collapse = "\n"))
+#' The alias a tool's count takes inside a repository block.
+.ai_account_alias <- function(tool) paste0("a_", gsub("-", "_", tool, fixed = TRUE))
+
+#' One aliased query counting, per repository, the default branch's commits by each
+#' tool's accounts. history is newest first, so nodes[0] dates the newest such commit.
+build_account_count_query <- function(repos) {
+  counts <- vapply(AI_ACCOUNTS, function(a) sprintf(
+    '%s: history(first: 1, author: {emails: [%s]}) { totalCount nodes { committedDate } }',
+    .ai_account_alias(a$tool), paste(sprintf('"%s"', a$graphql), collapse = ", ")), character(1))
+  parts <- vapply(seq_len(nrow(repos)), function(j) sprintf(
+    'r%d: repository(owner: "%s", name: "%s") {
+      defaultBranchRef { target { ... on Commit {
+        %s
+      } } }
+    }', j - 1L, repos$owner[j], repos$name[j], paste(counts, collapse = "\n        ")), character(1))
+  sprintf("query { %s }", paste(parts, collapse = "\n"))
 }
 
-#' Demux a build_pr_agent_query response into a named list keyed by repo_id, each
-#' value list(prs = data.frame(login, typename, created_at), has_next). A null
-#' author (deleted account) yields login = NA. __typename is surfaced for
-#' provenance only and never trusted alone - detection is detect_pr_agents(login)
-#' against the allowlist, so Dependabot/renovate/github-actions never flag.
-parse_pr_agents <- function(resp, repos) {
-  empty <- data.frame(login = character(0), typename = character(0),
-                      created_at = character(0), stringsAsFactors = FALSE)
-  out <- vector("list", nrow(repos))
-  names(out) <- repos$repo_id
+#' Positive counts per repository. A repository with no default branch was counted and
+#' has none; a null alias was not counted, so its entry is NULL. Pure.
+parse_account_counts <- function(resp, repos) {
+  out <- vector("list", nrow(repos)); names(out) <- repos$repo_id
   for (j in seq_len(nrow(repos))) {
     r <- resp$data[[sprintf("r%d", j - 1L)]]
-    if (is.null(r) || is.null(r$pullRequests)) { out[[j]] <- list(prs = empty, has_next = FALSE); next }
-    nodes <- .nn(r$pullRequests$nodes, list())
-    out[[j]] <- list(
-      prs = data.frame(
-        login      = vapply(nodes, function(n) .nn(n$author$login, NA_character_), character(1)),
-        typename   = vapply(nodes, function(n) .nn(n$author[["__typename"]], NA_character_), character(1)),
-        created_at = vapply(nodes, function(n) .nn(n$createdAt, NA_character_), character(1)),
-        stringsAsFactors = FALSE),
-      has_next = isTRUE(r$pullRequests$pageInfo$hasNextPage))
+    if (is.null(r)) { out[j] <- list(NULL); next }
+    tgt <- r$defaultBranchRef$target
+    rows <- lapply(AI_ACCOUNTS, function(a) {
+      h <- tgt[[.ai_account_alias(a$tool)]]
+      n <- as.integer(.nn(h$totalCount, 0L))
+      if (is.na(n) || n <= 0L) return(NULL)
+      nodes <- .nn(h$nodes, list())
+      data.frame(tool = a$tool, commits = n,
+                 newest_commit_date = if (length(nodes)) .nn(nodes[[1]]$committedDate, NA_character_)
+                                      else NA_character_,
+                 stringsAsFactors = FALSE)
+    })
+    rows <- Filter(Negate(is.null), rows)
+    out[[j]] <- if (length(rows)) do.call(rbind, rows) else
+      data.frame(tool = character(), commits = integer(), newest_commit_date = character(),
+                 stringsAsFactors = FALSE)
   }
   out
 }
+
+#' GraphQL commit nodes as a frame. The message is kept for matching in memory only and
+#' is never written anywhere.
+.ai_commit_nodes_frame <- function(nodes) {
+  nodes <- nodes %||% list()
+  chr <- function(f) vapply(nodes, function(n) { v <- f(n); if (is.null(v)) NA_character_ else as.character(v) },
+                            character(1))
+  data.frame(oid = chr(function(n) n$oid), committed_at = chr(function(n) n$committedDate),
+             message = chr(function(n) n$message), author_name = chr(function(n) n$author$name),
+             author_email = chr(function(n) n$author$email), author_login = chr(function(n) n$author$user$login),
+             stringsAsFactors = FALSE)
+}
+
+.AI_PR_NODE_FIELDS <- "number createdAt author { login __typename } authorAssociation isCrossRepository headRefName body"
+.AI_COMMIT_NODE_FIELDS <- "oid committedDate message author { name email user { login } }"
+
+#' One aliased query per batch: the newest 50 pull requests and the default branch's commits since
+#' `since` (NA asks for the newest 100). No authors() or reviews(): either multiplies the point cost.
+build_activity_query <- function(repos) {
+  since <- if ("since" %in% names(repos)) repos$since else rep(NA_character_, nrow(repos))
+  parts <- vapply(seq_len(nrow(repos)), function(j) sprintf(
+    'r%d: repository(owner: "%s", name: "%s") {
+      pullRequests(first: 50, orderBy: {field: CREATED_AT, direction: DESC}) {
+        totalCount pageInfo { endCursor hasNextPage } nodes { %s }
+      }
+      defaultBranchRef { target { ... on Commit {
+        recent: history(first: 100%s) { pageInfo { endCursor hasNextPage } nodes { %s } }
+      } } }
+    }', j - 1L, repos$owner[j], repos$name[j], .AI_PR_NODE_FIELDS,
+    if (is.na(since[j])) "" else sprintf(', since: "%s"', since[j]), .AI_COMMIT_NODE_FIELDS), character(1))
+  sprintf("query { %s }", paste(parts, collapse = "\n"))
+}
+
+#' Pull request nodes as a frame with one logical per AI_PR_RULES key. The description is
+#' read here and dropped, so nothing downstream can store it.
+.ai_pr_nodes_frame <- function(nodes) {
+  nodes <- if (is.null(nodes)) list() else nodes
+  chr <- function(f) vapply(nodes, function(n) { v <- f(n); if (is.null(v)) NA_character_ else as.character(v) },
+                            character(1))
+  df <- data.frame(number = vapply(nodes, function(n) as.integer(.nn(n$number, NA_integer_)), integer(1)),
+                   created_at = chr(function(n) n$createdAt), login = chr(function(n) n$author$login),
+                   typename = chr(function(n) n$author[["__typename"]]),
+                   association = chr(function(n) n$authorAssociation),
+                   cross_repo = vapply(nodes, function(n) isTRUE(n$isCrossRepository), logical(1)),
+                   head_ref = chr(function(n) n$headRefName), stringsAsFactors = FALSE)
+  body <- chr(function(n) n$body)
+  for (r in AI_PR_RULES) {
+    txt <- if (identical(r$field, "head")) df$head_ref else body
+    df[[r$key]] <- !is.na(txt) & grepl(r$pattern, txt, perl = TRUE)
+  }
+  df
+}
+
+#' Demux a build_activity_query response per repo_id. A null alias gives NULL. Pure.
+parse_activity <- function(resp, repos) {
+  out <- vector("list", nrow(repos)); names(out) <- repos$repo_id
+  for (j in seq_len(nrow(repos))) {
+    r <- resp$data[[sprintf("r%d", j - 1L)]]
+    if (is.null(r)) { out[j] <- list(NULL); next }
+    pr <- r$pullRequests
+    h <- r$defaultBranchRef$target$recent
+    out[[j]] <- list(
+      prs = .ai_pr_nodes_frame(pr$nodes),
+      prs_total = as.integer(.nn(pr$totalCount, 0L)),
+      prs_has_next = isTRUE(pr$pageInfo$hasNextPage),
+      prs_end_cursor = .nn(pr$pageInfo$endCursor, NA_character_),
+      commits = .ai_commit_nodes_frame(h$nodes),
+      commits_has_next = isTRUE(h$pageInfo$hasNextPage),
+      commits_end_cursor = .nn(h$pageInfo$endCursor, NA_character_))
+  }
+  out
+}
+
+#' Next pages of each repository's commit window, from its own cursor.
+build_commit_page_query <- function(repos) {
+  parts <- vapply(seq_len(nrow(repos)), function(j) sprintf(
+    'r%d: repository(owner: "%s", name: "%s") { defaultBranchRef { target { ... on Commit {
+      recent: history(first: 100, after: "%s"%s) { pageInfo { endCursor hasNextPage } nodes { %s } }
+    } } } }', j - 1L, repos$owner[j], repos$name[j], repos$after[j],
+    if (is.na(repos$since[j])) "" else sprintf(', since: "%s"', repos$since[j]),
+    .AI_COMMIT_NODE_FIELDS), character(1))
+  sprintf("query { %s }", paste(parts, collapse = "\n"))
+}
+
+#' One page of commits per repository. A null alias, or a default branch gone since page one, gives NULL. Pure.
+parse_commit_pages <- function(resp, repos) {
+  out <- vector("list", nrow(repos)); names(out) <- repos$repo_id
+  for (j in seq_len(nrow(repos))) {
+    r <- resp$data[[sprintf("r%d", j - 1L)]]
+    if (is.null(r) || is.null(r$defaultBranchRef)) { out[j] <- list(NULL); next }
+    h <- r$defaultBranchRef$target$recent
+    out[[j]] <- list(commits = .ai_commit_nodes_frame(h$nodes), has_next = isTRUE(h$pageInfo$hasNextPage),
+                     end_cursor = .nn(h$pageInfo$endCursor, NA_character_))
+  }
+  out
+}
+
+#' Older pull requests, 100 at a time, from each repository's own cursor.
+build_pr_walk_query <- function(repos) {
+  parts <- vapply(seq_len(nrow(repos)), function(j) sprintf(
+    'r%d: repository(owner: "%s", name: "%s") {
+      pullRequests(first: 100, after: "%s", orderBy: {field: CREATED_AT, direction: DESC}) {
+        pageInfo { endCursor hasNextPage } nodes { %s }
+      }
+    }', j - 1L, repos$owner[j], repos$name[j], repos$after[j], .AI_PR_NODE_FIELDS), character(1))
+  sprintf("query { %s }", paste(parts, collapse = "\n"))
+}
+
+#' One page of pull requests per repository, descriptions read and dropped. Pure.
+parse_pr_walk <- function(resp, repos) {
+  out <- vector("list", nrow(repos)); names(out) <- repos$repo_id
+  for (j in seq_len(nrow(repos))) {
+    r <- resp$data[[sprintf("r%d", j - 1L)]]
+    if (is.null(r)) { out[j] <- list(NULL); next }
+    pr <- r$pullRequests
+    out[[j]] <- list(prs = .ai_pr_nodes_frame(pr$nodes), has_next = isTRUE(pr$pageInfo$hasNextPage),
+                     end_cursor = .nn(pr$pageInfo$endCursor, NA_character_))
+  }
+  out
+}
+
+#' Named pull requests and commits in one query, aliased p<k> and c<k>.
+build_fixed_object_query <- function(prs, commits) {
+  split_slug <- function(s) strsplit(s, "/", fixed = TRUE)[[1]]
+  p <- vapply(seq_along(prs), function(k) { s <- split_slug(prs[[k]][1]); sprintf(
+    'p%d: repository(owner: "%s", name: "%s") { pullRequest(number: %s) { %s } }',
+    k - 1L, s[1], s[2], prs[[k]][2], .AI_PR_NODE_FIELDS) }, character(1))
+  c_ <- vapply(seq_along(commits), function(k) { s <- split_slug(commits[[k]][1]); sprintf(
+    'c%d: repository(owner: "%s", name: "%s") { object(oid: "%s") { ... on Commit { %s } } }',
+    k - 1L, s[1], s[2], commits[[k]][2], .AI_COMMIT_NODE_FIELDS) }, character(1))
+  sprintf("query { %s }", paste(c(p, c_), collapse = "\n"))
+}
+
+#' The activity and account-count documents over a slice of the roster, through the
+#' shared helper that reports every repository it could not read.
+fetch_activity <- function(io, repos, breaker = NULL, batch_size = TIER_D_BATCH)
+  fetch_aliased(io, repos, batch_size, build_activity_query, parse_activity, "activity", breaker)
+fetch_account_counts <- function(io, repos, breaker = NULL, batch_size = AI_ACCOUNT_BATCH)
+  fetch_aliased(io, repos, batch_size, build_account_count_query, parse_account_counts, "accounts", breaker)
 
 #' Pure: the earliest-match commit date from a search/commits JSON body, or NA when
 #' total_count is 0, items is empty, or the body does not parse. The match is FUZZY
@@ -782,7 +915,8 @@ parse_search_commit <- function(body_txt) parse_search_commit_hit(body_txt)$date
 #' the message, as parse_search_commit did, left the caller no way to tell those apart,
 #' which is why the trailer channel was never wired up.
 #'
-#' Returns list(date, message, author) with NA fields when there is no hit.
+#' Returns list(date, message, author, total_count, items, unavailable, incomplete). An unfinished
+#' zero (incomplete_results with total_count 0) or a count with no items is returned unavailable.
 parse_search_commit_hit <- function(body_txt) {
   # total_count is the number of commits in this repository matching the query,
   # which is the difference between "this tool has touched this repo" and "this
@@ -792,9 +926,10 @@ parse_search_commit_hit <- function(body_txt) {
   empty_page <- data.frame(date = character(), message = character(),
                            stringsAsFactors = FALSE)
   none <- list(date = NA_character_, message = NA_character_, author = NA_character_,
-               total_count = 0L, items = empty_page, unavailable = FALSE)
+               total_count = 0L, items = empty_page, unavailable = FALSE, incomplete = 0L)
   unavailable <- list(date = NA_character_, message = NA_character_, author = NA_character_,
-                      total_count = NA_integer_, items = empty_page, unavailable = TRUE)
+                      total_count = NA_integer_, items = empty_page, unavailable = TRUE,
+                      incomplete = 0L)
   body <- tryCatch(jsonlite::fromJSON(body_txt, simplifyVector = FALSE), error = function(e) NULL)
   if (is.null(body)) return(unavailable)   # unparseable is not an answer
 
@@ -804,6 +939,11 @@ parse_search_commit_hit <- function(body_txt) {
   # is how tier B came back as a confident zero across the entire roster while
   # igraph/rigraph alone had 53 matching commits.
   if (is.null(body$total_count) && !is.null(body$message)) return(unavailable)
+  # GitHub stopped short: a zero may be a miss nobody finished looking for, and a count is a floor.
+  partial <- isTRUE(body$incomplete_results)
+  if (partial && isTRUE(.nn(body$total_count, 0L) == 0)) return(unavailable)
+  # A count with no commit to check or date is not an answer either.
+  if (isTRUE(.nn(body$total_count, 0L) > 0) && !length(.nn(body$items, list()))) return(unavailable)
 
   items <- .nn(body$items, list())
   if (isTRUE(.nn(body$total_count, length(items)) == 0) || length(items) == 0) return(none)
@@ -820,7 +960,8 @@ parse_search_commit_hit <- function(body_txt) {
        author      = .nn(it$commit$author$name, NA_character_),
        total_count = as.integer(.nn(body$total_count, length(items))),
        items       = page,
-       unavailable = FALSE)
+       unavailable = FALSE,
+       incomplete  = as.integer(partial))
 }
 
 #' A marker path plus any known predecessor paths (AI_MARKER_PREDECESSORS), probed
@@ -885,38 +1026,74 @@ fetch_marker_onset <- function(io, owner, name, path, delay = BACKFILL_DELAY_S) 
   earliest
 }
 
-# --- transport (not unit-tested) ---
+# --- transport ---
 
 
-#' As search_earliest_commit, but returning the whole hit so the caller can verify it.
-#' Same transport, same pacing, same fail-soft: an error is a hit with NA fields, never
-#' an exception that would abort a shard.
-search_earliest_commit_hit <- function(token, owner, name, query, delay = SEARCH_DELAY_S) {
-  # A transport failure is also a refused question, not an absence of trailers.
-  # total_count is NA for the same reason the parser's is: nothing was measured,
-  # and a caller reading a missing field would get NULL rather than a number it
-  # could tell apart from a real zero.
-  none <- list(date = NA_character_, message = NA_character_, author = NA_character_,
-               total_count = NA_integer_,
-               items = data.frame(date = character(), message = character(),
-                                  stringsAsFactors = FALSE),
-               unavailable = TRUE)
+#' Split gh api -i output into its status, headers (names lowercased) and body. Pure.
+parse_gh_include <- function(lines) {
+  s <- grep("^HTTP/", lines)
+  if (!length(s)) return(list(status = NA_integer_, headers = character(0),
+                              body = paste(lines, collapse = "\n")))
+  s <- s[1]
+  blank <- which(!nzchar(trimws(lines)) & seq_along(lines) > s)
+  end <- if (length(blank)) blank[1] - 1L else length(lines)
+  hdr <- if (end > s) lines[(s + 1L):end] else character(0)
+  kv <- regmatches(hdr, regexec("^([^:]+):\\s*(.*)$", hdr))
+  kv <- Filter(function(x) length(x) == 3L, kv)
+  # gh ends each header line with CRLF and system2 keeps the CR, so values are trimmed.
+  headers <- stats::setNames(trimws(vapply(kv, `[`, "", 3L)), tolower(vapply(kv, `[`, "", 2L)))
+  list(status = as.integer(sub("^HTTP/\\S+\\s+([0-9]{3}).*$", "\\1", lines[s])), headers = headers,
+       body = if (length(blank)) paste(lines[-seq_len(blank[1])], collapse = "\n") else "")
+}
+
+#' Seconds to wait before asking again, or NA when the answer is final. A refusal waits
+#' what GitHub says, else until the budget resets, else a minute, plus jitter, capped. Pure.
+search_wait_s <- function(status, headers, attempt, now, rand) {
+  if (is.na(status) || attempt > AI_SEARCH_RETRIES) return(NA_real_)
+  h <- function(k) { v <- unname(headers[k]); if (length(v) && !is.na(v)) v else NA_character_ }
+  if (status %in% c(403L, 429L)) {
+    wait <- suppressWarnings(as.numeric(h("retry-after")))
+    if (is.na(wait) && identical(h("x-ratelimit-remaining"), "0"))
+      wait <- suppressWarnings(as.numeric(h("x-ratelimit-reset"))) - now
+    if (is.na(wait) || wait < 0) wait <- 60
+    return(min(wait + rand(1, 1, 5), AI_SEARCH_MAX_WAIT_S))
+  }
+  if (status >= 500L) return(c(10, 30, 60)[min(attempt, 3L)])
+  NA_real_
+}
+
+#' One commit search, earliest hit first, asked again on a refusal or a server error. A search that
+#' stays refused is returned as unavailable, never as a miss; `sleep` carries every wait for tests.
+search_earliest_commit_hit <- function(token, owner, name, query, delay = SEARCH_DELAY_S,
+                                       run = system2, sleep = Sys.sleep, rand = stats::runif,
+                                       now = function() as.numeric(Sys.time())) {
+  refused <- list(date = NA_character_, message = NA_character_, author = NA_character_,
+                  total_count = NA_integer_,
+                  items = data.frame(date = character(), message = character(), stringsAsFactors = FALSE),
+                  unavailable = TRUE, incomplete = 0L)
   old <- Sys.getenv("GH_TOKEN", unset = NA)
   Sys.setenv(GH_TOKEN = token)
   on.exit({ if (is.na(old)) Sys.unsetenv("GH_TOKEN") else Sys.setenv(GH_TOKEN = old) }, add = TRUE)
-  # system2 pastes its args into a shell line WITHOUT quoting them, so a query
-  # containing a space is split and gh receives the remainder as stray positional
-  # arguments: "accepts 1 arg(s), received 2". Every trailer phrase contains a
-  # space, so every tier-B and tier-C search ever issued was malformed. Tier A's
-  # author-email query has no space, which is why only these went silent.
+  # system2 does not quote its arguments, so the whole q= argument is single-quoted.
   q <- sprintf("repo:%s/%s %s", owner, name, query)
-  out <- suppressWarnings(system2("gh", c("api", "-X", "GET", "search/commits",
-    "-f", shQuote(paste0("q=", q)), "-f", "sort=committer-date", "-f", "order=asc",
-    "-f", sprintf("per_page=%d", AI_SEARCH_PAGE)), stdout = TRUE))
-  if (delay > 0) Sys.sleep(delay)
-  status <- attr(out, "status")
-  if (!is.null(status) && !identical(as.integer(status), 0L)) return(none)
-  parse_search_commit_hit(paste(out, collapse = "\n"))
+  attempt <- 1L
+  repeat {
+    out <- suppressWarnings(run("gh", c("api", "-i", "-X", "GET", "search/commits",
+      "-f", shQuote(paste0("q=", q)), "-f", "sort=committer-date", "-f", "order=asc",
+      "-f", sprintf("per_page=%d", AI_SEARCH_PAGE)), stdout = TRUE))
+    if (delay > 0) sleep(delay)
+    res <- parse_gh_include(out)
+    ok <- !is.na(res$status) && res$status >= 200L && res$status < 300L
+    if (ok) {
+      hit <- parse_search_commit_hit(res$body)
+      if (!isTRUE(hit$unavailable)) return(hit)
+    }
+    # A 2xx that is itself a refusal, or no status at all, is asked again like a server error.
+    wait <- search_wait_s(if (ok || is.na(res$status)) 500L else res$status, res$headers, attempt, now(), rand)
+    if (is.na(wait)) return(refused)
+    sleep(wait)
+    attempt <- attempt + 1L
+  }
 }
 
 .utc_now <- function() format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
@@ -1018,32 +1195,6 @@ fetch_aliased <- function(io, repos, batch_size, build, parse, label, breaker = 
 #' The weekly repository contents read (build_tree_query), with failures reported.
 fetch_tree_markers <- function(io, repos, batch_size = TIER_D_BATCH, breaker = NULL)
   fetch_aliased(io, repos, batch_size, build_tree_query, parse_tree_markers, "contents", breaker)
-
-#' Cheap PR-agent pass over a chunk of repos, batched TIER_D_BATCH at a time. Same
-#' halve-and-retry contract as fetch_tree_markers, over build_pr_agent_query /
-#' parse_pr_agents. Page 1 only (newest 50 PRs, CREATED_AT DESC): a young repo's whole
-#' agent PR is on page 1 and is the exact onset; per-repo follow-up paging toward the
-#' agent era for large old repos is deferred (Plan C). Returns a named list keyed by
-#' repo_id, each value list(prs, has_next); a deferred repo is absent.
-fetch_pr_agents <- function(io, repos, batch_size = TIER_D_BATCH) {
-  out <- list()
-  queue <- unname(chunk(seq_len(nrow(repos)), batch_size))
-  while (length(queue) > 0) {
-    idx <- queue[[1]]; queue <- queue[-1]
-    sub <- repos[idx, , drop = FALSE]
-    res <- tryCatch(io$graphql(build_pr_agent_query(sub)), error = function(e) list(.err = TRUE))
-    Sys.sleep(BATCH_DELAY_S)
-    ok <- is.list(res) && is.null(res$.err) && !is.null(res$data) &&
-      (is.null(res$errors) || errors_are_alias_not_found(res$errors))
-    if (ok) {
-      parsed <- parse_pr_agents(res, sub)
-      out[names(parsed)] <- parsed
-    } else if (length(idx) > 1) {
-      queue <- c(unname(chunk(idx, ceiling(length(idx) / 2))), queue)
-    }
-  }
-  out
-}
 
 # --- Ignore-file onset bisect --------------------------------------------------
 # An ignore-file marker names an entry inside .gitignore or .Rbuildignore, not a

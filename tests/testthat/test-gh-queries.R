@@ -120,15 +120,14 @@ test_that("a search query containing a space survives the shell", {
                info = "the unquoted form silently breaks every multi-word query")
 })
 
-test_that("every trailer query the ruleset ships contains a space", {
-  # This is what made the bug total rather than partial: there is no single-word
-  # trailer, so no tier-B search could ever have worked.
-  for (r in AI_TRAILER_PATTERNS) {
-    expect_true(grepl(" ", r$query, fixed = TRUE) || !grepl(" ", r$query, fixed = TRUE))
+test_that("every search query reaches gh as one argument, spaces and quotes included", {
+  # The transport pastes arguments into a shell line, so each query is single-quoted.
+  rules <- c(AI_TRAILER_PATTERNS, AI_AUTHOR_SUFFIXES, AI_REVIEW_RULES)
+  for (r in rules) {
+    q <- sprintf("repo:%s/%s %s", "o", "n", r$query)
+    got <- system2("printf", c("%s", shQuote(paste0("q=", q))), stdout = TRUE)
+    expect_equal(paste(got, collapse = "\n"), paste0("q=", q), info = r$key)
   }
-  spaced <- vapply(AI_TRAILER_PATTERNS, function(r) grepl(" ", r$query, fixed = TRUE), logical(1))
-  expect_true(any(spaced),
-              info = "if this ever goes all-FALSE the quoting bug stops being detectable here")
 })
 
 test_that("the tree query fetches the subtrees the ruleset actually reads", {
@@ -204,7 +203,7 @@ one_repo <- data.frame(repo_id = "github.com/o/n", owner = "o", name = "n", stri
 
 test_that("every AI file rule under a subtree names a subtree the query fetches", {
   pre <- tree_subtree_prefixes()
-  for (m in AI_MARKERS) {
+  for (m in c(AI_MARKERS, AI_REVIEW_FILES)) {
     if (!grepl("/", m$path, fixed = TRUE)) next
     first <- sub("/.*$", "", m$path)
     allowed <- if (identical(m$location, "github")) pre$github else pre$root
@@ -250,11 +249,6 @@ test_that("every repository block asks for the four community fields in the orde
       expect_true(grepl("pullRequestTemplates { filename repository { nameWithOwner } }", b, fixed = TRUE))
     }
   }
-})
-
-test_that("the contents query leaves out the four subtrees only the AI rules will read", {
-  q <- build_tree_query(one_repo)
-  for (a in c("githubAgentsTree", "positTree", "positaiTree", "geminiTree")) expect_false(grepl(a, q, fixed = TRUE), info = a)
 })
 
 test_that("the contents query lists every subtree in TREE_SUBTREES", {
@@ -327,4 +321,136 @@ test_that("a field GitHub answered with null is read, and a field the reply lack
     "rbuildignore_lines", "rbuildignore_text", "workflows", "desc_text", "coc_url"))
   for (e in c("pages", "pr_templates", "funding_links", "owner_sponsorable"))
     expect_false(e %in% names(got), info = e)
+})
+
+test_that("the contents document asks for the four folders the AI file rules read", {
+  q <- build_tree_query(data.frame(owner = c("o", "p"), name = c("n", "m"), stringsAsFactors = FALSE))
+  for (path in c("HEAD:.github/agents", "HEAD:.posit", "HEAD:.positai", "HEAD:.gemini")) {
+    n <- lengths(regmatches(q, gregexpr(sprintf('expression: "%s"', path), q, fixed = TRUE)))
+    expect_equal(n, 2L, info = path)   # once per repository in the batch
+  }
+})
+
+test_that("entries of the four folders reach the classifiers under their own prefix", {
+  resp <- list(data = list(r0 = list(
+    isFork = FALSE, parent = NULL,
+    rootTree = list(entries = list(list(name = ".posit", type = "tree"),
+                                   list(name = ".positai", type = "tree"),
+                                   list(name = ".gemini", type = "tree"))),
+    githubTree = list(entries = list(list(name = "agents", type = "tree"))),
+    githubAgentsTree = list(entries = list(list(name = "reviewer.agent.md", type = "blob"))),
+    positTree = list(entries = list(list(name = "assistant", type = "tree"))),
+    positaiTree = list(entries = list(list(name = "settings.json", type = "blob"))),
+    geminiTree = list(entries = list(list(name = "styleguide.md", type = "blob"))))))
+  got <- parse_tree_markers(resp, data.frame(repo_id = "github.com/o/n", owner = "o", name = "n",
+                                             stringsAsFactors = FALSE))[[1]]
+  expect_true(all(c(".posit/assistant", ".positai/settings.json", ".gemini/styleguide.md") %in%
+                  got$root_entries))
+  expect_true("agents/reviewer.agent.md" %in% got$github_entries)
+})
+
+test_that("the account document never asks for the github-actions account", {
+  q <- build_account_count_query(data.frame(owner = c("ss3sim", "o"), name = c("ss3sim", "n"),
+                                            stringsAsFactors = FALSE))
+  # GitHub resolves <id>+anything to account <id>, and 41898282 is github-actions[bot].
+  expect_false(grepl("41898282+", q, fixed = TRUE))
+  ids <- as.numeric(sub("\\+$", "", unlist(regmatches(q, gregexpr("(?<=\")[0-9]+\\+", q, perl = TRUE)))))
+  expect_true(length(ids) > 0)
+  expect_equal(setdiff(ids, AI_VERIFIED_ACCOUNT_IDS), numeric(0))
+  for (a in AI_ACCOUNTS) {
+    expect_false(any(grepl("^41898282\\+", c(a$graphql, a$linked))), info = a$tool)
+    d <- as.numeric(sub("\\+.*$", "", grep("^[0-9]+\\+", a$graphql, value = TRUE)))
+    expect_equal(setdiff(d, AI_VERIFIED_ACCOUNT_IDS), numeric(0), info = a$tool)
+  }
+})
+
+test_that("the account document asks one newest-first count per tool with accounts", {
+  q <- build_account_count_query(data.frame(owner = "o", name = "n", stringsAsFactors = FALSE))
+  for (a in AI_ACCOUNTS)
+    expect_true(grepl(sprintf("%s: history(first: 1, author: {emails: [", .ai_account_alias(a$tool)), q,
+                      fixed = TRUE), info = a$tool)
+  expect_equal(.ai_account_alias("posit-assistant"), "a_posit_assistant")
+  expect_false(grepl("authors(", q, fixed = TRUE))
+  expect_false(grepl("reviews(", q, fixed = TRUE))
+})
+
+test_that("the activity document asks for the newest 50 pull requests and a commit window", {
+  repos <- data.frame(owner = c("o", "p"), name = c("n", "m"),
+                      since = c(NA, "2026-09-13T00:00:00Z"), stringsAsFactors = FALSE)
+  q <- build_activity_query(repos)
+  expect_match(q, "pullRequests(first: 50, orderBy: {field: CREATED_AT, direction: DESC})", fixed = TRUE)
+  expect_match(q, "authorAssociation isCrossRepository headRefName body", fixed = TRUE)
+  expect_match(q, "recent: history(first: 100) {", fixed = TRUE)
+  expect_match(q, 'recent: history(first: 100, since: "2026-09-13T00:00:00Z") {', fixed = TRUE)
+  expect_match(q, "author { name email user { login } }", fixed = TRUE)
+  expect_false(grepl("bodyText", q, fixed = TRUE))
+})
+
+test_that("the activity parser returns both frames and says when a page stopped short", {
+  resp <- list(data = list(r0 = list(
+    pullRequests = list(totalCount = 120L, pageInfo = list(endCursor = "P1", hasNextPage = TRUE), nodes = list()),
+    defaultBranchRef = list(target = list(recent = list(pageInfo = list(endCursor = "C1", hasNextPage = TRUE),
+      nodes = list(list(oid = "abc", committedDate = "2026-09-20T00:00:00Z", message = "x",
+                        author = list(name = "p", email = "p@e.org", user = NULL)))))))))
+  got <- parse_activity(resp, data.frame(repo_id = "github.com/o/n", owner = "o", name = "n",
+                                         stringsAsFactors = FALSE))[[1]]
+  expect_equal(got$prs_total, 120L); expect_true(got$prs_has_next); expect_equal(got$prs_end_cursor, "P1")
+  expect_equal(nrow(got$commits), 1L); expect_true(got$commits_has_next); expect_equal(got$commits_end_cursor, "C1")
+  expect_true(is.na(got$commits$author_login))
+  expect_null(parse_activity(list(data = list(r0 = NULL)),
+                             data.frame(repo_id = "g", owner = "o", name = "n", stringsAsFactors = FALSE))[["g"]])
+})
+
+test_that("the commit window is asked from two weeks before the last read, and in full otherwise", {
+  expect_true(is.na(plan_commit_read(NULL)$since))
+  expect_equal(plan_commit_read(NULL)$shape, "first")
+  same <- data.frame(commits_read_on = "2026-10-04", commits_ruleset = AI_RULESET_VERSION,
+                     commits_read_through = "2026-10-03T10:00:00Z", commits_history_complete = 0L,
+                     stringsAsFactors = FALSE)
+  expect_equal(plan_commit_read(same)$since, "2026-09-20T00:00:00Z")
+  # Any ruleset other than the current one.
+  other <- same; other$commits_ruleset <- "2026-01-01"
+  p <- plan_commit_read(other)
+  expect_true(is.na(p$since)); expect_equal(p$shape, "ruleset"); expect_equal(p$bound, "2026-09-19")
+  other$commits_history_complete <- 1L
+  expect_true(plan_commit_read(other)$to_first)
+})
+
+test_that("follow-up pages carry each repository's own cursor", {
+  q <- build_commit_page_query(data.frame(owner = c("o", "p"), name = c("n", "m"), after = c("C1", "C2"),
+                                          since = c(NA, "2026-09-20T00:00:00Z"), stringsAsFactors = FALSE))
+  expect_match(q, 'recent: history(first: 100, after: "C1") {', fixed = TRUE)
+  expect_match(q, 'recent: history(first: 100, after: "C2", since: "2026-09-20T00:00:00Z") {', fixed = TRUE)
+  w <- build_pr_walk_query(data.frame(owner = "o", name = "n", after = "P1", stringsAsFactors = FALSE))
+  expect_match(w, 'pullRequests(first: 100, after: "P1", orderBy: {field: CREATED_AT, direction: DESC})', fixed = TRUE)
+})
+
+test_that("no query the weekly read sends nests authors or reviews", {
+  one <- data.frame(owner = "o", name = "n", after = "X", since = NA, stringsAsFactors = FALSE)
+  for (q in c(build_tree_query(one), build_activity_query(one), build_account_count_query(one),
+              build_commit_page_query(one), build_pr_walk_query(one))) {
+    expect_false(grepl("authors(", q, fixed = TRUE)); expect_false(grepl("reviews(", q, fixed = TRUE))
+  }
+})
+
+test_that("follow-up pages parse per repository, and a repository GitHub did not answer, or whose default branch is gone, gives NULL", {
+  repos <- data.frame(repo_id = c("g/o/n", "g/p/m"), owner = c("o", "p"), name = c("n", "m"),
+                      stringsAsFactors = FALSE)
+  resp <- list(data = list(r0 = list(defaultBranchRef = list(target = list(recent = list(
+    pageInfo = list(endCursor = "C2", hasNextPage = TRUE),
+    nodes = list(list(oid = "a", committedDate = "2026-09-20T00:00:00Z", message = "x",
+                      author = list(name = "p", email = "p@e.org", user = NULL))))))), r1 = NULL))
+  got <- parse_commit_pages(resp, repos)
+  expect_equal(names(got), repos$repo_id)
+  expect_equal(nrow(got[["g/o/n"]]$commits), 1L); expect_true(got[["g/o/n"]]$has_next)
+  expect_equal(got[["g/o/n"]]$end_cursor, "C2"); expect_null(got[["g/p/m"]])
+  gone <- parse_commit_pages(list(data = list(r0 = list(defaultBranchRef = NULL))), repos[1, ])
+  expect_equal(names(gone), "g/o/n"); expect_null(gone[["g/o/n"]])
+  pr <- list(data = list(r0 = list(pullRequests = list(pageInfo = list(endCursor = NULL, hasNextPage = FALSE),
+    nodes = list(list(number = 7L, createdAt = "2022-11-01T00:00:00Z", author = NULL, authorAssociation = "NONE",
+                      isCrossRepository = TRUE, headRefName = "x", body = "y"))))))
+  w <- parse_pr_walk(pr, repos[1, ])[["g/o/n"]]
+  expect_equal(w$prs$number, 7L); expect_false(w$has_next); expect_true(is.na(w$end_cursor))
+  expect_false("body" %in% names(w$prs))
+  expect_null(parse_pr_walk(list(data = list(r0 = NULL)), repos[1, ])[["g/o/n"]])
 })

@@ -5,7 +5,8 @@ test_that("ensure_series_schema creates vcs_ai_signals with the (repo_id, tool) 
   cols <- DBI::dbGetQuery(con, "PRAGMA table_info(vcs_ai_signals)")
   expect_setequal(cols$name, c("repo_id","tool","first_seen_date","first_seen_censored",
                                "evidence_tiers","markers","authored",
-                               "authored_commits","assisted_commits","last_confirmed_date"))
+                               "authored_commits","assisted_commits","last_confirmed_date",
+                               "authored_measured_on","assisted_measured_on"))
   pk <- cols$name[cols$pk > 0][order(cols$pk[cols$pk > 0])]
   expect_equal(pk, c("repo_id","tool"))
 })
@@ -95,4 +96,60 @@ test_that("a published dev-tooling table gains a newly added marker column", {
   fresh$repo_id <- "R2"; fresh$last_scanned <- "2026-08-02"
   expect_no_error(DBI::dbWriteTable(con, "vcs_dev_tooling",
     fresh[c("repo_id", "last_scanned", dev_tooling_columns())], append = TRUE))
+})
+
+test_that("the weekly read keeps its state and findings in seven tables of their own", {
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:"); on.exit(DBI::dbDisconnect(con))
+  ensure_repo_schema(con); ensure_series_schema(con)
+  have <- DBI::dbGetQuery(con, "SELECT name FROM sqlite_master WHERE type = 'table'")$name
+  new <- c("vcs_ai_repo_reads", "vcs_ai_account_counts", "vcs_ai_search_log",
+           "vcs_ai_search_coverage", "vcs_ai_review_signals", "vcs_ai_outside_prs",
+           "vcs_ai_ruleset_history")
+  expect_equal(setdiff(new, have), character(0))
+  cols <- function(t) DBI::dbGetQuery(con, sprintf("PRAGMA table_info(%s)", t))$name
+  # The review table keeps the signals table's column names so one renderer serves both.
+  expect_equal(cols("vcs_ai_review_signals"),
+               c("repo_id", "tool", "first_seen_date", "first_seen_censored", "evidence_tiers",
+                 "markers", "assisted_commits", "assisted_measured_on", "last_confirmed_date"))
+  expect_equal(cols("vcs_ai_outside_prs"),
+               c("repo_id", "pr_number", "tool", "found_via", "created_at", "from_fork",
+                 "author_association", "last_confirmed_date"))
+  expect_equal(tail(cols("vcs_ai_signals"), 2), c("authored_measured_on", "assisted_measured_on"))
+  # The log only ever holds one of three outcomes from one of two sources.
+  expect_error(DBI::dbExecute(con, "INSERT INTO vcs_ai_search_log VALUES
+    ('r','msg.x',1,'v','2026-10-01','maybe',NULL,NULL,NULL,NULL,'search')"))
+  expect_error(DBI::dbExecute(con, "INSERT INTO vcs_ai_search_log VALUES
+    ('r','msg.x',1,'v','2026-10-01','hit',1,1,0,'2026-01-01','guess')"))
+})
+
+test_that("a published signals table from before the measured dates gains them and keeps its rows", {
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:"); on.exit(DBI::dbDisconnect(con))
+  DBI::dbExecute(con, "CREATE TABLE vcs_ai_signals (
+    repo_id TEXT NOT NULL, tool TEXT NOT NULL, first_seen_date TEXT,
+    first_seen_censored INTEGER NOT NULL DEFAULT 0, evidence_tiers TEXT, markers TEXT,
+    authored INTEGER NOT NULL DEFAULT 0, authored_commits INTEGER, assisted_commits INTEGER,
+    last_confirmed_date TEXT, PRIMARY KEY (repo_id, tool))")
+  DBI::dbExecute(con, "INSERT INTO vcs_ai_signals (repo_id, tool, first_seen_date, authored_commits)
+    VALUES ('github.com/o/n', 'claude', '2025-06-01', 7)")
+  ensure_series_schema(con)
+  got <- DBI::dbGetQuery(con, "SELECT * FROM vcs_ai_signals")
+  expect_equal(nrow(got), 1L)
+  expect_equal(got$authored_commits, 7L)
+  expect_true(is.na(got$authored_measured_on))
+  expect_true(is.na(got$assisted_measured_on))
+})
+
+test_that("a shard written without the measured dates still folds", {
+  prior <- .ai_empty_signals()
+  prior[1, "repo_id"] <- "github.com/o/n"; prior$tool <- "claude"; prior$first_seen_date <- "2025-06-01"
+  prior$first_seen_censored <- 0L; prior$evidence_tiers <- "D"; prior$markers <- "CLAUDE.md"
+  prior$authored <- 0L; prior$authored_measured_on <- "2026-09-27"
+  incoming <- data.frame(repo_id = "github.com/o/n", tool = "claude", first_seen_date = "2026-10-04T23:59:59Z",
+                         first_seen_censored = 1L, evidence_tiers = "PR", authored = 0L,
+                         last_confirmed_date = "2026-10-04", stringsAsFactors = FALSE)
+  out <- ai_onset_reducer(prior, incoming)
+  expect_equal(nrow(out), 1L)
+  expect_equal(out$evidence_tiers, "D,PR")
+  expect_equal(out$authored_measured_on, "2026-09-27")
+  expect_equal(names(out), names(.ai_empty_signals()))
 })

@@ -116,10 +116,15 @@ CONTRIBUTOR_DELAY_S   <- 0.5 # pause between per-repo REST contributor-count loo
 # tool count / first-tool rollups and never names a package alone). .replit and
 # .deepsource.toml are deliberately absent: a bare platform-config file is
 # non-evidence, so Replit is detected only via its commit trailer below.
+# requires = a pattern one of the same location's entries must match. ignore_line = FALSE when
+# no ignore-file line counts, or the ignore files whose line counts (default TRUE, both).
 AI_MARKERS <- list(
   list(path = "CLAUDE.md",       tool = "claude",    kind = "file", location = "root",   agnostic = FALSE),
   list(path = "CLAUDE.local.md", tool = "claude",    kind = "file", location = "root",   agnostic = FALSE),
-  list(path = ".claude",         tool = "claude",    kind = "dir",  location = "root",   agnostic = FALSE),
+  # RStudio 2026.04 and later write ^\.claude$ into .Rbuildignore on their own, so only
+  # a .gitignore line counts.
+  list(path = ".claude",        tool = "claude",    kind = "dir",  location = "root",   agnostic = FALSE,
+       ignore_line = "gitignore"),
   list(path = ".mcp.json",       tool = "claude",    kind = "file", location = "root",   agnostic = FALSE),
   list(path = ".codex",          tool = "codex",     kind = "dir",  location = "root",   agnostic = FALSE),
   list(path = ".cursor",         tool = "cursor",    kind = "dir",  location = "root",   agnostic = FALSE),
@@ -161,16 +166,68 @@ AI_MARKERS <- list(
   # Google Antigravity, their agentic editor. Jules is not here: it works through pull
   # requests and is already covered by AI_PR_AGENT_LOGINS.
   list(path = ".antigravity",    tool = "antigravity", kind = "dir", location = "root",  agnostic = FALSE),
-  # Review agents. A configured reviewer is tooling adoption, and the tool is named on
-  # the surface, so a reader can tell review from authoring.
-  list(path = ".coderabbit.yaml", tool = "coderabbit", kind = "file", location = "root", agnostic = FALSE),
-  list(path = ".coderabbit.yml",  tool = "coderabbit", kind = "file", location = "root", agnostic = FALSE),
+  # Kiro, the successor to Amazon Q Developer's command-line tool.
+  list(path = ".kiro",          tool = "kiro",      kind = "dir",  location = "root",   agnostic = FALSE),
+  # Devin and Devin Desktop (Windsurf renamed) keep rules and DeepWiki settings here.
+  list(path = ".devin",         tool = "devin",     kind = "dir",  location = "root",   agnostic = FALSE),
+  list(path = ".devinignore",   tool = "devin",     kind = "file", location = "root",   agnostic = FALSE),
+  # Copilot's .github folders share plain names with root folders people ignore (prompts/, skills/),
+  # so only the committed folder counts.
+  # Copilot custom agents count only when the folder holds a Markdown agent file.
+  list(path = "agents",         tool = "copilot",   kind = "dir",  location = "github", agnostic = FALSE,
+       requires = "^agents/[^/]+\\.md$", ignore_line = FALSE),
+  list(path = "instructions",   tool = "copilot",   kind = "dir",  location = "github", agnostic = FALSE,
+       ignore_line = FALSE),
+  list(path = "prompts",        tool = "copilot",   kind = "dir",  location = "github", agnostic = FALSE,
+       ignore_line = FALSE),
+  list(path = "chatmodes",      tool = "copilot",   kind = "dir",  location = "github", agnostic = FALSE,
+       ignore_line = FALSE),
+  list(path = "skills",         tool = "copilot",   kind = "dir",  location = "github", agnostic = FALSE,
+       ignore_line = FALSE),
+  list(path = "workflows/copilot-setup-steps.yml", tool = "copilot", kind = "file", location = "github",
+       agnostic = FALSE),
+  # RStudio 2026.06 and later write these into the ignore files once the folder exists, so
+  # only the committed path counts.
+  list(path = ".posit/assistant",       tool = "posit-assistant", kind = "dir",  location = "root",
+       agnostic = FALSE, ignore_line = FALSE),
+  list(path = ".positai/settings.json", tool = "posit-assistant", kind = "file", location = "root",
+       agnostic = FALSE, ignore_line = FALSE),
+  list(path = ".positai/plans",         tool = "posit-assistant", kind = "dir",  location = "root",
+       agnostic = FALSE, ignore_line = FALSE),
+  list(path = ".positai/agents",        tool = "posit-assistant", kind = "dir",  location = "root",
+       agnostic = FALSE, ignore_line = FALSE),
+  list(path = "opencode.json",  tool = "opencode",  kind = "file", location = "root",   agnostic = FALSE),
+  list(path = ".opencode",      tool = "opencode",  kind = "dir",  location = "root",   agnostic = FALSE),
+  list(path = "QWEN.md",        tool = "qwen",      kind = "file", location = "root",   agnostic = FALSE),
+  list(path = ".qwen",          tool = "qwen",      kind = "dir",  location = "root",   agnostic = FALSE),
+  list(path = ".kilocode",      tool = "kilo",      kind = "dir",  location = "root",   agnostic = FALSE),
+  list(path = ".kilo",          tool = "kilo",      kind = "dir",  location = "root",   agnostic = FALSE),
+  list(path = "WARP.md",        tool = "warp",      kind = "file", location = "root",   agnostic = FALSE),
+  list(path = ".jules",         tool = "jules",     kind = "dir",  location = "root",   agnostic = FALSE),
+  list(path = ".openhands",     tool = "openhands", kind = "dir",  location = "root",   agnostic = FALSE),
+  list(path = ".openhands_instructions", tool = "openhands", kind = "file", location = "root", agnostic = FALSE),
+  # Watched folders and files, found in no scanned repository on 2026-09-25.
+  list(path = ".trae",          tool = "trae",      kind = "dir",  location = "root",   agnostic = FALSE),
+  list(path = ".augment",       tool = "augment",   kind = "dir",  location = "root",   agnostic = FALSE),
+  list(path = "CRUSH.md",       tool = "crush",     kind = "file", location = "root",   agnostic = FALSE),
+  list(path = ".goosehints",    tool = "goose",     kind = "file", location = "root",   agnostic = FALSE),
+  list(path = ".factory",       tool = "factory",   kind = "dir",  location = "root",   agnostic = FALSE),
+  list(path = ".vibe",          tool = "vibe",      kind = "dir",  location = "root",   agnostic = FALSE),
   # Ambient IDE marker: the editor writes .positai regardless of AI use, so it is EXCLUDED
   # from the AI signal (ai_deliberate_markers). A marker with no class field defaults to
   # "deliberate". Recording ambient markers as a dev-tooling datum is deferred to the
   # separate dev-tooling signal.
   list(path = ".positai",        tool = "positron",  kind = "file", location = "root",   agnostic = FALSE, class = "ambient"),
   list(path = ".idx",            tool = "idx",       kind = "dir",  location = "root",   agnostic = FALSE, class = "ambient")
+)
+
+# Review tools' configuration. Kept out of AI_MARKERS so a review bot never counts as a
+# tool that wrote the package. `only`: the entries a folder may hold to count as review.
+AI_REVIEW_FILES <- list(
+  list(path = ".coderabbit.yaml", tool = "coderabbit",         location = "root"),
+  list(path = ".coderabbit.yml",  tool = "coderabbit",         location = "root"),
+  list(path = ".gemini",          tool = "gemini-code-assist", location = "root",
+       only = c("config.yaml", "styleguide.md"))
 )
 
 # ---- Development-tooling detection (data-only) ----
@@ -382,46 +439,111 @@ DEV_TOOLING_DERIVED <- list(
 # v1 first scan 2026-07-18 (d115e2d), v2 00312fe, b903376, f861918 (2026-07-29 to 08-02), v3 this change.
 DEV_TOOLING_RULESET_VERSION <- "v3 (2026-09-26)"
 
-# Tier A bot identities: exact, case-normalized email/login match only.
-AI_BOT_ALLOWLIST <- c(
-  "noreply@anthropic.com"      = "claude",
-  "devin-ai-integration[bot]"  = "devin",
-  "openhands-agent"            = "openhands",
-  "google-labs-jules[bot]"     = "jules",
-  "cursor[bot]"                = "cursor",
-  "copilot-swe-agent[bot]"     = "copilot"
+# The ruleset in which every repository's commits began to be read each week. Rules
+# added or revised then carry it as since_ruleset. The day this reached main.
+AI_RULESET_UNGATED <- "2026-09-27"
+
+# Commits by a tool's accounts. graphql: counted by one GraphQL history filter per tool.
+# rest_only: counted by REST author-email. The filter resolves 41898282+ to github-actions[bot],
+# and its <id>+ form misses commits written with a bot's id-less address.
+# linked: addresses the graphql count already includes, matched in the commit read and
+# never counted on their own. names: bot author names.
+AI_ACCOUNTS <- list(
+  list(tool = "claude",
+       graphql = c("noreply@anthropic.com", "209825114+claude[bot]@users.noreply.github.com",
+                   "242468646+Claude@users.noreply.github.com"),
+       rest_only = c("41898282+claude[bot]@users.noreply.github.com", "claude[bot]@users.noreply.github.com"),
+       linked = character(0), names = "claude[bot]"),
+  list(tool = "copilot", graphql = "198982749+Copilot@users.noreply.github.com",
+       rest_only = character(0), linked = character(0), names = "copilot-swe-agent[bot]"),
+  list(tool = "cursor",
+       graphql = c("cursoragent@cursor.com", "composer@anysphere.co",
+                   "206951365+cursor[bot]@users.noreply.github.com"),
+       rest_only = "cursor[bot]@users.noreply.github.com", linked = character(0), names = "cursor[bot]"),
+  list(tool = "devin", graphql = "158243242+devin-ai-integration[bot]@users.noreply.github.com",
+       rest_only = character(0), linked = character(0), names = "devin-ai-integration[bot]"),
+  list(tool = "jules", graphql = "161369871+google-labs-jules[bot]@users.noreply.github.com",
+       rest_only = character(0), linked = character(0), names = "google-labs-jules[bot]"),
+  list(tool = "openhands", graphql = "openhands@all-hands.dev",
+       rest_only = character(0), linked = character(0), names = character(0)),
+  list(tool = "amazonq", graphql = "208079219+amazon-q-developer[bot]@users.noreply.github.com",
+       rest_only = character(0), linked = character(0), names = "amazon-q-developer[bot]"),
+  list(tool = "codex",
+       graphql = c("242516109+Codex@users.noreply.github.com", "267193182+codex@users.noreply.github.com"),
+       rest_only = character(0), linked = character(0), names = character(0)),
+  list(tool = "kiro",
+       graphql = c("244629292+kiro-agent@users.noreply.github.com",
+                   "245459735+kiro-agent[bot]@users.noreply.github.com"),
+       rest_only = character(0), linked = character(0), names = "kiro-agent[bot]"),
+  list(tool = "junie", graphql = "junie@jetbrains.com",
+       rest_only = character(0), linked = character(0), names = character(0)),
+  list(tool = "replit", graphql = "agent@replit.com",
+       rest_only = character(0), linked = character(0), names = character(0)),
+  # Roo Code's cloud agent, counted under Roo Code.
+  list(tool = "roo",
+       graphql = c("301996811+roomote-roomote[bot]@users.noreply.github.com",
+                   "263205322+roomote[bot]@users.noreply.github.com", "roomote@roomote.dev"),
+       rest_only = character(0), linked = character(0), names = character(0)),
+  list(tool = "amp", graphql = "amp@ampcode.com",
+       rest_only = character(0), linked = character(0), names = character(0))
 )
+# Account ids behind every <id>+ address above, each checked on the REST users API.
+AI_VERIFIED_ACCOUNT_IDS <- c(209825114, 242468646, 198982749, 206951365, 158243242, 161369871,
+                             208079219, 242516109, 267193182, 244629292, 245459735, 301996811,
+                             263205322)
+# Repositories per account-count query.
+AI_ACCOUNT_BATCH <- 10L
 # Non-AI bots that must never be flagged (backstops the allowlist).
 AI_BOT_DENYLIST <- c(
   "dependabot[bot]", "renovate[bot]", "github-actions[bot]", "pre-commit-ci[bot]",
   "codecov[bot]", "allcontributors[bot]", "web-flow", "lintr-bot", "styler-bot"
 )
-# PR-authorship channel: agent logins that open PRs (exact, lowercase).
-# PR channel (GraphQL). Spelled WITHOUT the "[bot]" suffix, because
-# author { login } returns a bot's login stripped. Four of the six entries here
-# used to carry the suffix, so they matched nothing and the channel published a
-# confident zero across the whole roster while copilot-swe-agent was opening
-# pull requests in the roster's busiest repositories.
-#
-# These are NOT the same strings as AI_BOT_ALLOWLIST above, and the difference
-# is not an oversight. The two lists feed different APIs, which want opposite
-# shapes. Measured against dotnet/runtime:
-#
-#   REST  search/commits  author:copilot-swe-agent[bot]  -> 982 hits
-#   REST  search/commits  author:copilot-swe-agent       ->   0 hits
-#   GraphQL author { login }                             -> "copilot-swe-agent"
-#
-# So AI_BOT_ALLOWLIST keeps its suffixes and this list drops them. Making them
-# agree would break whichever one is changed.
-#
-# Bare "copilot" is deliberately absent: it is a person's account, not the
-# agent, and including it would trade a false zero for a false positive.
+# Accounts that open pull requests, spelled as GraphQL returns author { login } (no
+# "[bot]"). Bare "copilot", "devin", "jules", "amp", "kiro" and "junie" are people.
 AI_PR_AGENT_LOGINS <- c(
   "copilot-swe-agent"          = "copilot",
   "devin-ai-integration"       = "devin",
   "google-labs-jules"          = "jules",
   "cursor"                     = "cursor",
-  "openhands-agent"            = "openhands"
+  "openhands-agent"            = "openhands",
+  "anthropic-code-agent"       = "claude",
+  "claude"                     = "claude",     # Anthropic's own account, user 81847
+  "amazon-q-developer"         = "amazonq",
+  "openai-code-agent"          = "codex",
+  "kiro-agent"                 = "kiro"
+)
+# Pull requests a tool wrote that a person opened, matched on the raw branch or description,
+# case-sensitive unless (?i). names = FALSE names no tool, only admits the repository that week.
+AI_PR_RULES <- list(
+  list(key = "pr.cursor.agent-body", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "cursor",
+       field = "body", names = TRUE, min_created = "2025-05-01",
+       pattern = "^\\s*<!-- CURSOR_AGENT_PR_BODY_BEGIN -->|cursor\\.com/(agents/bc-|agents\\?id=bc-|background-agent\\?bcId=)"),
+  # The hex suffix and date floor keep out older branches about a text cursor.
+  list(key = "pr.cursor.agent-branch", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "cursor",
+       field = "head", names = TRUE, min_created = "2025-05-01",
+       pattern = "^cursor/[A-Za-z0-9._-]+-[0-9a-f]{4}$"),
+  list(key = "pr.cursor.made-with", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "cursor",
+       field = "body", names = TRUE, pattern = "(?i)made with \\[cursor\\]\\(https://cursor\\.com\\)"),
+  list(key = "pr.claude.branch", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "claude",
+       field = "head", names = TRUE, pattern = "^claude/"),
+  list(key = "pr.claude.session", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "claude",
+       field = "body", names = TRUE, pattern = "claude\\.ai/code/session_"),
+  list(key = "pr.claude.footer", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "claude",
+       field = "body", names = TRUE, pattern = "Generated with \\[Claude Code\\]"),
+  list(key = "pr.codex.task", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "codex",
+       field = "body", names = TRUE, pattern = "chatgpt\\.com/codex/tasks/task_"),
+  list(key = "pr.codex.footer", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "codex",
+       field = "body", names = TRUE, pattern = "Generated with \\[Codex\\]\\(https://openai\\.com/codex/?\\)"),
+  list(key = "pr.codex.branch", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "codex",
+       field = "head", names = FALSE, pattern = "^codex/"),
+  list(key = "pr.devin.session", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "devin",
+       field = "body", names = TRUE, pattern = "app\\.devin\\.ai/sessions/"),
+  list(key = "pr.devin.branch", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "devin",
+       field = "head", names = TRUE, pattern = "^devin/[0-9]{10}-"),
+  list(key = "pr.openhands.branch", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "openhands",
+       field = "head", names = TRUE, pattern = "^openhands-fix-(issue|pr)-[0-9]+"),
+  list(key = "pr.amazonq.branch", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "amazonq",
+       field = "head", names = TRUE, pattern = "^Q-DEV-issue-[0-9]+-[0-9]+")
 )
 # Tier B commit-message trailers. Anchored to the canonical bot identity so a
 # human named Claude is rejected. Matched case-insensitively.
@@ -437,9 +559,11 @@ AI_TRAILER_PATTERNS <- list(
   # verification and taking a floor date instead of an exact one. [^<\n] keeps
   # the match on one line and still requires the name to begin with Claude, so
   # "Claudia" at the same address does not qualify.
-  list(pattern = "co-authored-by:\\s*claude\\b[^<\\n]*<noreply@anthropic\\.com>", tool = "claude",
+  list(key = "msg.claude.coauthor", rev = 1L, since_ruleset = "2026-09-19", search = "always",
+       pattern = "co-authored-by:\\s*claude\\b[^<\\n]*<noreply@anthropic\\.com>", tool = "claude",
        query = "\"Co-Authored-By: Claude\""),
-  list(pattern = "generated with \\[?claude code",                          tool = "claude",
+  list(key = "msg.claude.generated", rev = 1L, since_ruleset = "2026-09-19", search = "always",
+       pattern = "generated with \\[?claude code",                          tool = "claude",
        query = "\"Generated with Claude Code\""),
   # There is deliberately no "generated by Replit" rule. Every one of the six
   # occurrences found in real commits is a maintainer describing Replit, not
@@ -447,7 +571,8 @@ AI_TRAILER_PATTERNS <- list(
   # Replit config files (auto-generated by Replit environment)". The phrase is a
   # pure false-positive generator, and anchoring it to a line start only hid
   # that. Replit-Commit-Author below is the actual signature.
-  list(pattern = "replit-commit-author:",                                   tool = "replit",
+  list(key = "msg.replit.author", rev = 1L, since_ruleset = "2026-09-19", search = "always",
+       pattern = "replit-commit-author:",                                   tool = "replit",
        query = "\"Replit-Commit-Author:\""),
   # Codex signs with a plain name and an OpenAI address; the name alone is far
   # too common to key on. Sampling 100 real commits carrying a Codex trailer
@@ -456,56 +581,153 @@ AI_TRAILER_PATTERNS <- list(
   # The address is the anchor, as it is for Claude. codex@agent appears too and
   # is kept separate rather than widened into "any address", which would match a
   # person who happens to be called Codex.
-  list(pattern = "co-authored-by:\\s*codex[^<\\n]*<[^>\\n]*@(openai\\.com|agent)>", tool = "codex",
+  list(key = "msg.codex.coauthor", rev = 2L, since_ruleset = AI_RULESET_UNGATED, search = "always",
+       pattern = "co-authored-by:\\s*codex[^<\\n]*<[^>\\n]*@(openai\\.com|agent|local)>", tool = "codex",
        query = "\"Co-Authored-By: Codex\""),
-  list(pattern = "codex-cli",                                               tool = "codex",
+  list(key = "msg.codex.cli", rev = 1L, since_ruleset = "2026-09-19", search = "always",
+       pattern = "codex-cli",                                               tool = "codex",
        query = "\"codex-cli\""),
 
-  # Every rule below keys on the agent's ADDRESS, never on its name. Devin's own
-  # search returns Devin Logan and devin.logan alongside the agent, and Jules is
-  # a person's name too; a name match would flag them. Each shape here was
-  # counted in real commit messages, not inferred from documentation.
-  #
-  # Devin and OpenHands leave no config marker anywhere in AI_MARKERS, so until
-  # these rules the only way either could be seen was a pull request it happened
-  # to open. These give both a channel that works on commits.
-  list(pattern = "co-authored-by:[^<\\n]*<cursoragent@cursor\\.com>",           tool = "cursor",
+  # Every rule below keys on an address, a bot account or a line the tool writes, never on a name
+  # alone: Devin's search also returns Devin Logan and devin.logan, and Jules is a person's name.
+  list(key = "msg.cursor.agent-coauthor", rev = 1L, since_ruleset = "2026-09-19", search = "always",
+       pattern = "co-authored-by:[^<\\n]*<cursoragent@cursor\\.com>",           tool = "cursor",
        query = "\"cursoragent@cursor.com\""),
-  list(pattern = "co-authored-by:\\s*cursor[^<\\n]*<cursor@agent>",              tool = "cursor",
+  list(key = "msg.cursor.at-agent", rev = 1L, since_ruleset = "2026-09-19", search = "always",
+       pattern = "co-authored-by:\\s*cursor[^<\\n]*<cursor@agent>",              tool = "cursor",
        query = "\"Co-Authored-By: Cursor\""),
-  list(pattern = "co-authored-by:[^<\\n]*<[^>\\n]*devin-ai-integration\\[bot\\]@",  tool = "devin",
+  list(key = "msg.devin.bot-coauthor", rev = 1L, since_ruleset = "2026-09-19", search = "always",
+       pattern = "co-authored-by:[^<\\n]*<[^>\\n]*devin-ai-integration\\[bot\\]@",  tool = "devin",
        query = "\"devin-ai-integration\""),
-  list(pattern = "co-authored-by:[^<\\n]*<[^>\\n]*@all-hands\\.dev>",           tool = "openhands",
+  list(key = "msg.openhands.coauthor", rev = 1L, since_ruleset = "2026-09-19", search = "always",
+       pattern = "co-authored-by:[^<\\n]*<[^>\\n]*@all-hands\\.dev>",           tool = "openhands",
        query = "\"all-hands.dev\""),
-  list(pattern = "co-authored-by:[^<\\n]*<[^>\\n]*google-labs-jules\\[bot\\]@",     tool = "jules",
+  list(key = "msg.jules.coauthor", rev = 1L, since_ruleset = "2026-09-19", search = "always",
+       pattern = "co-authored-by:[^<\\n]*<[^>\\n]*google-labs-jules\\[bot\\]@",     tool = "jules",
        query = "\"google-labs-jules\""),
-  list(pattern = "co-authored-by:[^<\\n]*<[^>\\n]*@windsurf\\.(ai|com)>",       tool = "windsurf",
+  list(key = "msg.windsurf.coauthor", rev = 1L, since_ruleset = "2026-09-19", search = "always",
+       pattern = "co-authored-by:[^<\\n]*<[^>\\n]*@windsurf\\.(ai|com)>",       tool = "windsurf",
        query = "\"Co-Authored-By: Windsurf\""),
-  list(pattern = "co-authored-by:[^<\\n]*<[^>\\n]*windsurf-bot\\[bot\\]@",          tool = "windsurf",
+  list(key = "msg.windsurf.bot", rev = 1L, since_ruleset = "2026-09-19", search = "always",
+       pattern = "co-authored-by:[^<\\n]*<[^>\\n]*windsurf-bot\\[bot\\]@",          tool = "windsurf",
        query = "\"windsurf-bot\""),
-  # Gemini signs four ways. noreply@google.com is generic, so that rule also
-  # requires the name to start with Gemini; the bot addresses are distinctive
-  # enough on their own.
-  list(pattern = "co-authored-by:\\s*gemini[^<\\n]*<[^>\\n]*@google\\.com>",  tool = "gemini",
+  # Antigravity signs with Google addresses, which the Gemini rules match only beside Gemini's
+  # name or gemini-cli. The lookahead leaves out an "Antigravity Bot" credit of unknown origin.
+  list(key = "msg.antigravity.coauthor", rev = 1L, since_ruleset = AI_RULESET_UNGATED, search = "always",
+       pattern = "co-authored-by:\\s*antigravity[^<\\n]*<(?!bot@antigravity\\.ai>)[^>\\n]*@([a-z0-9.-]+\\.)?(google\\.com|antigravity\\.(ai|dev))>",
+       tool = "antigravity", query = "\"Co-Authored-By: Antigravity\""),
+  # A Gemini credit at a google.com address must start with Gemini's name, since the address
+  # is generic. An address naming gemini-cli is distinctive on its own.
+  list(key = "msg.gemini.coauthor", rev = 1L, since_ruleset = "2026-09-19", search = "always",
+       pattern = "co-authored-by:\\s*gemini[^<\\n]*<[^>\\n]*@google\\.com>",  tool = "gemini",
        query = "\"Co-Authored-By: Gemini\""),
-  list(pattern = "co-authored-by:[^<\\n]*<[^>\\n]*gemini-(code-assist|cli)\\[?[^>\\n]*@", tool = "gemini",
-       query = "\"gemini-code-assist\""),
+  # Gemini Code Assist accepting a review suggestion is a review credit (AI_REVIEW_RULES).
+  list(key = "msg.gemini.bot", rev = 2L, since_ruleset = AI_RULESET_UNGATED, search = "always",
+       pattern = "co-authored-by:[^<\\n]*<[^>\\n]*gemini-cli\\[?[^>\\n]*@", tool = "gemini",
+       query = "\"gemini-cli\""),
   # Aider names the provider and model in the parentheses. The address is the
   # anchor; the parenthetical is what Addendum 2 of the design would read.
-  list(pattern = "co-authored-by:[^<\\n]*<aider@aider\\.chat>",                 tool = "aider",
-       query = "\"aider@aider.chat\"")
+  list(key = "msg.aider.coauthor", rev = 1L, since_ruleset = "2026-09-19", search = "always",
+       pattern = "co-authored-by:[^<\\n]*<aider@aider\\.chat>",                 tool = "aider",
+       query = "\"aider@aider.chat\""),
+  list(key = "msg.claude.address", rev = 1L, since_ruleset = AI_RULESET_UNGATED, search = "always",
+       pattern = "co-authored-by:[^<\\n]*<noreply@anthropic\\.com>", tool = "claude",
+       query = "\"noreply@anthropic.com\""),
+  list(key = "msg.claude.session", rev = 1L, since_ruleset = AI_RULESET_UNGATED, search = "always",
+       pattern = "(^|\\n)(claude-session:\\s*)?https://claude\\.ai/code/session_", tool = "claude",
+       query = "\"claude.ai/code/session_\""),
+  list(key = "msg.cursor.made-with", rev = 1L, since_ruleset = AI_RULESET_UNGATED, search = "always",
+       pattern = "(^|\\n)made-with:\\s*cursor\\s*(\\n|$)", tool = "cursor",
+       query = "\"Made-with: Cursor\""),
+  # Copilot CLI, SDK and Desktop.
+  list(key = "msg.copilot.cli", rev = 1L, since_ruleset = AI_RULESET_UNGATED, search = "always",
+       pattern = "co-authored-by:[^<\\n]*<223556219\\+copilot@users\\.noreply\\.github\\.com>", tool = "copilot",
+       query = "\"223556219+Copilot\""),
+  # VS Code 1.117 wrote this line without Copilot use from 2026-04-22 to 2026-05-06.
+  list(key = "msg.copilot.vscode", rev = 1L, since_ruleset = AI_RULESET_UNGATED, search = "always",
+       pattern = "co-authored-by:\\s*copilot[^<\\n]*<copilot@github\\.com>", tool = "copilot",
+       query = "\"copilot@github.com\""),
+  list(key = "msg.copilot.cloud-coauthor", rev = 1L, since_ruleset = AI_RULESET_UNGATED, search = "always",
+       pattern = "co-authored-by:[^<\\n]*<198982749\\+copilot@", tool = "copilot",
+       query = "\"198982749+Copilot\""),
+  list(key = "msg.devin.generated", rev = 1L, since_ruleset = AI_RULESET_UNGATED, search = "always",
+       pattern = "(^|\\n)generated with \\[?devin", tool = "devin",
+       query = "\"Generated with Devin\""),
+  list(key = "msg.devin.cognition", rev = 1L, since_ruleset = AI_RULESET_UNGATED, search = "always",
+       pattern = "co-authored-by:\\s*devin[^<\\n]*<devin@cognition\\.ai>", tool = "devin",
+       query = "\"devin@cognition.ai\""),
+  list(key = "msg.windsurf.cascade", rev = 1L, since_ruleset = AI_RULESET_UNGATED, search = "always",
+       pattern = "co-authored-by:\\s*(windsurf|cascade)[^<\\n]*<[^>\\n]*@(windsurf\\.(ai|com)|codeium\\.com)>",
+       tool = "windsurf", query = "\"codeium.com\""),
+  # One line naming any tool: AI_ASSISTED_BY_TOOLS maps it, and its search spans every tool.
+  list(key = "msg.any.assisted-by", rev = 1L, since_ruleset = AI_RULESET_UNGATED, search = "always",
+       pattern = "(^|\\n)assisted-by:\\s*(.+)", tool = "any", query = "\"Assisted-by:\""),
+  # Watched credits, asked only where the weekly read matched them.
+  list(key = "msg.corteza.address", rev = 1L, since_ruleset = AI_RULESET_UNGATED, search = "on_window_hit",
+       pattern = "<noreply@cornball\\.ai>", tool = "corteza", query = "\"noreply@cornball.ai\""),
+  list(key = "msg.eca.address", rev = 1L, since_ruleset = AI_RULESET_UNGATED, search = "on_window_hit",
+       pattern = "<git@eca\\.dev>", tool = "eca", query = "\"git@eca.dev\""),
+  list(key = "msg.warp.address", rev = 1L, since_ruleset = AI_RULESET_UNGATED, search = "on_window_hit",
+       pattern = "<[^>\\n]*@warp\\.dev>", tool = "warp", query = "\"warp.dev\""),
+  list(key = "msg.qwen.address", rev = 1L, since_ruleset = AI_RULESET_UNGATED, search = "on_window_hit",
+       pattern = "<qwen-coder@alibabacloud\\.com>", tool = "qwen", query = "\"qwen-coder@alibabacloud.com\""),
+  list(key = "msg.crush.address", rev = 1L, since_ruleset = AI_RULESET_UNGATED, search = "on_window_hit",
+       pattern = "<crush@charm\\.land>", tool = "crush", query = "\"crush@charm.land\""),
+  list(key = "msg.amp.address", rev = 1L, since_ruleset = AI_RULESET_UNGATED, search = "on_window_hit",
+       pattern = "<amp@ampcode\\.com>", tool = "amp", query = "\"amp@ampcode.com\""),
+  list(key = "msg.vibe.address", rev = 1L, since_ruleset = AI_RULESET_UNGATED, search = "on_window_hit",
+       pattern = "<vibe@mistral\\.ai>", tool = "vibe", query = "\"vibe@mistral.ai\""),
+  list(key = "msg.factory.bot", rev = 1L, since_ruleset = AI_RULESET_UNGATED, search = "on_window_hit",
+       pattern = "factory-droid\\[bot\\]", tool = "factory", query = "\"factory-droid\""),
+  list(key = "msg.grok.address", rev = 1L, since_ruleset = AI_RULESET_UNGATED, search = "on_window_hit",
+       pattern = "<(grok@|noreply@)x\\.ai>", tool = "grok", query = "\"x.ai\""),
+  list(key = "msg.kimi.address", rev = 1L, since_ruleset = AI_RULESET_UNGATED, search = "on_window_hit",
+       pattern = "<noreply@moonshot\\.ai>", tool = "kimi", query = "\"noreply@moonshot.ai\""),
+  list(key = "msg.continue.address", rev = 1L, since_ruleset = AI_RULESET_UNGATED, search = "on_window_hit",
+       pattern = "<noreply@continue\\.dev>", tool = "continue", query = "\"noreply@continue.dev\""),
+  list(key = "msg.augment.address", rev = 1L, since_ruleset = AI_RULESET_UNGATED, search = "on_window_hit",
+       pattern = "<noreply@augmentcode\\.com>", tool = "augment", query = "\"noreply@augmentcode.com\""),
+  list(key = "msg.opencode.address", rev = 1L, since_ruleset = AI_RULESET_UNGATED, search = "on_window_hit",
+       pattern = "<noreply@opencode\\.ai>", tool = "opencode", query = "\"noreply@opencode.ai\"")
 )
-# Tier C author-name suffixes. `query` searches the author field rather than the message.
+# Author-name suffixes. `query` searches the author field rather than the message.
 AI_AUTHOR_SUFFIXES <- list(
-  list(suffix = "(aider)", tool = "aider", query = "author-name:\"(aider)\"")
+  list(key = "name.aider.suffix", rev = 1L, since_ruleset = "2026-09-19", search = "always",
+       suffix = "(aider)", tool = "aider", query = "author-name:\"(aider)\"")
 )
+# What an Assisted-by line names, matched case-insensitively, first match wins.
+AI_ASSISTED_BY_TOOLS <- c(
+  "\\bclaude\\b|noreply@anthropic\\.com" = "claude",
+  "\\bcodex\\b|@openai\\.com"            = "codex",
+  "\\bgemini\\b"                         = "gemini",
+  "\\bcopilot\\b"                        = "copilot",
+  "\\bcursor\\b"                         = "cursor",
+  "\\bcrush\\b|crush@charm\\.land"       = "crush",
+  "\\baider\\b"                          = "aider",
+  "\\bopencode\\b"                       = "opencode")
+# Review bots' credits on commits that accepted a suggestion. The lookahead sits right
+# after the colon so a Copilot Autofix credit, a security fix, never matches.
+AI_REVIEW_RULES <- list(
+  list(key = "review.gemini-code-assist.coauthor", rev = 1L, since_ruleset = AI_RULESET_UNGATED,
+       search = "on_window_hit", tool = "gemini-code-assist",
+       pattern = "co-authored-by:[^<\\n]*<[^>\\n]*gemini-code-assist\\[bot\\]@", query = "\"gemini-code-assist\""),
+  list(key = "review.copilot.suggestion", rev = 1L, since_ruleset = AI_RULESET_UNGATED,
+       search = "on_window_hit", tool = "copilot-review",
+       pattern = "co-authored-by:(?![ \\t]*copilot autofix)[^<\\n]*<175728472\\+copilot@users\\.noreply\\.github\\.com>",
+       query = "\"175728472+Copilot\"")
+)
+# Dates on which a VS Code Copilot credit says nothing (microsoft/vscode#314311).
+AI_COPILOT_VSCODE_FALSE_WINDOW <- c("2026-04-22", "2026-05-06")
 # Renamed-marker predecessors (new path -> old path) probed so a rename does
 # not reset onset.
 AI_MARKER_PREDECESSORS <- c(".cursor" = ".cursorrules")
 # Detection ruleset version, surfaced by the viewer methods note.
-AI_RULESET_VERSION <- "2026-09-19"
-# Evidence-tier strength for deterministic ordering (lower = stronger/earlier on ties).
-TIER_PRIORITY <- c(A = 1L, B = 2L, C = 3L, PR = 4L, D = 5L)
+AI_RULESET_VERSION <- AI_RULESET_UNGATED
+# The page note a ruleset's first publish carries, by ruleset version. A version not
+# named here carries none.
+AI_RULESET_CHANGE_KEYS <- stats::setNames("ungated-weekly-read", AI_RULESET_UNGATED)
+# Tie-break order between ways a tool was found (lower sorts first).
+TIER_PRIORITY <- c(A = 1L, B = 2L, C = 3L, PR = 4L, PB = 5L, D = 6L)
 
 # Pacing for the REST commit-search API (search/commits, ~1,800/hr = 30/min),
 # a budget separate from the GraphQL 5000/hr and from core REST. Each onset
@@ -514,31 +736,53 @@ TIER_PRIORITY <- c(A = 1L, B = 2L, C = 3L, PR = 4L, D = 5L)
 # ~30/min, and hand-testing tripped it after five queries. At 2s the first backfill
 # issued about 12,000 searches, was refused by almost all of them, and recorded the
 # refusals as "no trailer found". Pace for the limit that actually exists.
-SEARCH_DELAY_S <- 6
+SEARCH_DELAY_S <- 12
+# A refused search is asked again this many times, never waiting longer than this per try.
+AI_SEARCH_RETRIES <- 3L
+AI_SEARCH_MAX_WAIT_S <- 120
 # Subtrees the contents query lists one level of, alias to path. build_tree_query and
 # parse_tree_markers both iterate this; a path under .github/ lands in github_entries.
 TREE_SUBTREES <- c(workflowsTree = ".github/workflows", claudeTree = ".claude", agentsTree = ".agents",
-                   instTree = "inst", vignettesTree = "vignettes", siteTree = "site")
+                   instTree = "inst", vignettesTree = "vignettes", siteTree = "site",
+                   githubAgentsTree = ".github/agents", positTree = ".posit",
+                   positaiTree = ".positai", geminiTree = ".gemini")
 # The contents query canary: one floor per set, met when any one candidate meets it.
 TREE_QUERY_CANARY <- list(
   own_community = c("tidyverse/forcats", "tidyverse/dplyr", "r-lib/usethis", "easystats/insight"),
   inherited_pr_template = c("epiverse-trace/linelist", "epiverse-trace/epiparameter", "ecmwf/eccodes"))
-# Repos per aliased tree-marker / PR-login query in the cheap pass. Both queries are
-# execution-heavy server-side (a tree fetch plus 50 PR nodes per alias), so this is
-# kept small like COMMIT_HISTORY_BATCH rather than the 20-40 a cheap connection page
-# can batch. A whole-batch fault halves and retries (fetch_tree_markers / fetch_pr_agents).
+# Repositories per contents and activity document in the cheap pass, kept small because both are
+# heavy server-side (a tree fetch, or 50 pull requests and 100 commits per repository).
 TIER_D_BATCH <- 10L
 # Agent-era boundary. AI coding agents did not open PRs before this date, so an
 # allowlisted agent login on an earlier PR is a login collision, not adoption: it
 # contributes no PR evidence and no PR onset. Full ISO date, compared lexicographically
 # against createdAt (ISO instants sort correctly as strings).
 AI_PR_CUTOFF <- "2023-01-01"
+# The weekly commit read starts this many days before the last one, for merge commits
+# that bring older committer dates in.
+AI_COMMIT_OVERLAP_DAYS <- 14L
+# Extra 100-commit pages one repository may read in a week before the gap is recorded,
+# asked for this many repositories per query.
+AI_COMMIT_PAGE_CAP <- 5L
+AI_COMMIT_PAGE_BATCH <- 5L
+# The one-off walk through older pull requests: repositories per query, points per shard.
+AI_PR_WALK_BATCH <- 5L
+AI_PR_WALK_POINTS <- 300L
 # GraphQL points left unspent as headroom for the cheap and deep passes, mirroring
 # POINT_RESERVE (the daily pass's reserve). The cheap pass's PR query
 # (pullRequests(first: 50) per alias) is not the ~1-point-per-batch the tree query is, so
 # run_cheap and run_deep both check graphql_rate_remaining(io) against this reserve
 # before spending down the shared token, pausing rather than faulting when it is low.
 AI_POINT_RESERVE <- 1500L
+# Repositories whose answers the weekly documents must reproduce before a run reads
+# anything. Floors only, since counts only grow.
+AI_QUERY_CANARY <- list(
+  accounts = c("ss3sim/ss3sim", "johnpaulgosling/addivortes"),
+  activity = c("ericrayanderson/shinyglass", "ss3sim/ss3sim"),
+  prs = list(c("ericrayanderson/shinyglass", "49"), c("apache/arrow-nanoarrow", "927")),
+  commits = list(c("xrobin/pROC", "fe5c63c197db1fe8ce70eb740bb5ffe4af0f4e99"),
+                 c("alyssafrazee/ballgown", "ab1da7b7b32be605c5f291a7ace100a0e65e08f6")),
+  addivortes_cursor_floor = 19L)
 # A repository that still fails alone after halving is read once more after this wait.
 AI_BATCH_RETRY_WAIT_S <- 30
 # Consecutive identical single-repository failures that end one document's reads in a shard.
@@ -588,17 +832,38 @@ AI_CANARY_MIN_ROSTER <- 200L
 # The Roo Code extension shut down on 2026-05-15, the day its repository was archived: https://github.com/RooCodeInc/Roo-Code (README)
 AI_SILENT_CHANNELS_KNOWN <- read.csv(text = trimws(r"(
 tier,tool,status,reason,recorded_on
-A,cursor,open,"We search for commits by cursor[bot], the account the Cursor app uses to review and merge pull requests. Cursor's coding agent commits under another account, cursoragent (cursoragent@cursor.com), which had made 120 commits in 11 repositories, 6 of them with no Cursor finding here. The search also runs only where a file, a line in an ignore file or a pull request already named Cursor. This is settled once commits by cursoragent are counted in every repository.",2026-09-25
-A,devin,genuine,"No repository has a commit by Devin's account (devin-ai-integration[bot]) on its default branch, checked across 15,875. The search itself runs only in xsdm-devel, where Devin's account opened pull requests, and that repository has no commits by the account and 29 commits crediting Devin. Devin also appears in pull requests that maintainers opened from a Devin session in sobol and maxentcpp, which this page does not count yet.",2026-09-25
-A,openhands,open,"The account we look for is right (openhands-agent, openhands@all-hands.dev), but the search runs only where a pull request opened by OpenHands's account was found, and none has been. One commit by that account exists, in kuzuR, which this page counts only through a commit crediting OpenHands. This is settled once commits by the account are counted in every repository.",2026-09-25
-B,replit,genuine,"Searched on 2026-07-31 in the 1,964 repositories found by then, with no match. Other checks agree: no repository has a .replit, replit.nix or replit.md file, no default branch has a commit by Replit Agent's account (agent@replit.com), and the newest 100 commits of 600 sampled repositories have no Replit-Commit-Author line.",2026-09-25
-B,windsurf,genuine,"Searches for commits crediting Windsurf began on 2026-08-02 and no full search of every repository has finished since, so every public commit crediting Windsurf was listed instead: 963 naming Windsurf, 552 naming its bot account (windsurf-bot) and 76 at codeium.com. None is in a repository we scan. Windsurf became Devin Desktop on 2026-06-02 and now keeps its rules in .devin/rules.",2026-09-25
-D,amazonq,genuine,"No repository has an .amazonq folder, checked across 15,875. Amazon Q itself is present in one repository: its account opened a pull request in ss3sim, merged in May 2025, and made 2 commits there, which this page does not count yet. Its command-line tool has been Kiro since November 2025. One repository has a .kiro folder and 5 more name .kiro in an ignore file.",2026-09-25
+A,devin,genuine,"No repository has a commit by Devin's account (devin-ai-integration[bot]) on its default branch. Commits by it are counted in every repository each week, and a check of all 15,875 on 2026-09-25 found none. Devin shows up through pull requests instead: its account opened 6 in xsdm-devel, and maintainers opened pull requests from a Devin session in sobol and maxentcpp.",2026-09-25
+B,replit,genuine,"No commit crediting Replit has been found. Searched on 2026-07-31 in the 1,964 repositories found by then, and every repository's new commits are now read each week. No repository has a .replit, replit.nix or replit.md file, and the newest 100 commits of 600 sampled repositories had no Replit-Commit-Author line on 2026-09-25.",2026-09-25
+B,windsurf,genuine,"Every public commit crediting Windsurf was listed on 2026-09-25: 963 naming Windsurf, 552 naming its bot account (windsurf-bot) and 76 at codeium.com, and none is in a repository we scan. Every repository's new commits are now read each week. Windsurf became Devin Desktop on 2026-06-02 and keeps its rules in .devin/rules, which this page lists under Devin.",2026-09-25
+D,amazonq,genuine,"No repository has an .amazonq folder, checked across 15,875. Amazon Q is found another way: its account opened a pull request in ss3sim, merged in May 2025, and made 2 commits there. Its command-line tool has been Kiro since November 2025, which this page lists as its own tool.",2026-09-25
 D,grok,genuine,"No GROK.md, .grok or .xai in any repository, checked across 15,875. xAI's Grok Build reads AGENTS.md, CLAUDE.md and .grok/rules rather than GROK.md, so a repository using it may show only as AGENTS.md or CLAUDE.md.",2026-09-25
 D,junie,genuine,"No .junie folder in any repository, no commit by Junie's account (junie@jetbrains.com) on any default branch, and no pull request by it among each repository's newest 50, checked across 15,875. Junie now reads AGENTS.md first, so a repository using it may show only as AGENTS.md.",2026-09-25
 D,roo,genuine,"No .roo, .roomodes, .roorules or .rooignore in any repository, checked across 15,875, and none of the 218 public commits by Roo's cloud agent account (roomote[bot]) is in a repository we scan. The Roo Code extension was shut down on 2026-05-15, so this will not change.",2026-09-25
-PR,cursor,open,"No pull request among each repository's newest 50 was opened by Cursor's app account, checked across 161,444 pull requests. Cursor's cloud agent opens them under the maintainer's own account instead, with a note at the top of the description and a branch named cursor/ plus the task and four hexadecimal characters. 18 repositories have one among their newest 50 pull requests, 2 of them from an outside contributor. Separately, 44 repositories have a commit crediting Cursor among their newest 50 commits since May 2025, but commit messages are searched only where a file, a line in an ignore file or a pull request by a tool's account was already found, so 27 of them show no Cursor use here. This is settled once pull request descriptions and every repository's recent commits are read.",2026-09-25
+PR,cursor,genuine,"No pull request among each repository's newest 50 was opened by Cursor's app account, checked across 161,444 pull requests. Cursor's cloud agent opens pull requests under the maintainer's own account, and this page finds them by the note Cursor writes at the top of the description or the branch name it gives them.",2026-09-25
 PR,openhands,genuine,"No pull request among each repository's newest 50 was opened by OpenHands's account (openhands-agent), checked across 161,444 pull requests.",2026-09-25
+D,trae,genuine,"No .trae folder in any repository, checked across 15,875 on 2026-09-25. The files at the top of every repository are read each week.",2026-09-25
+D,augment,genuine,"No .augment folder in any repository, checked across 15,875 on 2026-09-25. The files at the top of every repository are read each week.",2026-09-25
+D,crush,genuine,"No CRUSH.md file in any repository, checked across 15,875 on 2026-09-25. The files at the top of every repository are read each week.",2026-09-25
+D,goose,genuine,"No .goosehints file in any repository, checked across 15,875 on 2026-09-25. The files at the top of every repository are read each week.",2026-09-25
+D,factory,genuine,"No .factory folder in any repository, checked across 15,875 on 2026-09-25. The files at the top of every repository are read each week.",2026-09-25
+D,vibe,genuine,"No .vibe folder in any repository, checked across 15,875 on 2026-09-25. The files at the top of every repository are read each week.",2026-09-25
+A,codex,genuine,"No commit by Codex's accounts (openai-code-agent[bot] and codex) has been found. Commits by them are counted in every repository each week.",2026-09-27
+A,kiro,genuine,"No commit by Kiro's accounts (kiro-agent and kiro-agent[bot]) on any default branch, checked across 15,875 on 2026-09-25. Commits by them are counted in every repository each week.",2026-09-25
+A,junie,genuine,"No commit by Junie's account (junie@jetbrains.com) on any default branch, checked across 15,875 on 2026-09-25. Commits by it are counted in every repository each week.",2026-09-25
+A,replit,genuine,"No commit by Replit Agent's account (agent@replit.com) on any default branch, checked across 15,875 on 2026-09-25. Commits by it are counted in every repository each week.",2026-09-25
+A,roo,genuine,"No commit by Roo Code's cloud agent accounts (roomote-roomote[bot], roomote[bot] and roomote@roomote.dev) has been found. The older roomote[bot] had none on any default branch across 15,875 on 2026-09-25, and all three are counted in every repository each week.",2026-09-25
+A,amp,genuine,"No commit by Amp's account (amp@ampcode.com) has been found. Commits by it are counted in every repository each week.",2026-09-27
+B,amp,genuine,"No commit crediting Amp (a co-author line at amp@ampcode.com) among 373,252 recent commits from 9,193 repositories, checked 2026-09-25. Every repository's new commits are read each week.",2026-09-25
+B,vibe,genuine,"No commit crediting Mistral Vibe (a co-author line at vibe@mistral.ai) among 373,252 recent commits from 9,193 repositories, checked 2026-09-25. Every repository's new commits are read each week.",2026-09-25
+B,factory,genuine,"No commit crediting Factory (a co-author line naming factory-droid[bot]) among 373,252 recent commits from 9,193 repositories, checked 2026-09-25. Every repository's new commits are read each week.",2026-09-25
+B,grok,genuine,"No commit crediting Grok (a co-author line at an x.ai address) among 373,252 recent commits from 9,193 repositories, checked 2026-09-25. Every repository's new commits are read each week.",2026-09-25
+B,kimi,genuine,"No commit crediting Kimi (a co-author line at noreply@moonshot.ai) among 373,252 recent commits from 9,193 repositories, checked 2026-09-25. Every repository's new commits are read each week.",2026-09-25
+B,continue,genuine,"No commit crediting Continue (a co-author line at noreply@continue.dev) among 373,252 recent commits from 9,193 repositories, checked 2026-09-25. Every repository's new commits are read each week.",2026-09-25
+B,augment,genuine,"No commit crediting Augment Code (a co-author line at noreply@augmentcode.com) among 373,252 recent commits from 9,193 repositories, checked 2026-09-25. Every repository's new commits are read each week.",2026-09-25
+B,opencode,genuine,"No commit crediting OpenCode (a co-author line at noreply@opencode.ai) among 373,252 recent commits from 9,193 repositories, checked 2026-09-25. Every repository's new commits are read each week.",2026-09-25
+PR,codex,genuine,"No pull request among each repository's newest 50 was opened by Codex's account (openai-code-agent), checked across 161,444 pull requests on 2026-09-25. Codex's cloud tasks reach a repository as a pull request a maintainer opens, which this page finds by the task link or the Generated with Codex line in its description.",2026-09-25
+PR,kiro,genuine,"No pull request among each repository's newest 50 was opened by Kiro's account (kiro-agent), checked across 161,444 pull requests on 2026-09-25.",2026-09-25
+PB,amazonq,genuine,"No pull request opened by a maintainer from a branch Amazon Q named (Q-DEV-issue-) has been found among the pull requests read in every repository each week. The one such branch found, in ss3sim, was opened by Amazon Q's own account.",2026-09-27
 )"), stringsAsFactors = FALSE)
 
 # Tables the summary shard carries beyond the five it takes as named arguments.
@@ -615,7 +880,11 @@ PR,openhands,genuine,"No pull request among each repository's newest 50 was open
 # vcs_repo_owner stays the last entry; tables added later go before it.
 SUMMARY_EXTRA_TABLES <- c("vcs_ai_models", "vcs_ai_rule_inventory",
                           "vcs_ai_silent_channels", "repo_package_links",
-                          "vcs_dev_tooling_rules", "vcs_repo_owner")
+                          "vcs_dev_tooling_rules",
+                          "vcs_ai_repo_reads", "vcs_ai_account_counts", "vcs_ai_search_log",
+                          "vcs_ai_search_coverage", "vcs_ai_review_signals",
+                          "vcs_ai_outside_prs", "vcs_ai_ruleset_history",
+                          "vcs_repo_owner")
 
 # Package-to-repository links this pipeline published before it kept them. Built
 # from every surviving copy of what it published: the vcs_signals_summary in a
@@ -650,3 +919,7 @@ LINKS_BACKFILL_PATH <- file.path(getwd(), "data", "repo-package-links-backfill.c
 # that overruns discards every repo it scanned; stopping short leaves a partial
 # shard that is uploaded and folded, and the tail rides the next dispatch.
 AI_DEEP_BUDGET_S <- 3.25 * 3600
+
+# The order the search pass works through each week, most urgent first.
+AI_WORK_PRIORITY <- c(onset = 1L, `account-count` = 2L, `window-hit` = 3L, `count-refresh` = 4L,
+                      `re-ask` = 5L, campaign = 6L, `rule-new` = 7L, `never-asked` = 8L)

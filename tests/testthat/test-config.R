@@ -17,7 +17,7 @@ test_that("config constants load with expected shape", {
   # project skills, so pinning it to any one product misreports every other one.
   expect_false(any(vapply(AI_MARKERS,
     function(m) identical(m$path, ".agents") && identical(m$tool, "gemini"), logical(1))))
-  expect_identical(unname(AI_BOT_ALLOWLIST["noreply@anthropic.com"]), "claude")
+  expect_true("noreply@anthropic.com" %in% Find(function(a) a$tool == "claude", AI_ACCOUNTS)$graphql)
   expect_true("dependabot[bot]" %in% AI_BOT_DENYLIST)
   expect_true(is.character(AI_RULESET_VERSION) && nzchar(AI_RULESET_VERSION))
   expect_identical(unname(TIER_PRIORITY["A"]), 1L)

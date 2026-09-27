@@ -23,3 +23,149 @@ test_that("build_signals_summary returns a typed empty frame for empty repo_pack
   expect_equal(nrow(s), 0)
   expect_true(all(c("package", "origin", "stars", "trend_30d") %in% names(s)))
 })
+
+test_that("the summary carries the seven new tables, after the link table and before the owner table", {
+  new <- c("vcs_ai_repo_reads", "vcs_ai_account_counts", "vcs_ai_search_log",
+           "vcs_ai_search_coverage", "vcs_ai_review_signals", "vcs_ai_outside_prs",
+           "vcs_ai_ruleset_history")
+  at <- match(new, SUMMARY_EXTRA_TABLES)
+  expect_false(anyNA(at))
+  expect_true(all(at > match("repo_package_links", SUMMARY_EXTRA_TABLES)))
+  if ("vcs_dev_tooling_rules" %in% SUMMARY_EXTRA_TABLES)
+    expect_true(all(at > match("vcs_dev_tooling_rules", SUMMARY_EXTRA_TABLES)))
+  if ("vcs_repo_owner" %in% SUMMARY_EXTRA_TABLES) {
+    expect_true(all(at < match("vcs_repo_owner", SUMMARY_EXTRA_TABLES)))
+    expect_equal(tail(SUMMARY_EXTRA_TABLES, 1), "vcs_repo_owner")
+  }
+})
+
+test_that("the first publish of a ruleset is dated once, with its change key when it has one", {
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:"); on.exit(DBI::dbDisconnect(con))
+  ensure_series_schema(con)
+  keys <- c("2026-10-04" = "ungated-weekly-read")
+  record_ruleset_history(con, "2026-10-06", "2026-10-04", keys)
+  record_ruleset_history(con, "2026-10-13", "2026-10-04", keys)   # a later merge, same ruleset
+  record_ruleset_history(con, "2026-11-02", "2026-11-01", keys)   # a later ruleset with no note
+  got <- DBI::dbGetQuery(con, "SELECT * FROM vcs_ai_ruleset_history ORDER BY ruleset_version")
+  expect_equal(got$first_published_on, c("2026-10-06", "2026-11-02"))
+  expect_equal(got$change_key[1], "ungated-weekly-read")
+  expect_true(is.na(got$change_key[2]))
+})
+
+.cov_log <- function(repo, key, outcome, rev = 1L, on = "2026-10-05")
+  data.frame(repo_id = repo, rule_key = key, rule_rev = rev, ruleset_version = AI_RULESET_VERSION,
+             asked_on = on, outcome = outcome, total_count = if (outcome == "refused") NA_integer_ else 1L,
+             verified = NA_integer_, incomplete = 0L, first_hit_on = NA_character_, source = "search",
+             stringsAsFactors = FALSE)
+
+test_that("coverage counts the repositories each search reached, apart from whole-history reads", {
+  log <- rbind(.cov_log("r1", "msg.claude.coauthor", "hit"), .cov_log("r2", "msg.claude.coauthor", "none"),
+               .cov_log("r3", "msg.claude.coauthor", "refused"),
+               .cov_log("r4", "msg.claude.coauthor", "none", rev = 0L),
+               .cov_log("r6", "msg.claude.coauthor", "none"),
+               .cov_log("r5", "author.noreply@anthropic.com", "hit", on = "2026-10-06"))
+  reads <- .ai_bind_like(.ai_empty_reads(), list(data.frame(
+    repo_id = c("r6", "r7"), commits_history_complete = 1L,
+    commits_ruleset = c(AI_RULESET_VERSION, "2026-01-01"), stringsAsFactors = FALSE)))
+  cov <- build_search_coverage(log, reads)
+  cc <- cov[cov$rule_key == "msg.claude.coauthor", ]
+  expect_equal(c(cc$repos_asked, cc$repos_hit, cc$repos_refused, cc$repos_read_whole), c(2L, 1L, 1L, 1L))
+  au <- cov[cov$rule_key == "author.claude", ]
+  expect_equal(c(au$repos_asked, au$repos_read_whole), c(1L, 1L))
+  expect_equal(au$last_asked_on, "2026-10-06")
+  expect_setequal(cov$rule_key, .ai_coverage_rules()$rule_key)
+  expect_equal(cov$tool[cov$rule_key == "msg.any.assisted-by"], "any")
+  expect_equal(cov$channel[cov$rule_key == "name.aider.suffix"], "commit-author-name")
+  expect_equal(cov$channel[cov$rule_key == "review.copilot.suggestion"], "review-credit")
+  never <- cov[cov$rule_key == "msg.opencode.address", ]
+  expect_equal(never$repos_asked, 0L); expect_true(is.na(never$last_asked_on))
+})
+
+test_that("a repository read to its first commit counts for the author and review searches too", {
+  seen <- .cov_log("w1", "review.copilot.suggestion", "hit", on = "2026-10-11"); seen$source <- "read"
+  log <- rbind(seen, .cov_log("w1", "author.noreply@anthropic.com", "none", on = "2026-10-11"),
+               .cov_log("r1", "author.noreply@anthropic.com", "hit", on = "2026-10-06"))
+  # r1's later read is not whole, so its date must not count.
+  reads <- .ai_bind_like(.ai_empty_reads(), list(data.frame(
+    repo_id = c("w1", "r1"), commits_history_complete = c(1L, 0L), commits_ruleset = AI_RULESET_VERSION,
+    commits_read_on = c("2026-10-11", "2026-10-12"), stringsAsFactors = FALSE)))
+  cov <- build_search_coverage(log, reads)
+  rv <- cov[cov$rule_key == "review.copilot.suggestion", ]
+  expect_equal(c(rv$repos_asked, rv$repos_hit, rv$repos_read_whole), c(0L, 0L, 1L))
+  expect_equal(rv$last_asked_on, "2026-10-11")
+  au <- cov[cov$rule_key == "author.claude", ]
+  expect_equal(c(au$repos_asked, au$repos_hit, au$repos_read_whole), c(1L, 1L, 1L))
+  expect_equal(au$last_asked_on, "2026-10-11")
+  expect_true(all(cov$repos_read_whole == 1L))
+})
+
+.mk_cov <- function(keys) {
+  path <- tempfile(fileext = ".db")
+  con <- DBI::dbConnect(RSQLite::SQLite(), path); on.exit(DBI::dbDisconnect(con))
+  ensure_repo_schema(con); ensure_series_schema(con)
+  DBI::dbWriteTable(con, "vcs_ai_search_coverage", data.frame(rule_key = keys, tool = "claude",
+    channel = "commit-credit", rule_rev = 1L, repos_asked = 1L, repos_hit = 0L, repos_refused = 0L,
+    repos_read_whole = 0L, last_asked_on = "2026-10-05", stringsAsFactors = FALSE), append = TRUE)
+  path
+}
+
+test_that("a search leaves the coverage table only when its rule has left the ruleset", {
+  keys <- .ai_coverage_rules()$rule_key
+  prev <- .mk_cov(c(keys[1:3], "msg.retired.rule"))
+  expect_equal(summary_regressions(prev, .mk_cov(keys[1:3])), character(0))
+  bad <- summary_regressions(prev, .mk_cov(keys[1:2]))
+  expect_true(any(grepl("vcs_ai_search_coverage", bad)))
+  expect_true(any(grepl(keys[3], bad, fixed = TRUE)))
+})
+
+test_that("the weekly read's state tables refuse a build that lost their rows", {
+  mk <- function(n) {
+    path <- tempfile(fileext = ".db")
+    con <- DBI::dbConnect(RSQLite::SQLite(), path); on.exit(DBI::dbDisconnect(con))
+    ensure_repo_schema(con); ensure_series_schema(con)
+    if (n) DBI::dbWriteTable(con, "vcs_ai_search_log", do.call(rbind, lapply(seq_len(n), function(i)
+      .cov_log(sprintf("r%d", i), "msg.claude.coauthor", "none"))), append = TRUE)
+    path
+  }
+  prev <- mk(100L)
+  expect_equal(summary_regressions(prev, mk(99L)), character(0))
+  expect_true(any(grepl("vcs_ai_search_log", summary_regressions(prev, mk(50L)))))
+})
+
+# A summary whose review rows sit under the given repo_ids, with github.com/a/old retired and
+# github.com/a/new active on one node, as a rename leaves them.
+.rn_gate <- function(review_ids) {
+  path <- tempfile(fileext = ".db")
+  con <- DBI::dbConnect(RSQLite::SQLite(), path); on.exit(DBI::dbDisconnect(con))
+  ensure_repo_schema(con); ensure_series_schema(con)
+  DBI::dbExecute(con, "INSERT INTO repos (repo_id,node_id,host,host_domain,owner,name,name_with_owner,supported,n_packages,first_seen,last_seen,status) VALUES
+    ('github.com/a/old','R_n','github','github.com','a','old','a/old',1,1,'2024-01-01','2026-06-01','retired'),
+    ('github.com/a/new','R_n','github','github.com','a','new','a/new',1,1,'2024-01-01','2026-09-27','active'),
+    ('github.com/z/other','R_z','github','github.com','z','other','z/other',1,1,'2024-01-01','2026-09-27','active')")
+  DBI::dbWriteTable(con, "vcs_ai_review_signals", data.frame(repo_id = review_ids, tool = "coderabbit",
+    first_seen_date = "2025-01-01", first_seen_censored = 0L, evidence_tiers = "D", markers = ".coderabbit.yaml",
+    assisted_commits = NA_integer_, assisted_measured_on = NA_character_, last_confirmed_date = "2026-09-27",
+    stringsAsFactors = FALSE), append = TRUE)
+  path
+}
+
+test_that("a review row folded from a renamed repository's old name is kept, not lost", {
+  prev <- .rn_gate(c("github.com/a/old", "github.com/a/new"))
+  expect_equal(summary_regressions(prev, .rn_gate("github.com/a/new")), character(0))
+})
+
+test_that("a review row gone with no current name to fold into is refused", {
+  prev <- .rn_gate(c("github.com/a/new", "github.com/z/other"))
+  expect_true(any(grepl("vcs_ai_review_signals: 1 rows, was 2",
+                        summary_regressions(prev, .rn_gate("github.com/a/new")), fixed = TRUE)))
+})
+
+test_that("the first publish of this ruleset carries the weekly-read note, a later one none", {
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:"); on.exit(DBI::dbDisconnect(con))
+  ensure_series_schema(con)
+  record_ruleset_history(con, "2026-10-06", AI_RULESET_VERSION, AI_RULESET_CHANGE_KEYS)
+  record_ruleset_history(con, "2099-01-02", "2099-01-01", AI_RULESET_CHANGE_KEYS)
+  got <- DBI::dbGetQuery(con, "SELECT * FROM vcs_ai_ruleset_history ORDER BY ruleset_version")
+  expect_equal(got$change_key[got$ruleset_version == AI_RULESET_VERSION], "ungated-weekly-read")
+  expect_true(is.na(got$change_key[got$ruleset_version == "2099-01-01"]))
+})

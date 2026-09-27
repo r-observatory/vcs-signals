@@ -204,3 +204,152 @@ test_that("a page that does not hold every hit is marked incomplete", {
   expect_equal(got$window_complete, 0L)
   expect_equal(got$commits, 1L)
 })
+
+test_that("a weekly read adds its new model commits to the stored tally", {
+  m <- function(n, first, last, mode = NULL, after = NA_character_) {
+    r <- data.frame(repo_id = "r", tool = "claude", provider = NA_character_, family = "Opus", version = "4.8",
+                    context_window = NA_character_, commits = n, first_seen = first, last_seen = last,
+                    window_complete = 1L, stringsAsFactors = FALSE)
+    if (!is.null(mode)) { r$mode <- mode; r$read_after <- after }
+    r
+  }
+  through <- "2026-09-20T08:00:00Z"
+  reads <- data.frame(repo_id = "r", commits_read_through = through, stringsAsFactors = FALSE)
+  got <- fold_models(m(10L, "2025-01-01", "2026-09-01"), .ai_empty_models(),
+                     m(2L, "2026-10-02", "2026-10-03", "add", through), rebuilt_repos = character(0), reads = reads)
+  expect_equal(got$commits, 12L); expect_equal(got$first_seen, "2025-01-01"); expect_equal(got$last_seen, "2026-10-03")
+  replaced <- fold_models(m(10L, "2025-01-01", "2026-09-01"), .ai_empty_models(),
+                          m(4L, "2025-02-01", "2026-10-03", "replace"), rebuilt_repos = "r", reads = reads)
+  expect_equal(replaced$commits, 4L)
+  # Counted from another watermark, or by a read to the first commit the read state did not keep: nothing moves.
+  off_chain <- fold_models(m(10L, "2025-01-01", "2026-09-01"), .ai_empty_models(),
+                           m(2L, "2026-10-02", "2026-10-03", "add", "2026-09-13T08:00:00Z"),
+                           rebuilt_repos = character(0), reads = reads)
+  expect_equal(off_chain$commits, 10L)
+  not_kept <- fold_models(m(10L, "2025-01-01", "2026-09-01"), .ai_empty_models(),
+                          m(4L, "2025-02-01", "2026-10-03", "replace"), rebuilt_repos = character(0), reads = reads)
+  expect_equal(not_kept$commits, 10L)
+  expect_error(fold_models(m(10L, "2025-01-01", "2026-09-01"), .ai_empty_models(),
+                           m(2L, "2026-10-02", "2026-10-03", "add", through), rebuilt_repos = character(0)),
+               "reads is NULL")
+})
+
+test_that("a read to the first commit that names no model clears the older tallies", {
+  m <- function(repo, family) data.frame(repo_id = repo, tool = "claude", provider = NA_character_, family = family,
+                                         version = "4.8", context_window = NA_character_, commits = 10L,
+                                         first_seen = "2025-01-01", last_seen = "2026-09-01", window_complete = 1L,
+                                         stringsAsFactors = FALSE)
+  got <- fold_models(rbind(m("r", "Opus"), m("s", "Opus")), .ai_empty_models(), NULL, rebuilt_repos = "r")
+  expect_equal(got$repo_id, "s")
+  # This run's search rows are not older tallies, so they stay.
+  expect_equal(fold_models(m("r", "Opus"), m("r", "Sonnet"), NULL, rebuilt_repos = "r")$family, "Sonnet")
+})
+
+.pm <- function(family, version, ctx, n, first, last, complete = 1L, tool = "claude", provider = NA_character_,
+                repo = "github.com/adibender/pammtools")
+  data.frame(repo_id = repo, tool = tool, provider = provider, family = family, version = version,
+             context_window = ctx, commits = n, first_seen = first, last_seen = last,
+             window_complete = complete, stringsAsFactors = FALSE)
+
+test_that("Claude rules that match the same commits give one row per model", {
+  out <- tempfile("out_"); dir.create(out)
+  rid <- "github.com/o/r"
+  work <- data.frame(repo_id = rid, tool = "claude",
+                     rule_key = c("msg.claude.coauthor", "msg.claude.address", "msg.claude.session"),
+                     reason = "rule-new", priority = unname(AI_WORK_PRIORITY["rule-new"]), stringsAsFactors = FALSE)
+  write_flagged_partial(file.path(out, "vcs-ai-flagged-roster.db"),
+    data.frame(repo_id = rid, owner = "o", name = "r", node_id = "R_1", is_fork = 0L, parent = NA_character_,
+               pr_onset_date = NA_character_, stringsAsFactors = FALSE),
+    cbind(repo_id = rid, .ai_found("claude", "D", "CLAUDE.md")), work = work,
+    campaign = data.frame(since = NA_character_, stringsAsFactors = FALSE))
+  opus <- "fix: a\n\nhttps://claude.ai/code/session_01A\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+  page <- data.frame(date = c("2026-06-12T12:55:59Z", "2026-07-03T13:12:05Z", "2026-07-08T13:36:40Z"),
+                     message = c(opus, sub("session_01A", "session_01B", opus),
+                                 "feat: b\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"),
+                     stringsAsFactors = FALSE)
+  hit <- function(p) list(date = p$date[1], message = p$message[1], author = "Jane", total_count = nrow(p),
+                          items = p, unavailable = FALSE, incomplete = 0L)
+  # The session link rides the two Opus commits, and the other two rules match all three.
+  io <- list(graphql = function(query) stop("no dating in this week"),
+             search_hit = function(owner, name, query, delay = 0)
+               if (grepl("session_", query, fixed = TRUE)) hit(page[1:2, ]) else hit(page))
+  suppressMessages(run_deep(io, out, file.path(out, "vcs-ai-flagged-roster.db"), 0, 1,
+                            marker_delay = 0, search_delay = 0))
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db"))
+  on.exit(DBI::dbDisconnect(scon))
+  expect_equal(nrow(DBI::dbReadTable(scon, "search_log")), 3L)
+  got <- DBI::dbReadTable(scon, "vcs_ai_models")
+  expect_equal(nrow(got), 2L)
+  expect_equal(got$commits[got$family == "Opus"], 2L)
+  expect_equal(got$commits[got$family == "Sonnet"], 1L)
+  expect_equal(got$first_seen[got$family == "Opus"], "2026-06-12T12:55:59Z")
+  expect_true(all(got$window_complete == 1L))
+})
+
+test_that("a pooled tally counts a commit once and is whole only when every page it pools was", {
+  msg <- "Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+  page <- function(date, whole, tool = "claude", message = msg)
+    data.frame(repo_id = "github.com/o/r", tool = tool, date = date, message = message, whole = whole,
+               stringsAsFactors = FALSE)
+  got <- pool_model_rows(rbind(page(c("2026-01-01", "2026-01-02"), TRUE), page("2026-01-01", TRUE),
+                               page("2026-01-03", TRUE, "gemini", "Co-Authored-By: Gemini 2.5 Flash <noreply@google.com>")))
+  expect_equal(got$commits[got$tool == "claude"], 2L)
+  expect_equal(got$commits[got$tool == "gemini"], 1L)
+  expect_true(all(got$window_complete == 1L))
+  # A page GitHub cut short may hold more, even when every commit it showed is on another page.
+  cut <- pool_model_rows(rbind(page(c("2026-01-01", "2026-01-02"), TRUE), page("2026-01-01", FALSE)))
+  expect_equal(cut$commits, 2L); expect_equal(cut$window_complete, 0L)
+  expect_equal(nrow(pool_model_rows(NULL)), 0L)
+})
+
+test_that("a week that asks one Claude rule keeps what the others counted, and the gate reads it as kept", {
+  prior <- rbind(.pm("Fable", "5", NA, 1L, "2026-06-10T16:08:25Z", "2026-06-10T16:08:25Z"),
+                 .pm("Opus", "4.6", NA, 3L, "2026-02-23T10:50:54Z", "2026-02-23T13:09:10Z"),
+                 .pm("Opus", "4.8", "1M", 5L, "2026-06-16T10:13:22Z", "2026-06-17T17:44:28Z"),
+                 .pm("Opus", "4.8", NA, 3L, "2026-06-12T12:55:59Z", "2026-07-08T13:36:40Z"),
+                 .pm("gpt-5", NA, NA, 2L, "2026-05-01T00:00:00Z", "2026-05-02T00:00:00Z", tool = "aider",
+                     provider = "openai"))
+  # A new commit carries only a session link, so the session rule alone answers, naming one Opus 4.8 commit.
+  one <- .pm("Opus", "4.8", NA, 1L, "2026-07-03T13:12:05Z", "2026-07-03T13:12:05Z")
+  got <- fold_models(prior, one, NULL, rebuilt_repos = character(0), reads = .ai_empty_reads())
+  expect_equal(nrow(got), 5L)
+  expect_equal(sum(got$commits[got$tool == "claude"]), 12L)
+  expect_equal(got$commits[got$tool == "aider"], 2L)
+  o48 <- got[got$family %in% "Opus" & got$version %in% "4.8" & is.na(got$context_window), ]
+  expect_equal(o48$commits, 3L)
+  expect_equal(o48$first_seen, "2026-06-12T12:55:59Z"); expect_equal(o48$last_seen, "2026-07-08T13:36:40Z")
+  # A larger count raises the stored one, and a model the stored rows lack is added.
+  more <- fold_models(prior, rbind(.pm("Opus", "4.8", NA, 4L, "2026-06-12T12:55:59Z", "2026-09-01T00:00:00Z"),
+                                   .pm("Fable", "5.1", NA, 1L, "2026-09-02T00:00:00Z", "2026-09-02T00:00:00Z")),
+                      NULL, rebuilt_repos = character(0))
+  expect_equal(more$commits[more$family %in% "Opus" & more$version %in% "4.8" & is.na(more$context_window)], 4L)
+  expect_equal(more$commits[more$version %in% "5.1"], 1L)
+  expect_equal(nrow(more), 6L)
+  db <- function(df) {
+    p <- tempfile(fileext = ".db"); con <- DBI::dbConnect(RSQLite::SQLite(), p)
+    DBI::dbWriteTable(con, "vcs_ai_models", df); DBI::dbDisconnect(con); p
+  }
+  expect_equal(summary_regressions(db(prior), db(got)), character(0))
+})
+
+test_that("rows one rule each counted for the same model fold into one, at the larger count", {
+  prior <- rbind(.pm("Opus", "4.5", NA, 32L, "2026-01-07", "2026-02-04", complete = 0L),
+                 .pm("Opus", "4.5", NA, 2L, "2026-01-07", "2026-01-17"),
+                 .pm("Sonnet", "4.5", NA, 15L, "2025-12-12", "2026-01-18"),
+                 .pm("Sonnet", "4.5", NA, 14L, "2025-12-11", "2026-01-18"))
+  got <- fold_models(prior, .ai_empty_models(), NULL, rebuilt_repos = character(0))
+  expect_equal(nrow(got), 2L)
+  expect_equal(got$commits[got$family == "Opus"], 32L)
+  expect_equal(got$window_complete[got$family == "Opus"], 0L)
+  expect_equal(got$commits[got$family == "Sonnet"], 15L)
+  expect_equal(got$first_seen[got$family == "Sonnet"], "2025-12-11")
+  expect_equal(got$window_complete[got$family == "Sonnet"], 1L)
+  # A weekly add lands once, on the folded row.
+  through <- "2026-09-20T08:00:00Z"
+  reads <- data.frame(repo_id = "github.com/adibender/pammtools", commits_read_through = through,
+                      stringsAsFactors = FALSE)
+  add <- cbind(.pm("Sonnet", "4.5", NA, 2L, "2026-10-02", "2026-10-03"), mode = "add", read_after = through)
+  added <- fold_models(prior, .ai_empty_models(), add, rebuilt_repos = character(0), reads = reads)
+  expect_equal(nrow(added), 2L)
+  expect_equal(added$commits[added$family == "Sonnet"], 17L)
+})
