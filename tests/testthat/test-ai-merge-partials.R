@@ -57,7 +57,7 @@
                               ruleset_version = AI_RULESET_VERSION, asked_on = today, outcome = "hit", total_count = 3L,
                               verified = 1L, incomplete = 0L, first_hit_on = "2025-02-01", source = "read", mode = "replace",
                               stringsAsFactors = FALSE)))
-    # A partial written by older code carries only some tables; the rest read as empty.
+    # A partial that holds only some tables reads the rest as empty.
     con <- DBI::dbConnect(RSQLite::SQLite(), file.path(parts, "vcs-ai-cheap-1.db"))
     DBI::dbWriteTable(con, "repo_reads", data.frame(repo_id = .B, commits_read_on = today, stringsAsFactors = FALSE))
     DBI::dbDisconnect(con)

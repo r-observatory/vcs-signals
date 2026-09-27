@@ -233,3 +233,14 @@ test_that("a weekly read adds its new model commits to the stored tally", {
                            m(2L, "2026-10-02", "2026-10-03", "add", through), rebuilt_repos = character(0)),
                "reads is NULL")
 })
+
+test_that("a read to the first commit that names no model clears the older tallies", {
+  m <- function(repo, family) data.frame(repo_id = repo, tool = "claude", provider = NA_character_, family = family,
+                                         version = "4.8", context_window = NA_character_, commits = 10L,
+                                         first_seen = "2025-01-01", last_seen = "2026-09-01", window_complete = 1L,
+                                         stringsAsFactors = FALSE)
+  got <- fold_models(rbind(m("r", "Opus"), m("s", "Opus")), .ai_empty_models(), NULL, rebuilt_repos = "r")
+  expect_equal(got$repo_id, "s")
+  # This run's search rows are not older tallies, so they stay.
+  expect_equal(fold_models(m("r", "Opus"), m("r", "Sonnet"), NULL, rebuilt_repos = "r")$family, "Sonnet")
+})

@@ -1051,7 +1051,6 @@ run_merge <- function(io, out_dir, parts_dir) {
   # Rebuild the summary so ai_* rollups reflect the merged onsets. Non-AI columns come
   # from the seeded series_latest; descriptive + release facts carry forward from the
   # prior summary (no fresh gauge collection this run, so compute_release_facts = FALSE).
-  today <- format(Sys.Date())
   repos_all <- DBI::dbReadTable(con, "repos")
   rp_all <- DBI::dbReadTable(con, "repo_packages")
   series_all <- DBI::dbGetQuery(con, "SELECT repo_id, date, metric, value FROM signals_series")

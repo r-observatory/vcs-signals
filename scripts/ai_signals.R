@@ -1165,6 +1165,8 @@ fold_outside_prs <- function(prior, incoming) {
 fold_models <- function(prior, deep, cheap, rebuilt_repos = NULL, reads = NULL) {
   proto <- .ai_empty_models()
   out <- .ai_bind_like(proto, list(prior))
+  # A read to the first commit is the whole tally, so a model it no longer names loses its row, as in the log.
+  out <- out[!(out$repo_id %in% rebuilt_repos), , drop = FALSE]
   deep <- .ai_bind_like(proto, list(deep))
   if (nrow(deep)) out <- rbind(out[!(out$repo_id %in% deep$repo_id), , drop = FALSE], deep)
   if (!is.null(cheap) && nrow(cheap)) {
