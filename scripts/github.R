@@ -908,9 +908,10 @@ parse_search_commit_hit <- function(body_txt) {
   empty_page <- data.frame(date = character(), message = character(),
                            stringsAsFactors = FALSE)
   none <- list(date = NA_character_, message = NA_character_, author = NA_character_,
-               total_count = 0L, items = empty_page, unavailable = FALSE)
+               total_count = 0L, items = empty_page, unavailable = FALSE, incomplete = 0L)
   unavailable <- list(date = NA_character_, message = NA_character_, author = NA_character_,
-                      total_count = NA_integer_, items = empty_page, unavailable = TRUE)
+                      total_count = NA_integer_, items = empty_page, unavailable = TRUE,
+                      incomplete = 0L)
   body <- tryCatch(jsonlite::fromJSON(body_txt, simplifyVector = FALSE), error = function(e) NULL)
   if (is.null(body)) return(unavailable)   # unparseable is not an answer
 
@@ -920,6 +921,11 @@ parse_search_commit_hit <- function(body_txt) {
   # is how tier B came back as a confident zero across the entire roster while
   # igraph/rigraph alone had 53 matching commits.
   if (is.null(body$total_count) && !is.null(body$message)) return(unavailable)
+  # GitHub stopped short: a zero may be a miss nobody finished looking for, and a count is a floor.
+  partial <- isTRUE(body$incomplete_results)
+  if (partial && isTRUE(.nn(body$total_count, 0L) == 0)) return(unavailable)
+  # A count with no commit to check or date is not an answer either.
+  if (isTRUE(.nn(body$total_count, 0L) > 0) && !length(.nn(body$items, list()))) return(unavailable)
 
   items <- .nn(body$items, list())
   if (isTRUE(.nn(body$total_count, length(items)) == 0) || length(items) == 0) return(none)
@@ -936,7 +942,8 @@ parse_search_commit_hit <- function(body_txt) {
        author      = .nn(it$commit$author$name, NA_character_),
        total_count = as.integer(.nn(body$total_count, length(items))),
        items       = page,
-       unavailable = FALSE)
+       unavailable = FALSE,
+       incomplete  = as.integer(partial))
 }
 
 #' A marker path plus any known predecessor paths (AI_MARKER_PREDECESSORS), probed
@@ -1001,38 +1008,74 @@ fetch_marker_onset <- function(io, owner, name, path, delay = BACKFILL_DELAY_S) 
   earliest
 }
 
-# --- transport (not unit-tested) ---
+# --- transport ---
 
 
-#' As search_earliest_commit, but returning the whole hit so the caller can verify it.
-#' Same transport, same pacing, same fail-soft: an error is a hit with NA fields, never
-#' an exception that would abort a shard.
-search_earliest_commit_hit <- function(token, owner, name, query, delay = SEARCH_DELAY_S) {
-  # A transport failure is also a refused question, not an absence of trailers.
-  # total_count is NA for the same reason the parser's is: nothing was measured,
-  # and a caller reading a missing field would get NULL rather than a number it
-  # could tell apart from a real zero.
-  none <- list(date = NA_character_, message = NA_character_, author = NA_character_,
-               total_count = NA_integer_,
-               items = data.frame(date = character(), message = character(),
-                                  stringsAsFactors = FALSE),
-               unavailable = TRUE)
+#' Split gh api -i output into its status, headers (names lowercased) and body. Pure.
+parse_gh_include <- function(lines) {
+  s <- grep("^HTTP/", lines)
+  if (!length(s)) return(list(status = NA_integer_, headers = character(0),
+                              body = paste(lines, collapse = "\n")))
+  s <- s[1]
+  blank <- which(!nzchar(trimws(lines)) & seq_along(lines) > s)
+  end <- if (length(blank)) blank[1] - 1L else length(lines)
+  hdr <- if (end > s) lines[(s + 1L):end] else character(0)
+  kv <- regmatches(hdr, regexec("^([^:]+):\\s*(.*)$", hdr))
+  kv <- Filter(function(x) length(x) == 3L, kv)
+  # gh ends each header line with CRLF and system2 keeps the CR, so values are trimmed.
+  headers <- stats::setNames(trimws(vapply(kv, `[`, "", 3L)), tolower(vapply(kv, `[`, "", 2L)))
+  list(status = as.integer(sub("^HTTP/\\S+\\s+([0-9]{3}).*$", "\\1", lines[s])), headers = headers,
+       body = if (length(blank)) paste(lines[-seq_len(blank[1])], collapse = "\n") else "")
+}
+
+#' Seconds to wait before asking again, or NA when the answer is final. A refusal waits
+#' what GitHub says, else until the budget resets, else a minute, plus jitter, capped. Pure.
+search_wait_s <- function(status, headers, attempt, now, rand) {
+  if (is.na(status) || attempt > AI_SEARCH_RETRIES) return(NA_real_)
+  h <- function(k) { v <- unname(headers[k]); if (length(v) && !is.na(v)) v else NA_character_ }
+  if (status %in% c(403L, 429L)) {
+    wait <- suppressWarnings(as.numeric(h("retry-after")))
+    if (is.na(wait) && identical(h("x-ratelimit-remaining"), "0"))
+      wait <- suppressWarnings(as.numeric(h("x-ratelimit-reset"))) - now
+    if (is.na(wait) || wait < 0) wait <- 60
+    return(min(wait + rand(1, 1, 5), AI_SEARCH_MAX_WAIT_S))
+  }
+  if (status >= 500L) return(c(10, 30, 60)[min(attempt, 3L)])
+  NA_real_
+}
+
+#' One commit search, earliest hit first, asked again on a refusal or a server error. A search that
+#' stays refused is returned as unavailable, never as a miss; `sleep` carries every wait for tests.
+search_earliest_commit_hit <- function(token, owner, name, query, delay = SEARCH_DELAY_S,
+                                       run = system2, sleep = Sys.sleep, rand = stats::runif,
+                                       now = function() as.numeric(Sys.time())) {
+  refused <- list(date = NA_character_, message = NA_character_, author = NA_character_,
+                  total_count = NA_integer_,
+                  items = data.frame(date = character(), message = character(), stringsAsFactors = FALSE),
+                  unavailable = TRUE, incomplete = 0L)
   old <- Sys.getenv("GH_TOKEN", unset = NA)
   Sys.setenv(GH_TOKEN = token)
   on.exit({ if (is.na(old)) Sys.unsetenv("GH_TOKEN") else Sys.setenv(GH_TOKEN = old) }, add = TRUE)
-  # system2 pastes its args into a shell line WITHOUT quoting them, so a query
-  # containing a space is split and gh receives the remainder as stray positional
-  # arguments: "accepts 1 arg(s), received 2". Every trailer phrase contains a
-  # space, so every tier-B and tier-C search ever issued was malformed. Tier A's
-  # author-email query has no space, which is why only these went silent.
+  # system2 does not quote its arguments, so the whole q= argument is single-quoted.
   q <- sprintf("repo:%s/%s %s", owner, name, query)
-  out <- suppressWarnings(system2("gh", c("api", "-X", "GET", "search/commits",
-    "-f", shQuote(paste0("q=", q)), "-f", "sort=committer-date", "-f", "order=asc",
-    "-f", sprintf("per_page=%d", AI_SEARCH_PAGE)), stdout = TRUE))
-  if (delay > 0) Sys.sleep(delay)
-  status <- attr(out, "status")
-  if (!is.null(status) && !identical(as.integer(status), 0L)) return(none)
-  parse_search_commit_hit(paste(out, collapse = "\n"))
+  attempt <- 1L
+  repeat {
+    out <- suppressWarnings(run("gh", c("api", "-i", "-X", "GET", "search/commits",
+      "-f", shQuote(paste0("q=", q)), "-f", "sort=committer-date", "-f", "order=asc",
+      "-f", sprintf("per_page=%d", AI_SEARCH_PAGE)), stdout = TRUE))
+    if (delay > 0) sleep(delay)
+    res <- parse_gh_include(out)
+    ok <- !is.na(res$status) && res$status >= 200L && res$status < 300L
+    if (ok) {
+      hit <- parse_search_commit_hit(res$body)
+      if (!isTRUE(hit$unavailable)) return(hit)
+    }
+    # A 2xx that is itself a refusal, or no status at all, is asked again like a server error.
+    wait <- search_wait_s(if (ok || is.na(res$status)) 500L else res$status, res$headers, attempt, now(), rand)
+    if (is.na(wait)) return(refused)
+    sleep(wait)
+    attempt <- attempt + 1L
+  }
 }
 
 .utc_now <- function() format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")

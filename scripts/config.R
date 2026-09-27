@@ -733,7 +733,10 @@ TIER_PRIORITY <- c(A = 1L, B = 2L, C = 3L, PR = 4L, PB = 5L, D = 6L)
 # ~30/min, and hand-testing tripped it after five queries. At 2s the first backfill
 # issued about 12,000 searches, was refused by almost all of them, and recorded the
 # refusals as "no trailer found". Pace for the limit that actually exists.
-SEARCH_DELAY_S <- 6
+SEARCH_DELAY_S <- 12
+# A refused search is asked again this many times, never waiting longer than this per try.
+AI_SEARCH_RETRIES <- 3L
+AI_SEARCH_MAX_WAIT_S <- 120
 # Subtrees the contents query lists one level of, alias to path. build_tree_query and
 # parse_tree_markers both iterate this; a path under .github/ lands in github_entries.
 TREE_SUBTREES <- c(workflowsTree = ".github/workflows", claudeTree = ".claude", agentsTree = ".agents",

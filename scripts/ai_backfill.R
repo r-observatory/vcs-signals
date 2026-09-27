@@ -943,7 +943,7 @@ main <- function(mode, out_dir, io = NULL) {
   if (is.null(io)) io <- list(
     graphql        = default_io(token)$graphql,
     search_hit     = function(owner, name, query, delay = SEARCH_DELAY_S)
-                       search_earliest_commit_hit(token, owner, name, query, delay),
+                       search_earliest_commit_hit(token, owner, name, query, delay, sleep = Sys.sleep),
     sleep          = function(seconds) Sys.sleep(seconds),
     cran_packages  = function() {
       db <- tools::CRAN_package_db()
