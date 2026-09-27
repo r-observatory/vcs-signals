@@ -870,10 +870,10 @@ test_that("an ignore marker names which ignore file it came from", {
 test_that("a path in both ignore files is recorded twice, on purpose", {
   # The pair is a real fact about the repository. They collapse per (repo, tool)
   # downstream, so two rows here cost nothing and carry more.
-  r <- scan_ignore_tokens(c(".claude"), c(".claude"))
+  r <- scan_ignore_tokens(c(".cursor"), c(".cursor"))
   expect_equal(nrow(r), 2L)
-  expect_setequal(r$marker, c("gitignore:.claude", "rbuildignore:.claude"))
-  expect_true(all(r$tool == "claude"))
+  expect_setequal(r$marker, c("gitignore:.cursor", "rbuildignore:.cursor"))
+  expect_true(all(r$tool == "cursor"))
 })
 
 test_that("an ambient marker in an ignore file stays out of the AI evidence", {
@@ -1072,4 +1072,48 @@ test_that("the Copilot setup workflow is dated through its real path", {
   expect_equal(marker_repo_path("workflows/copilot-setup-steps.yml"),
                ".github/workflows/copilot-setup-steps.yml")
   expect_equal(marker_repo_path("agents"), ".github/agents")
+})
+
+test_that("ignore lines are matched however the path is spelled", {
+  cases <- list(
+    c("/.kiro/", "kiro"), c(".claude/*", "claude"), c("^[.]claude$", "claude"),
+    c("\\.cursor(/|$)", "cursor"), c("!.cursor/environment.json", "cursor"),
+    c("**/.windsurf/**", "windsurf"), c("CLAUDE.MD", "claude"), c(".aider*", "aider"),
+    c(".claude/settings.local.json", "claude"), c(".cursor  # editor rules", "cursor"))
+  for (cs in cases) {
+    got <- scan_ignore_tokens(cs[1], character(0))
+    expect_true(cs[2] %in% got$tool, info = cs[1])
+  }
+  expect_equal(nrow(scan_ignore_tokens("cursor", character(0))), 0L)      # no dot, no path
+  expect_equal(nrow(scan_ignore_tokens("AGENTS.md", character(0))), 0L)   # names no tool
+  expect_equal(scan_ignore_tokens(".aider*", character(0))$marker, "gitignore:.aider*")
+  expect_equal(scan_ignore_tokens(character(0), ".aider*")$marker, "rbuildignore:.aider*")
+})
+
+test_that("a line ending in a carriage return still matches", {
+  expect_true("claude" %in% scan_ignore_tokens(c(".claude\r", "*.o\r"), character(0))$tool)
+})
+
+test_that("lines an editor writes on its own produce nothing, the committed folder still counts", {
+  for (line in c(".posit/assistant", "/.posit/assistant/", "^\\.posit/assistant$",
+                 ".positai", ".positai/settings.json"))
+    expect_equal(nrow(scan_ignore_tokens(line, line)), 0L, info = line)
+  expect_true("posit-assistant" %in%
+              classify_tree_markers(c(".posit", ".posit/assistant"), character(0))$tool)
+  expect_equal(nrow(scan_ignore_tokens(character(0), "^\\.claude$")), 0L)
+  expect_true("claude" %in% scan_ignore_tokens(".claude", character(0))$tool)
+})
+
+test_that("a root ignore line that shares its name with a Copilot .github folder names nothing", {
+  for (line in c("prompts/", "/prompts/", "^prompts$", "prompts/*.md", "skills/", "skills",
+                 "^agents$", "chatmodes", "instructions/"))
+    expect_equal(nrow(scan_ignore_tokens(line, line)), 0L, info = line)
+  expect_true("copilot" %in% classify_tree_markers(character(0), c("prompts", "skills"))$tool)
+})
+
+test_that("the bisect reads an ignore file the way the scanner does", {
+  expect_true(ignore_text_has_token("# tools\r\n/.kiro/\r\n", ".kiro"))
+  expect_true(ignore_text_has_token(".aider*\n", ".aider*"))
+  expect_false(ignore_text_has_token(".aider.conf.yml\n", ".aider*"))
+  expect_true(ignore_text_has_token("!.cursor/environment.json\n", ".cursor"))
 })

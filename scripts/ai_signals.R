@@ -151,16 +151,29 @@ marker_repo_path <- function(marker) {
   if (identical(m$location, "github")) paste0(".github/", m$path) else m$path
 }
 
-#' Normalize one ignore-file line to a bare token: strip inline comment, leading
-#' "./", regex anchors, surrounding whitespace, and one trailing "/" or "*".
+#' Normalise one ignore-file line to a bare lowercase path: drop an inline comment, a
+#' leading "!" (a negated line still says the tool's files are kept), regex anchors and
+#' escapes, a leading "./", "/" or "**/", and any trailing "/**", "/*", "/", "*",
+#' "($|/)" or "(/|$)". Pure.
 .ai_norm_ignore <- function(line) {
-  x <- sub("#.*$", "", line)
-  x <- trimws(x)
+  x <- trimws(sub("#.*$", "", line))
+  x <- sub("^!", "", x)
   x <- sub("^\\^", "", x); x <- sub("\\$$", "", x)
-  x <- gsub("\\\\", "", x)              # drop regex escapes (\.cursor -> .cursor)
-  x <- sub("^\\./", "", x)
-  x <- sub("[/*]$", "", x)
-  x
+  x <- gsub("[.]", ".", x, fixed = TRUE); x <- gsub("\\.", ".", x, fixed = TRUE)
+  x <- gsub("\\", "", x, fixed = TRUE)
+  x <- sub("^(\\./|/|\\*\\*/)", "", x)
+  repeat {
+    y <- sub("(/\\*\\*|/\\*|/|\\*|\\(\\$\\|/\\)|\\(/\\|\\$\\))$", "", x)
+    if (identical(y, x)) break
+    x <- y
+  }
+  tolower(x)
+}
+
+#' TRUE where a normalised ignore line names `path` itself or something inside it. Pure.
+ai_ignore_line_matches <- function(norm, path) {
+  p <- tolower(path)
+  norm == p | startsWith(norm, paste0(p, "/"))
 }
 
 #' TRUE when a Tier-D marker names an ignore-file entry rather than a committed path.
@@ -188,19 +201,20 @@ ai_is_ignore_marker <- function(marker) {
 scan_ignore_tokens <- function(gitignore_lines, rbuildignore_lines) {
   sources <- list(gitignore = gitignore_lines, rbuildignore = rbuildignore_lines)
   rows <- list()
+  add <- function(tool, value) rows[[length(rows) + 1L]] <<-
+    data.frame(tool = tool, tier = "D", marker = value, agnostic = FALSE, stringsAsFactors = FALSE)
   for (src in names(sources)) {
-    toks <- unique(vapply(sources[[src]] %||% character(0), .ai_norm_ignore, character(1)))
+    lines <- sources[[src]] %||% character(0)
+    # Aider writes this exact line itself, a glob no path rule would match.
+    if (any(trimws(lines) == ".aider*")) add("aider", paste0(src, ":.aider*"))
+    toks <- unique(vapply(lines, .ai_norm_ignore, character(1), USE.NAMES = FALSE))
     toks <- toks[nzchar(toks)]
     if (!length(toks)) next
     for (m in ai_deliberate_markers()) {
-      # AGENTS.md and the shared .agents directory are too generic to trust as a
-      # bare token in an ignore file.
-      if (isTRUE(m$agnostic)) next
-      if (!(m$path %in% toks)) next
-      rows[[length(rows) + 1L]] <- data.frame(
-        tool = m$tool, tier = "D",
-        marker = paste0(src, ":", m$path),
-        agnostic = FALSE, stringsAsFactors = FALSE)
+      # AGENTS.md and .agents name no tool, and some editors write a tool's line themselves.
+      if (isTRUE(m$agnostic) || identical(m$ignore_line, FALSE)) next
+      if (is.character(m$ignore_line) && !(src %in% m$ignore_line)) next
+      if (any(ai_ignore_line_matches(toks, m$path))) add(m$tool, paste0(src, ":", m$path))
     }
   }
   if (!length(rows)) return(.ai_empty_evidence())
@@ -995,11 +1009,11 @@ bisect_ignore_onset <- function(n, present) {
   list(index = hi, exact = TRUE)
 }
 
-#' Whether an ignore file's text names `token` as a whole entry, using the same
-#' normalisation scan_ignore_tokens applies to a line.
+#' Whether an ignore file's text holds a line the scanner would turn into `token`.
 ignore_text_has_token <- function(text, token) {
   if (is.null(text) || is.na(text) || !nzchar(text)) return(FALSE)
-  lines <- strsplit(text, "\n", fixed = TRUE)[[1]]
-  toks <- vapply(lines, .ai_norm_ignore, character(1))
-  token %in% toks[nzchar(toks)]
+  lines <- strsplit(text, "\r\n|\r|\n")[[1]]
+  if (identical(token, ".aider*")) return(any(trimws(lines) == ".aider*"))
+  toks <- vapply(lines, .ai_norm_ignore, character(1), USE.NAMES = FALSE)
+  any(ai_ignore_line_matches(toks[nzchar(toks)], token))
 }
