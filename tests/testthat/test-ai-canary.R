@@ -379,3 +379,97 @@ test_that("a contents read that found no community files reads 0, not unknown", 
   expect_equal(r$has_contributing, 0L);    expect_equal(r$contributing_source, "none")
   expect_equal(r$has_pr_template, 0L);     expect_equal(r$pr_template_source, "none")
 })
+
+test_that("the inventory lists pull requests a tool wrote and no review tool", {
+  inv <- ai_rule_inventory()
+  expect_true(all(c("PR", "PB") %in% inv$tier))
+  expect_setequal(inv$tool[inv$tier == "PB"], c("cursor", "claude", "codex", "devin", "openhands", "amazonq"))
+  expect_false(any(inv$tool %in% c("coderabbit", "gemini-code-assist", "copilot-review", "any")))
+})
+
+test_that("every search at zero on launch has a recorded row", {
+  # The searches that matched something in the scanned repositories on 2026-09-25.
+  detecting <- list(
+    A  = c("claude", "copilot", "cursor", "jules", "openhands", "amazonq"),
+    B  = c("claude", "codex", "cursor", "devin", "openhands", "jules", "gemini", "aider", "antigravity",
+           "copilot", "corteza", "eca", "warp", "qwen", "crush"),
+    C  = "aider",
+    PR = c("copilot", "devin", "jules", "claude", "amazonq"),
+    PB = c("cursor", "claude", "codex", "devin", "openhands"),
+    D  = c("claude", "codex", "cursor", "copilot", "aider", "gemini", "windsurf", "cline", "continue",
+           "agents-md", "agents-dir", "antigravity", "kiro", "devin", "posit-assistant", "opencode",
+           "qwen", "kilo", "warp", "jules", "openhands"))
+  rows <- do.call(rbind, lapply(names(detecting), function(t) data.frame(
+    repo_id = paste0("r-", t, "-", detecting[[t]]), tool = detecting[[t]], evidence_tiers = t,
+    stringsAsFactors = FALSE)))
+  unexplained <- ai_silent_channels(rows)
+  expect_equal(nrow(unexplained), 0L, info = paste(unexplained$tier, unexplained$tool, sep = "/", collapse = ", "))
+})
+
+test_that("commits by Cursor's and OpenHands's accounts are no longer recorded as silent", {
+  kn <- AI_SILENT_CHANNELS_KNOWN
+  expect_false(any(kn$tier == "A" & kn$tool %in% c("cursor", "openhands")))
+  expect_equal(kn$status[kn$tier == "PR" & kn$tool == "cursor"], "genuine")
+  # The rows whose reasons stop being true once every repository is read each week.
+  says <- function(tier, tool, text) grepl(text, kn$reason[kn$tier == tier & kn$tool == tool], fixed = TRUE)
+  expect_true(says("A", "devin", "counted in every repository each week"))
+  expect_true(says("B", "replit", "every repository's new commits are now read each week"))
+  expect_true(says("B", "windsurf", "which this page lists under Devin"))
+  expect_true(says("D", "amazonq", "which this page lists as its own tool"))
+  expect_true(says("PR", "cursor", "the note Cursor writes at the top of the description"))
+})
+
+test_that("an outside contributor's pull request shows the search works", {
+  out <- data.frame(repo_id = "g", pr_number = 1:2, tool = c("kiro", "cursor"),
+                    found_via = c("pr-author", "pr.cursor.agent-branch"), created_at = "2026-08-28T00:00:00Z",
+                    from_fork = 1L, author_association = "NONE", last_confirmed_date = "2026-10-04",
+                    stringsAsFactors = FALSE)
+  s <- ai_silent_channels(.ai_empty_signals(), known = NULL, outside = out)
+  expect_false(any(s$tier == "PR" & s$tool == "kiro"))
+  expect_false(any(s$tier == "PB" & s$tool == "cursor"))
+  expect_true(any(s$tier == "PB" & s$tool == "claude"))
+})
+
+test_that("a codex branch alone leaves the Codex pull request search unseen", {
+  prs <- .ai_pr_nodes_frame(list(list(number = 275L, createdAt = "2026-03-11T08:43:55Z",
+    author = list(login = "fabian-s", `__typename` = "User"), authorAssociation = "COLLABORATOR",
+    isCrossRepository = FALSE, headRefName = "codex/fix-rcmdcheck-after-merge", body = "## Summary")))
+  found <- assemble_repo_evidence(list(root_entries = "DESCRIPTION"), list(prs = prs))
+  expect_true(repo_has_ai_signal(found))   # the week's searches may still ask about the repository
+  found$repo_id <- "github.com/adibender/pammtools"
+  rows <- build_cheap_rows(found, "2026-10-04")
+  expect_equal(nrow(rows), 0L)
+  expect_true(any(ai_silent_channels(rows, known = NULL)$tier == "PB" &
+                  ai_silent_channels(rows, known = NULL)$tool == "codex"))
+})
+
+test_that("Claude's pull requests beside a codex branch name Claude alone", {
+  node <- function(n, head, at) list(number = n, createdAt = at, author = list(login = "temuulene",
+    `__typename` = "User"), authorAssociation = "OWNER", isCrossRepository = FALSE, headRefName = head, body = "x")
+  prs <- .ai_pr_nodes_frame(list(node(2L, "claude/review-package-vignettes-8clehs", "2026-07-15T03:42:49Z"),
+                                 node(3L, "codex/add-tests", "2026-07-20T00:00:00Z")))
+  found <- assemble_repo_evidence(list(root_entries = "DESCRIPTION"), list(prs = prs))
+  found$repo_id <- "github.com/temuulene/mongolstats"
+  rows <- build_cheap_rows(found, "2026-10-04")
+  expect_equal(rows$tool, "claude")
+  roll <- build_ai_rollups(rows)
+  expect_equal(roll$ai_tools, "claude"); expect_equal(roll$ai_tool_count, 1L)
+})
+
+test_that("each way a tool can be found names it or not, as the naming table says", {
+  row <- function(tiers, markers, censored = 0L, credited = NA_integer_)
+    data.frame(tool = "claude", first_seen_date = "2026-01-01", first_seen_censored = censored,
+               evidence_tiers = tiers, markers = markers, authored = 0L, agnostic = FALSE,
+               assisted_commits = credited, stringsAsFactors = FALSE)
+  expect_true(meets_naming_threshold(row("D", "CLAUDE.md")))                 # a file in the repository
+  expect_false(meets_naming_threshold(row("D", "gitignore:.claude")))         # a line in an ignore file
+  expect_true(meets_naming_threshold(row("PR", "PR")))                        # opened by the tool's account
+  expect_true(meets_naming_threshold(row("PB", "pr.claude.branch")))          # the tool wrote it, a maintainer opened it
+  expect_false(meets_naming_threshold(row("PB", "pr.codex.branch")))          # a codex/ branch, never stored
+  expect_true(meets_naming_threshold(row("A", "A")))                          # commits by the tool's account
+  expect_true(meets_naming_threshold(row("B", "msg.claude.session", 1L)))     # commits crediting it, read weekly
+  expect_true(meets_naming_threshold(row("C", "name.aider.suffix", 1L)))
+  expect_false(meets_naming_threshold(row("B", "B", 1L)))                     # an unchecked search hit, alone
+  expect_true(meets_naming_threshold(row("B,D", "B,CLAUDE.md", 1L)))          # the same, beside a file
+  expect_equal(unname(TIER_PRIORITY[c("PR", "PB", "D")]), c(4L, 5L, 6L))
+})

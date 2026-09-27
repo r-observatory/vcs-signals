@@ -723,8 +723,8 @@ AI_COPILOT_VSCODE_FALSE_WINDOW <- c("2026-04-22", "2026-05-06")
 AI_MARKER_PREDECESSORS <- c(".cursor" = ".cursorrules")
 # Detection ruleset version, surfaced by the viewer methods note.
 AI_RULESET_VERSION <- "2026-09-19"
-# Evidence-tier strength for deterministic ordering (lower = stronger/earlier on ties).
-TIER_PRIORITY <- c(A = 1L, B = 2L, C = 3L, PR = 4L, D = 5L)
+# Tie-break order between ways a tool was found (lower sorts first).
+TIER_PRIORITY <- c(A = 1L, B = 2L, C = 3L, PR = 4L, PB = 5L, D = 6L)
 
 # Pacing for the REST commit-search API (search/commits, ~1,800/hr = 30/min),
 # a budget separate from the GraphQL 5000/hr and from core REST. Each onset

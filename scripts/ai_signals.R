@@ -369,34 +369,109 @@ detect_pr_agents <- function(pr_logins) {
   .ai_rows(unname(AI_PR_AGENT_LOGINS[match(hit, tolower(names(AI_PR_AGENT_LOGINS)))]), "PR")
 }
 
-#' Post-cutoff agent-PR logins: an allowlisted agent login whose PR was created at or
-#' after AI_PR_CUTOFF. A pre-cutoff match predates the agent era (a login collision) and
-#' is dropped. Internal.
-.ai_agent_pr_logins <- function(pr, cutoff) {
-  prs <- if (is.null(pr) || is.null(pr$prs)) NULL else pr$prs
-  if (is.null(prs) || nrow(prs) == 0) return(character(0))
-  intra <- !is.na(prs$created_at) & prs$created_at >= cutoff
-  prs$login[intra]
+.ai_empty_found <- function()
+  data.frame(tool = character(), tier = character(), marker = character(), agnostic = logical(),
+             role = character(), rule_key = character(), onset = character(), onset_censored = integer(),
+             newest_at = character(), stringsAsFactors = FALSE)
+
+.ai_found <- function(tool, tier, marker, role = "authoring", rule_key = NA_character_,
+                      onset = NA_character_, onset_censored = 1L, newest_at = NA_character_, agnostic = FALSE) {
+  if (!length(tool)) return(.ai_empty_found())
+  data.frame(tool = tool, tier = tier, marker = marker, agnostic = as.logical(agnostic), role = role,
+             rule_key = rule_key, onset = onset, onset_censored = as.integer(onset_censored),
+             newest_at = newest_at, stringsAsFactors = FALSE)
 }
 
-#' Combine one repo's cheap-pass parsed tree + PR results into a raw-evidence frame
-#' (tool, tier, marker, agnostic): classify_tree_markers + scan_ignore_tokens on the
-#' tree, detect_pr_agents on the post-cutoff agent logins. Pure. A NULL tree or NULL pr
-#' (that channel errored or is empty) contributes no rows from that channel, never a
-#' "no AI" verdict. Returns the typed 0-row frame when nothing matches.
-assemble_repo_evidence <- function(tree, pr, cutoff = AI_PR_CUTOFF) {
+#' Commits by a tool's accounts, dated by the newest one: the tool was in use by then.
+found_from_accounts <- function(counts) {
+  if (is.null(counts) || !nrow(counts)) return(.ai_empty_found())
+  .ai_found(counts$tool, "A", "A", onset = counts$newest_commit_date, newest_at = counts$newest_commit_date)
+}
+
+#' One row per tool and rule a commit read matched, dated by the oldest match. A read that
+#' covered the whole default branch dates exactly, any other only a floor.
+found_from_commits <- function(hits, whole_history = FALSE) {
+  if (is.null(hits) || !nrow(hits)) return(.ai_empty_found())
+  groups <- split(hits, paste(hits$tool, hits$code, hits$rule_key, hits$role, sep = "\r"))
+  do.call(rbind, unname(lapply(groups, function(g) .ai_found(
+    g$tool[1], g$code[1], if (identical(g$code[1], "A")) "A" else g$rule_key[1], role = g$role[1],
+    rule_key = g$rule_key[1], onset = min(g$committed_at), onset_censored = if (whole_history) 0L else 1L,
+    newest_at = max(g$committed_at)))))
+}
+
+#' One row per tool and rule a pull request showed, dated exactly by the earliest one.
+found_from_prs <- function(cls) {
+  if (is.null(cls) || !nrow(cls)) return(.ai_empty_found())
+  parts <- lapply(seq_len(nrow(cls)), function(i) {
+    keys <- if (identical(cls$code[i], "PR")) "PR" else strsplit(cls$rule_key[i], ",", fixed = TRUE)[[1]]
+    data.frame(tool = cls$tool[i], tier = cls$code[i], marker = keys, role = cls$role[i],
+               at = cls$created_at[i], stringsAsFactors = FALSE)
+  })
+  r <- do.call(rbind, parts)
+  groups <- split(r, paste(r$tool, r$tier, r$marker, r$role, sep = "\r"))
+  do.call(rbind, unname(lapply(groups, function(g) .ai_found(
+    g$tool[1], g$tier[1], g$marker[1], role = g$role[1],
+    rule_key = if (identical(g$marker[1], "PR")) NA_character_ else g$marker[1],
+    onset = min(g$at), onset_censored = 0L, newest_at = max(g$at)))))
+}
+
+#' Everything one repository showed this week. Files and ignore lines get the end of the scan day,
+#' a floor the search pass can tighten. A NULL input adds nothing, never a verdict of "no AI". Pure.
+assemble_repo_evidence <- function(tree, activity = NULL, accounts = NULL, cutoff = AI_PR_CUTOFF,
+                                   scanned_on = format(Sys.Date()), whole_history = FALSE) {
   tree <- tree %||% list()
-  markers <- classify_tree_markers(tree$root_entries, tree$github_entries)
-  ign <- scan_ignore_tokens(tree$gitignore_lines, tree$rbuildignore_lines)
-  pr_ev <- detect_pr_agents(.ai_agent_pr_logins(pr, cutoff))
-  do.call(rbind, list(markers, ign, pr_ev))
+  at_scan <- paste0(scanned_on, "T23:59:59Z")
+  files <- rbind(classify_tree_markers(tree$root_entries, tree$github_entries),
+                 scan_ignore_tokens(tree$gitignore_lines, tree$rbuildignore_lines))
+  review <- match_review_files(tree$root_entries)
+  out <- rbind(
+    if (nrow(files)) .ai_found(files$tool, files$tier, files$marker, onset = at_scan,
+                               agnostic = files$agnostic) else .ai_empty_found(),
+    if (nrow(review)) .ai_found(review$tool, "D", review$marker, role = "review", onset = at_scan)
+    else .ai_empty_found(),
+    found_from_prs(classify_prs(activity$prs, cutoff)),
+    found_from_commits(match_commit_findings(activity$commits), whole_history),
+    found_from_accounts(accounts))
+  rownames(out) <- NULL
+  out
 }
 
-#' The gate: TRUE iff a repo shows ANY AI evidence (a marker, an ignore token, or a
-#' post-cutoff agent PR). Absence of evidence is never gated in, so a repo that errored
-#' in the cheap pass (no evidence frame) is deferred, never recorded as clean.
+#' TRUE when the repository showed a tool the package itself used. Review tools and
+#' outside contributors' pull requests never admit it on their own.
 repo_has_ai_signal <- function(evidence) {
-  !is.null(evidence) && nrow(evidence) > 0
+  if (is.null(evidence) || !nrow(evidence)) return(FALSE)
+  if (!"role" %in% names(evidence)) return(TRUE)
+  any(evidence$role == "authoring")
+}
+
+.ai_empty_review <- function()
+  data.frame(repo_id = character(), tool = character(), first_seen_date = character(),
+             first_seen_censored = integer(), evidence_tiers = character(), markers = character(),
+             assisted_commits = integer(), assisted_measured_on = character(),
+             last_confirmed_date = character(), stringsAsFactors = FALSE)
+
+#' A week's review findings in the vcs_ai_review_signals shape, one row each. Pure.
+review_rows <- function(found, repo_id, today) {
+  r <- found[found$role == "review", , drop = FALSE]
+  if (!nrow(r)) return(.ai_empty_review())
+  data.frame(repo_id = repo_id, tool = r$tool, first_seen_date = r$onset,
+             first_seen_censored = r$onset_censored, evidence_tiers = r$tier, markers = r$marker,
+             assisted_commits = NA_integer_, assisted_measured_on = NA_character_,
+             last_confirmed_date = today, stringsAsFactors = FALSE)
+}
+
+#' vcs_ai_signals rows from a week's findings, one per repository and tool: the package's
+#' own use only, and never a rule that does not name its tool. Pure.
+build_cheap_rows <- function(found, today) {
+  if (is.null(found) || !nrow(found)) return(.ai_empty_signals())
+  role <- if ("role" %in% names(found)) found$role else rep("authoring", nrow(found))
+  f <- found[role == "authoring" & !(found$marker %in% ai_non_naming_pr_keys()), , drop = FALSE]
+  if (!nrow(f)) return(.ai_empty_signals())
+  ai_onset_reducer(.ai_empty_signals(), data.frame(
+    repo_id = f$repo_id, tool = f$tool, first_seen_date = f$onset,
+    first_seen_censored = as.integer(f$onset_censored), evidence_tiers = f$tier, markers = f$marker,
+    authored = as.integer(f$tier == "A"), authored_commits = NA_integer_, assisted_commits = NA_integer_,
+    last_confirmed_date = today, stringsAsFactors = FALSE))
 }
 
 #' The pull request rule keys that name no tool, kept only on the package's own pull requests. Pure.
@@ -477,10 +552,8 @@ earliest_agent_pr_date <- function(pr, cutoff = AI_PR_CUTOFF) {
   trimws(strsplit(s, ",", fixed = TRUE)[[1]])
 }
 
-#' A repo is named when a tool other than AGENTS.md or .agents has a file seen in
-#' the repo, a pull request by its account, or a commit by or crediting it. An
-#' ignore-file line alone names nothing: RStudio 2026.04 wrote .claude into the
-#' .Rbuildignore of package projects it opened.
+#' Named by a file, a pull request by the tool or one it wrote for a maintainer, or commits by or crediting
+#' it. Never by a codex/ branch or an ignore line alone: RStudio 2026.04 and later add .claude to .Rbuildignore.
 meets_naming_threshold <- function(ai_rows) {
   if (is.null(ai_rows) || nrow(ai_rows) == 0) return(FALSE)
   col <- function(n, default) if (n %in% names(ai_rows)) ai_rows[[n]] else rep(default, nrow(ai_rows))
@@ -491,7 +564,7 @@ meets_naming_threshold <- function(ai_rows) {
     tiers <- .ai_split_tiers(ai_rows$evidence_tiers[i])
     if (any(c("A", "PR") %in% tiers)) return(TRUE)
     m <- .ai_split_tiers(marks[i])
-    if (any(!ai_is_ignore_marker(m) & !(m %in% c("A", "B", "C", "PR")))) return(TRUE)
+    if (any(!ai_is_ignore_marker(m) & !(m %in% c("A", "B", "C", "PR", ai_non_naming_pr_keys())))) return(TRUE)
     # A commit search hit that failed its check keeps only a floor date and no
     # count; it names the repo only beside another finding, as before.
     checked <- isTRUE(floor_only[i] == 0L) || !is.na(credited[i]) || "D" %in% tiers
@@ -630,7 +703,7 @@ ai_rule_inventory <- function() {
 #' A genuine zero is possible. It goes in AI_SILENT_CHANNELS_KNOWN with a reason
 #' and a date, which is a claim someone made and can be re-examined, rather than
 #' a blank that reads as absence.
-ai_silent_channels <- function(signals, known = AI_SILENT_CHANNELS_KNOWN) {
+ai_silent_channels <- function(signals, known = AI_SILENT_CHANNELS_KNOWN, outside = NULL) {
   inv <- ai_rule_inventory()
   seen <- character(0)
   if (!is.null(signals) && nrow(signals) > 0) {
@@ -640,6 +713,9 @@ ai_silent_channels <- function(signals, known = AI_SILENT_CHANNELS_KNOWN) {
       paste(tiers, signals$tool[i], sep = "\t")
     }), use.names = FALSE))
   }
+  # An outside contributor's pull request still shows the search works.
+  if (!is.null(outside) && nrow(outside) > 0)
+    seen <- c(seen, paste(ifelse(outside$found_via == "pr-author", "PR", "PB"), outside$tool, sep = "\t"))
   silent <- inv[!(paste(inv$tier, inv$tool, sep = "\t") %in% seen), , drop = FALSE]
   if (!is.null(known) && nrow(known) > 0) {
     silent <- silent[!(paste(silent$tier, silent$tool, sep = "\t") %in%
@@ -672,7 +748,7 @@ ai_silent_channels <- function(signals, known = AI_SILENT_CHANNELS_KNOWN) {
 #' happening inside the table.
 ai_canary_check <- function(signals, known = AI_SILENT_CHANNELS_KNOWN,
                             roster_n = NA_integer_,
-                            min_roster = AI_CANARY_MIN_ROSTER) {
+                            min_roster = AI_CANARY_MIN_ROSTER, outside = NULL) {
   # "Nothing anywhere on the roster" is only evidence when there is a roster. On
   # a handful of repos a zero means nothing, so the check would be noise. The
   # gate reads the roster, never the detection count: a scan that collapsed to
@@ -681,12 +757,12 @@ ai_canary_check <- function(signals, known = AI_SILENT_CHANNELS_KNOWN,
   if (!is.na(roster_n) && roster_n < min_roster) {
     message(sprintf("AI detection canary: skipped, roster of %d is below %d",
                     roster_n, min_roster))
-    return(invisible(ai_silent_channels(signals, known)[0, , drop = FALSE]))
+    return(invisible(ai_silent_channels(signals, known, outside = outside)[0, , drop = FALSE]))
   }
-  unexplained <- ai_silent_channels(signals, known)
+  unexplained <- ai_silent_channels(signals, known, outside = outside)
   inv <- ai_rule_inventory()
   # Every channel still at zero, recorded or not, read from this run's onsets.
-  measured <- ai_silent_channels(signals, NULL)
+  measured <- ai_silent_channels(signals, NULL, outside = outside)
   recorded_key <- paste(known$tier, known$tool, sep = "\t")
   still <- recorded_key %in% paste(measured$tier, measured$tool, sep = "\t")
   # A channel absent from the silent set is not necessarily detecting. The
@@ -741,8 +817,8 @@ ai_canary_check <- function(signals, known = AI_SILENT_CHANNELS_KNOWN,
 #' Every silent channel, whether recorded or not, so a consumer can say which
 #' zeros were measured and which were never asked. A page that shows "0 repos"
 #' beside a channel nobody could reach is asserting something we do not know.
-ai_silent_channel_table <- function(signals, known = AI_SILENT_CHANNELS_KNOWN) {
-  unexplained <- ai_silent_channels(signals, known)
+ai_silent_channel_table <- function(signals, known = AI_SILENT_CHANNELS_KNOWN, outside = NULL) {
+  unexplained <- ai_silent_channels(signals, known, outside = outside)
   rows <- NULL
   if (nrow(known) > 0) {
     rows <- rbind(rows, data.frame(tier = known$tier, tool = known$tool,
@@ -761,8 +837,8 @@ ai_silent_channel_table <- function(signals, known = AI_SILENT_CHANNELS_KNOWN) {
   # in the published table at all: the allowlist is a claim about a zero, and
   # the zero is gone.
   live <- paste(rows$tier, rows$tool, sep = "\t") %in%
-          paste(ai_silent_channels(signals, NULL)$tier,
-                ai_silent_channels(signals, NULL)$tool, sep = "\t")
+          paste(ai_silent_channels(signals, NULL, outside = outside)$tier,
+                ai_silent_channels(signals, NULL, outside = outside)$tool, sep = "\t")
   rows[live, , drop = FALSE]
 }
 

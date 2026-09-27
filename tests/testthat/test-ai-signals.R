@@ -1105,3 +1105,54 @@ test_that("the bisect reads an ignore file the way the scanner does", {
   expect_false(ignore_text_has_token(".aider.conf.yml\n", ".aider*"))
   expect_true(ignore_text_has_token("!.cursor/environment.json\n", ".cursor"))
 })
+
+.one_pr_node <- function(number, head, created, assoc = "OWNER", cross = FALSE, login = "maintainer", body = "x")
+  list(number = number, createdAt = created, author = list(login = login, `__typename` = "User"),
+       authorAssociation = assoc, isCrossRepository = cross, headRefName = head, body = body)
+
+test_that("a week's findings come from files, ignore lines, pull requests, commits and account counts", {
+  tree <- list(root_entries = c("CLAUDE.md", ".coderabbit.yaml"), github_entries = character(0),
+               gitignore_lines = ".aider*", rbuildignore_lines = character(0))
+  act <- list(prs = .ai_pr_nodes_frame(list(
+                .one_pr_node(9L, "cursor/add-tests-a1b2", "2026-08-28T09:43:30Z", assoc = "NONE", cross = TRUE))),
+              commits = ai_commit("fe5c63c"))
+  acc <- data.frame(tool = "copilot", commits = 3L, newest_commit_date = "2026-09-01T00:00:00Z",
+                    stringsAsFactors = FALSE)
+  f <- assemble_repo_evidence(tree, act, acc, scanned_on = "2026-10-04")
+  expect_equal(names(f), names(.ai_empty_found()))
+  claude <- f[f$marker == "CLAUDE.md", ]
+  expect_equal(claude$onset, "2026-10-04T23:59:59Z"); expect_equal(claude$onset_censored, 1L)
+  expect_equal(f$role[f$tool == "coderabbit"], "review")
+  expect_true("gitignore:.aider*" %in% f$marker)
+  cur <- f[f$tool == "cursor" & f$role == "authoring", ]
+  expect_equal(cur$rule_key, "msg.cursor.made-with"); expect_equal(cur$onset, "2026-03-18T09:27:20Z")
+  expect_equal(cur$onset_censored, 1L)
+  expect_equal(f$role[f$tool == "cursor" & f$tier == "PB"], "outside")
+  cop <- f[f$tool == "copilot", ]
+  expect_equal(cop$tier, "A"); expect_equal(cop$onset, "2026-09-01T00:00:00Z")
+  whole <- assemble_repo_evidence(tree, act, acc, scanned_on = "2026-10-04", whole_history = TRUE)
+  expect_equal(whole$onset_censored[whole$rule_key %in% "msg.cursor.made-with"], 0L)
+})
+
+test_that("review files and outside pull requests never admit a repository on their own", {
+  review_only <- assemble_repo_evidence(list(root_entries = ".coderabbit.yml"))
+  expect_false(repo_has_ai_signal(review_only))
+  outside_only <- assemble_repo_evidence(list(), list(prs = .ai_pr_nodes_frame(list(
+    .one_pr_node(927L, "cursor/kotoba-nanoarrow-binding-4119", "2026-08-28T09:43:30Z", assoc = "NONE", cross = TRUE)))))
+  expect_false(repo_has_ai_signal(outside_only))
+  expect_equal(nrow(build_cheap_rows(cbind(repo_id = "g", outside_only), "2026-10-04")), 0L)
+  rv <- review_rows(review_only, "github.com/o/r", "2026-10-04")
+  expect_equal(rv$tool, "coderabbit"); expect_equal(rv$markers, ".coderabbit.yml"); expect_equal(rv$evidence_tiers, "D")
+})
+
+test_that("rows built from a week's findings carry exact pull request dates and censored file dates", {
+  f <- assemble_repo_evidence(list(root_entries = "CLAUDE.md"), list(prs = .ai_pr_nodes_frame(list(
+    .one_pr_node(2L, "claude/review-package-vignettes-8clehs", "2026-07-15T03:42:49Z")))), scanned_on = "2026-10-04")
+  f$repo_id <- "github.com/temuulene/mongolstats"
+  rows <- build_cheap_rows(f, "2026-10-04")
+  expect_equal(nrow(rows), 1L)
+  expect_equal(rows$first_seen_date, "2026-07-15T03:42:49Z"); expect_equal(rows$first_seen_censored, 0L)
+  expect_setequal(strsplit(rows$evidence_tiers, ",")[[1]], c("D", "PB"))
+  expect_setequal(strsplit(rows$markers, ",")[[1]], c("CLAUDE.md", "pr.claude.branch"))
+  expect_equal(rows$last_confirmed_date, "2026-10-04")
+})
