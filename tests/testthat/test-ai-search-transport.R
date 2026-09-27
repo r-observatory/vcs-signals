@@ -25,7 +25,7 @@ test_that("a spent budget waits until it resets", {
   expect_equal(got$total_count, 2L)
 })
 
-test_that("a wait is capped, jittered, and three refusals in a row are a refusal", {
+test_that("a wait is capped, jittered, and a search still refused after three retries is a refusal", {
   expect_equal(search_wait_s(403L, c(`retry-after` = "600"), 1L, now = 0, rand = function(...) 3), 120)
   expect_equal(search_wait_s(403L, character(0), 1L, now = 0, rand = function(...) 2), 62)
   expect_equal(search_wait_s(502L, character(0), 2L, now = 0, rand = function(...) 0), 30)
@@ -35,6 +35,19 @@ test_that("a wait is capped, jittered, and three refusals in a row are a refusal
   got <- .search(rep(list(.gh_out(403)), AI_SEARCH_RETRIES + 1L), slept)
   expect_true(got$unavailable); expect_true(is.na(got$total_count))
   expect_equal(length(slept$s), AI_SEARCH_RETRIES)
+})
+
+test_that("an unfinished zero sent as a success, or no output at all, is asked again like a server error", {
+  # GitHub answers a search that timed out with a 200 and an unfinished zero: never a zero.
+  unfinished <- .gh_out(200, body = '{"total_count":0,"incomplete_results":true,"items":[]}')
+  slept <- new.env(); slept$s <- numeric(0)
+  got <- .search(list(unfinished, character(0), .gh_out(200, body = .hit_body)), slept)
+  expect_equal(slept$s, c(10, 30))
+  expect_false(got$unavailable); expect_equal(got$total_count, 2L)
+  slept$s <- numeric(0)
+  got <- .search(rep(list(unfinished), AI_SEARCH_RETRIES + 1L), slept)
+  expect_equal(slept$s, c(10, 30, 60))
+  expect_true(got$unavailable); expect_true(is.na(got$total_count))
 })
 
 test_that("gh's header lines keep no carriage return, so a spent budget still waits for its reset", {

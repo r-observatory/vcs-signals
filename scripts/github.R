@@ -898,7 +898,8 @@ parse_search_commit <- function(body_txt) parse_search_commit_hit(body_txt)$date
 #' the message, as parse_search_commit did, left the caller no way to tell those apart,
 #' which is why the trailer channel was never wired up.
 #'
-#' Returns list(date, message, author) with NA fields when there is no hit.
+#' Returns list(date, message, author, total_count, items, unavailable, incomplete). An unfinished
+#' zero (incomplete_results with total_count 0) or a count with no items is returned unavailable.
 parse_search_commit_hit <- function(body_txt) {
   # total_count is the number of commits in this repository matching the query,
   # which is the difference between "this tool has touched this repo" and "this
