@@ -1156,3 +1156,27 @@ test_that("rows built from a week's findings carry exact pull request dates and 
   expect_setequal(strsplit(rows$markers, ",")[[1]], c("CLAUDE.md", "pr.claude.branch"))
   expect_equal(rows$last_confirmed_date, "2026-10-04")
 })
+
+test_that("a week's findings are dated by the oldest match and keep the newest one", {
+  # Newest first, the order GitHub returns commits and pull requests in.
+  commit <- function(oid, at) list(oid = oid, committedDate = at, author = list(name = "p", email = "p@e.org"),
+                                   message = "Fix\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>")
+  act <- list(prs = .ai_pr_nodes_frame(list(.one_pr_node(5L, "claude/tidy-docs", "2026-08-01T00:00:00Z"),
+                                            .one_pr_node(4L, "claude/add-tests", "2026-07-01T00:00:00Z"))),
+              commits = .ai_commit_nodes_frame(list(commit("b2", "2026-09-20T00:00:00Z"),
+                                                    commit("a1", "2026-03-01T00:00:00Z"))))
+  acc <- data.frame(tool = "copilot", commits = 3L, newest_commit_date = "2026-09-01T00:00:00Z",
+                    stringsAsFactors = FALSE)
+  f <- assemble_repo_evidence(list(), act, acc, scanned_on = "2026-10-04")
+  credit <- f[f$tool == "claude" & f$tier == "B", ]
+  expect_setequal(credit$rule_key, c("msg.claude.coauthor", "msg.claude.address"))
+  expect_equal(credit$onset, rep("2026-03-01T00:00:00Z", 2L))
+  expect_equal(credit$newest_at, rep("2026-09-20T00:00:00Z", 2L))
+  expect_equal(credit$onset_censored, c(1L, 1L))
+  pr <- f[f$tool == "claude" & f$tier == "PB", ]
+  expect_equal(pr$marker, "pr.claude.branch")
+  expect_equal(pr$onset, "2026-07-01T00:00:00Z"); expect_equal(pr$newest_at, "2026-08-01T00:00:00Z")
+  expect_equal(pr$onset_censored, 0L)
+  account <- f[f$tool == "copilot", ]
+  expect_equal(account$onset_censored, 1L); expect_equal(account$newest_at, "2026-09-01T00:00:00Z")
+})
