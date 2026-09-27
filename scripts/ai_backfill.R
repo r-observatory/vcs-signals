@@ -315,6 +315,34 @@ contents_shard_stops <- function(n_failed, attempted)
   n_failed >= TREE_DROP_MIN && n_failed >= TREE_DROP_MAX_SHARE * attempted
 
 # ---- cheap pass -------------------------------------------------------------
+# One repository's vcs_dev_tooling row, or NULL when its contents read failed or it is gone.
+.ai_dev_tooling_row <- function(tree, rid, today, cran_links) {
+  if (is.null(tree) || is.na(tree$is_fork)) return(NULL)
+  dv <- classify_dev_tooling(tree$root_entries, tree$github_entries, repo = tree)
+  bad <- attr(dv, "rbuildignore_bad_lines")
+  cmp <- compare_repo_version(dv$repo_desc_package, dv$repo_desc_version,
+                              cran_links[cran_links$repo_id == rid, c("package", "cran_version")])
+  dv$cran_version_at_scan <- cmp$cran_version_at_scan
+  dv$repo_version_vs_cran <- cmp$repo_version_vs_cran
+  dv$repo_id <- rid
+  dv$last_scanned <- today
+  dv$ruleset_version <- DEV_TOOLING_RULESET_VERSION
+  out <- dv[c("repo_id", "last_scanned", "ruleset_version", dev_tooling_columns())]
+  attr(out, "rbuildignore_bad_lines") <- bad
+  out
+}
+
+# Stops the shard when its contents failures say the query itself is broken.
+.ai_shard_stop <- function(failed_df, scanned, i, N) {
+  n_contents <- sum(failed_df$query == "contents")
+  if (!contents_shard_stops(n_contents, scanned)) return(invisible(FALSE))
+  first <- failed_df[failed_df$query == "contents", , drop = FALSE]
+  stop(sprintf(paste0("ai cheap shard %d/%d: the contents read failed for %d of %d repositories, ",
+                      "so the query itself is broken. First: %s. First message: %s"),
+               i, N, n_contents, scanned, paste(utils::head(first$repo_id, 5L), collapse = ", "),
+               first$error[1]), call. = FALSE)
+}
+
 #' Cheap Tier-D marker + PR-agent pass over one even mod-N shard of the roster. Batches
 #' TIER_D_BATCH repos through fetch_tree_markers + fetch_pr_agents, assembles evidence,
 #' and writes only the flagged repos (repo_has_ai_signal) to a two-table partial. A repo
@@ -358,17 +386,10 @@ run_cheap <- function(io, out_dir, roster_path, i, N, batch_size = TIER_D_BATCH)
       tree <- trees[[rid]]
       pr   <- if (is.null(prs)) NULL else prs[[rid]]
       # A failed or gone repository gets no row, so its prior row and last_scanned stand.
-      if (!is.null(tree) && !is.na(tree$is_fork)) {
-        dv <- classify_dev_tooling(tree$root_entries, tree$github_entries, repo = tree)
+      dv <- .ai_dev_tooling_row(tree, rid, today, cran_links)
+      if (!is.null(dv)) {
         bad_rbi_lines <- bad_rbi_lines + attr(dv, "rbuildignore_bad_lines")
-        cmp <- compare_repo_version(dv$repo_desc_package, dv$repo_desc_version,
-                                    cran_links[cran_links$repo_id == rid, c("package", "cran_version")])
-        dv$cran_version_at_scan <- cmp$cran_version_at_scan
-        dv$repo_version_vs_cran <- cmp$repo_version_vs_cran
-        dv$repo_id <- rid
-        dv$last_scanned <- today
-        dv$ruleset_version <- DEV_TOOLING_RULESET_VERSION
-        dev_rows[[length(dev_rows) + 1L]] <- dv[c("repo_id", "last_scanned", "ruleset_version", dev_tooling_columns())]
+        dev_rows[[length(dev_rows) + 1L]] <- dv
       }
       if (is.null(tree) && is.null(pr)) next            # both channels errored -> deferred
       ev <- assemble_repo_evidence(tree, pr)
@@ -399,14 +420,7 @@ run_cheap <- function(io, out_dir, roster_path, i, N, batch_size = TIER_D_BATCH)
   if (bad_rbi_lines > 0L)
     message(sprintf("ai cheap shard %d/%d: %d .Rbuildignore line(s) did not compile and were skipped",
                     i, N, bad_rbi_lines))
-  n_contents <- sum(failed_df$query == "contents")
-  if (contents_shard_stops(n_contents, scanned)) {
-    first <- failed_df[failed_df$query == "contents", , drop = FALSE]
-    stop(sprintf(paste0("ai cheap shard %d/%d: the contents read failed for %d of %d repositories, ",
-                        "so the query itself is broken. First: %s. First message: %s"),
-                 i, N, n_contents, scanned, paste(utils::head(first$repo_id, 5L), collapse = ", "),
-                 first$error[1]), call. = FALSE)
-  }
+  .ai_shard_stop(failed_df, scanned, i, N)
 }
 
 # ---- gate -------------------------------------------------------------------
