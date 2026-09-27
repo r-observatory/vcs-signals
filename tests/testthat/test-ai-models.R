@@ -204,3 +204,32 @@ test_that("a page that does not hold every hit is marked incomplete", {
   expect_equal(got$window_complete, 0L)
   expect_equal(got$commits, 1L)
 })
+
+test_that("a weekly read adds its new model commits to the stored tally", {
+  m <- function(n, first, last, mode = NULL, after = NA_character_) {
+    r <- data.frame(repo_id = "r", tool = "claude", provider = NA_character_, family = "Opus", version = "4.8",
+                    context_window = NA_character_, commits = n, first_seen = first, last_seen = last,
+                    window_complete = 1L, stringsAsFactors = FALSE)
+    if (!is.null(mode)) { r$mode <- mode; r$read_after <- after }
+    r
+  }
+  through <- "2026-09-20T08:00:00Z"
+  reads <- data.frame(repo_id = "r", commits_read_through = through, stringsAsFactors = FALSE)
+  got <- fold_models(m(10L, "2025-01-01", "2026-09-01"), .ai_empty_models(),
+                     m(2L, "2026-10-02", "2026-10-03", "add", through), rebuilt_repos = character(0), reads = reads)
+  expect_equal(got$commits, 12L); expect_equal(got$first_seen, "2025-01-01"); expect_equal(got$last_seen, "2026-10-03")
+  replaced <- fold_models(m(10L, "2025-01-01", "2026-09-01"), .ai_empty_models(),
+                          m(4L, "2025-02-01", "2026-10-03", "replace"), rebuilt_repos = "r", reads = reads)
+  expect_equal(replaced$commits, 4L)
+  # Counted from another watermark, or by a read to the first commit the read state did not keep: nothing moves.
+  off_chain <- fold_models(m(10L, "2025-01-01", "2026-09-01"), .ai_empty_models(),
+                           m(2L, "2026-10-02", "2026-10-03", "add", "2026-09-13T08:00:00Z"),
+                           rebuilt_repos = character(0), reads = reads)
+  expect_equal(off_chain$commits, 10L)
+  not_kept <- fold_models(m(10L, "2025-01-01", "2026-09-01"), .ai_empty_models(),
+                          m(4L, "2025-02-01", "2026-10-03", "replace"), rebuilt_repos = character(0), reads = reads)
+  expect_equal(not_kept$commits, 10L)
+  expect_error(fold_models(m(10L, "2025-01-01", "2026-09-01"), .ai_empty_models(),
+                           m(2L, "2026-10-02", "2026-10-03", "add", through), rebuilt_repos = character(0)),
+               "reads is NULL")
+})

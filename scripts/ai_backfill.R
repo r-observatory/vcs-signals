@@ -948,105 +948,103 @@ run_deep <- function(io, out_dir, roster_path, i, N,
 }
 
 # ---- merge ------------------------------------------------------------------
-#' Fold every deep shard's vcs_ai_signals partial into the published onset table and
-#' republish. Seeds the working DB from the recent shard (which already carries the prior
-#' vcs_ai_signals; no explicit protect_history_pull here, since vcs_ai_signals has no year
-#' component and publish()'s own internal pull handles the change-gate), then:
-#' reconcile_ai_identity carries a no-longer-active slug's onsets onto the canonical repo_id
-#' of its node_id and fills empty rows from an active sibling slug (PK-safe, before the
-#' reduce); drop_unanchored_confirmations discards confirmations with no row to confirm;
-#' ai_onset_reducer merges the reconciled prior set with the
-#' incoming partials by the six column rules; the working vcs_ai_signals is
-#' DELETE-and-rewritten with the fully-reduced set (never blanket-deleted and re-detected -
-#' the rows are immutable, the DELETE only follows the R-side reduce); the summary rollups
-#' are rebuilt so ai_* columns reflect the merge. Publishes with touched_years =
-#' character(0), so no year shard is re-exported.
+#' Fold the week's search shards and weekly read partials into every published AI table and republish.
+#' Both stops run after publishing, so an alarm costs a red build and not a week of stale data.
 run_merge <- function(io, out_dir, parts_dir) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   working_path <- file.path(out_dir, "_ai_merge_working.db")
   seed <- seed_working_db(io, out_dir, working_path)
-
   con <- DBI::dbConnect(RSQLite::SQLite(), working_path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   ensure_repo_schema(con)
   ensure_series_schema(con)
-
-  # No explicit protect_history_pull here (unlike backfill.R::run_merge): vcs_ai_signals
-  # has no year component, so there is no year-shard content to fold in or protect;
-  # seed_working_db already carries the prior vcs_ai_signals via the recent shard, and
-  # publish() makes its own protect_history_pull whenever the release this merge was
-  # seeded from lists any assets, which is the pull the change-gate and the regression
-  # gate compare against.
-  # An explicit call here would just download the full published history twice.
   reconcile_ai_identity(con)
+  today <- format(Sys.Date())
+  have <- function(t, empty) if (DBI::dbExistsTable(con, t)) .ai_bind_like(empty, list(DBI::dbReadTable(con, t))) else empty
+  put <- function(t, df) {
+    DBI::dbExecute(con, sprintf('DELETE FROM "%s"', t))
+    if (nrow(df)) DBI::dbWriteTable(con, t, df, append = TRUE)
+  }
+  deep <- list.files(parts_dir, pattern = "^vcs-ai-shard-.*\\.db$", full.names = TRUE)
+  cheap <- list.files(parts_dir, pattern = "^vcs-ai-cheap-.*\\.db$", full.names = TRUE)
+  from <- function(paths, t, empty) .ai_bind_like(empty, lapply(paths, .ai_part_table, table = t))
+  # A cheap partial from before the weekly read has no read state, and its findings carry no dates.
+  current <- cheap[vapply(cheap, function(p) !is.null(.ai_part_table(p, "repo_reads")), logical(1))]
+  message(sprintf("ai merge: %d search shard(s), %d weekly read partial(s), %d from older code left out",
+                  length(deep), length(cheap), length(cheap) - length(current)))
 
-  prior <- if (DBI::dbExistsTable(con, "vcs_ai_signals")) DBI::dbReadTable(con, "vcs_ai_signals")
-           else .ai_empty_signals()
+  prior <- have("vcs_ai_signals", .ai_empty_signals())
+  found <- from(current, "evidence", cbind(repo_id = character(0), .ai_empty_found()))
+  found$role[is.na(found$role)] <- "authoring"
+  incoming <- rbind(from(deep, "vcs_ai_signals", .ai_empty_signals()), build_cheap_rows(found, today))
 
-  parts <- list.files(parts_dir, pattern = "^vcs-ai-shard-.*\\.db$", full.names = TRUE)
-  part_rows <- lapply(parts, function(p) {
-    pcon <- DBI::dbConnect(RSQLite::SQLite(), p)
-    on.exit(DBI::dbDisconnect(pcon), add = TRUE)
-    if (!DBI::dbExistsTable(pcon, "vcs_ai_signals")) return(.ai_empty_signals())
-    DBI::dbReadTable(pcon, "vcs_ai_signals")
-  })
-  incoming <- if (length(part_rows)) do.call(rbind, part_rows) else .ai_empty_signals()
-  # A confirmation whose key the prior set does not hold would otherwise be written
-  # out as a row carrying only a date, and nothing afterwards would ever fill it.
+  # A weekly add counts from the watermark stored before this run, so the log and models read that one.
+  reads_prior <- have("vcs_ai_repo_reads", .ai_empty_reads())
+  reads_in <- from(cheap, "repo_reads", cbind(.ai_empty_reads(), reached_first = integer()))
+  reads <- fold_repo_reads(reads_prior, reads_in)
+  rebuilt <- rebuilt_log_repos(reads, reads_in)
+  counted <- !is.na(reads_in$accounts_counted_on)
+  counts <- fold_account_counts(have("vcs_ai_account_counts", .ai_empty_counts()),
+                                rbind(from(cheap, "account_counts", .ai_empty_counts()),
+                                      from(deep, "account_counts", .ai_empty_counts())),
+                                counted_repos = stats::setNames(reads_in$accounts_counted_on[counted],
+                                                                reads_in$repo_id[counted]))
+  log_in <- cbind(.ai_empty_log(), mode = character(), read_after = character())
+  log <- fold_search_log(have("vcs_ai_search_log", .ai_empty_log()),
+                         rbind(from(cheap, "search_log", log_in), from(deep, "search_log", log_in)),
+                         rebuilt_repos = rebuilt, reads = reads_prior)
+  review <- fold_review_rows(have("vcs_ai_review_signals", .ai_empty_review()), from(cheap, "review", .ai_empty_review()))
+  outside <- fold_outside_prs(have("vcs_ai_outside_prs", .ai_empty_outside()), from(cheap, "outside_prs", .ai_empty_outside()))
+
+  moved <- ai_reclassify_rows(prior, found, log, reads, outside)
+  prior <- moved$signals
+  review <- fold_review_rows(review, moved$review)
+
   n_incoming <- nrow(incoming)
   incoming <- drop_unanchored_confirmations(prior, incoming)
   if (nrow(incoming) < n_incoming)
-    message(sprintf("ai merge: dropped %d confirmation row(s) with no prior row to confirm",
-                    n_incoming - nrow(incoming)))
-
+    message(sprintf("ai merge: dropped %d row(s) with no prior row to confirm", n_incoming - nrow(incoming)))
   reduced <- ai_onset_reducer(prior, incoming)
-  DBI::dbExecute(con, "DELETE FROM vcs_ai_signals")
-  if (nrow(reduced) > 0) DBI::dbWriteTable(con, "vcs_ai_signals", reduced, append = TRUE)
+  reduced <- derive_assisted_counts(derive_authored_counts(reduced, counts, reads), log, reads)
+  review <- derive_review_counts(review, log)
 
-  # Every one of the detection bugs was visible here as a channel at exactly zero
-  # across the roster, and nothing looked. This looks, per (tier, tool): a
-  # tier-level check would have seen tier A's 103 detections and called it healthy
-  # while four of its six identities had never produced one.
-  roster_n <- tryCatch(
-    DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM repos")$n[1], error = function(e) NA_integer_)
-  canary_unexplained <- ai_canary_check(reduced, roster_n = roster_n)
+  put("vcs_ai_signals", reduced)
+  put("vcs_ai_repo_reads", reads)
+  put("vcs_ai_account_counts", counts)
+  put("vcs_ai_search_log", log)
+  put("vcs_ai_review_signals", review)
+  put("vcs_ai_outside_prs", outside)
 
-  # The finding is published, not withheld. Failing before publish would hold
-  # back the dev-tooling and summary data too, none of which is implicated by a
-  # tool channel going quiet; a week of collateral staleness is a worse outcome
-  # than a red build beside fresh data. The run still fails, at the end.
-  silent_tbl <- ai_silent_channel_table(reduced)
-  DBI::dbExecute(con, "DELETE FROM vcs_ai_silent_channels")
-  if (nrow(silent_tbl) > 0)
-    DBI::dbWriteTable(con, "vcs_ai_silent_channels", silent_tbl, append = TRUE)
+  roster_n <- tryCatch(DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM repos")$n[1], error = function(e) NA_integer_)
+  canary_unexplained <- ai_canary_check(reduced, roster_n = roster_n, outside = outside)
+  put("vcs_ai_silent_channels", ai_silent_channel_table(reduced, outside = outside))
 
-  # Model rows, replaced wholesale from the shards that carry them. Not reduced
-  # like onsets: a model tally describes the window that was examined this run,
-  # and folding it into an older window would produce a count belonging to
-  # neither. A repo not covered this run keeps its previous rows.
-  model_parts <- lapply(parts, function(p) {
-    pcon <- DBI::dbConnect(RSQLite::SQLite(), p)
-    on.exit(DBI::dbDisconnect(pcon), add = TRUE)
-    if (!DBI::dbExistsTable(pcon, "vcs_ai_models")) return(.ai_empty_models())
-    DBI::dbReadTable(pcon, "vcs_ai_models")
-  })
-  models_in <- if (length(model_parts)) do.call(rbind, model_parts) else .ai_empty_models()
-  if (nrow(models_in) > 0) {
-    touched <- unique(models_in$repo_id)
-    ph <- paste(rep("?", length(touched)), collapse = ",")
-    DBI::dbExecute(con, sprintf("DELETE FROM vcs_ai_models WHERE repo_id IN (%s)", ph),
-                   params = as.list(touched))
-    DBI::dbWriteTable(con, "vcs_ai_models", models_in, append = TRUE)
-  }
-  message(sprintf("ai merge: %d model row(s) across %d repo(s)",
-                  nrow(models_in), length(unique(models_in$repo_id))))
+  models <- fold_models(have("vcs_ai_models", .ai_empty_models()), from(deep, "vcs_ai_models", .ai_empty_models()),
+                        from(cheap, "models", cbind(.ai_empty_models(), mode = character(), read_after = character())),
+                        rebuilt_repos = rebuilt, reads = reads_prior)
+  put("vcs_ai_models", models)
+  message(sprintf("ai merge: %d model row(s) across %d repo(s)", nrow(models), length(unique(models$repo_id))))
 
-  # Republish the rule inventory so a consumer can state each tier's breadth
-  # from data rather than asserting it.
   inv <- ai_rule_inventory()
   inv$ruleset_version <- AI_RULESET_VERSION
-  DBI::dbExecute(con, "DELETE FROM vcs_ai_rule_inventory")
-  DBI::dbWriteTable(con, "vcs_ai_rule_inventory", inv, append = TRUE)
+  put("vcs_ai_rule_inventory", inv)
+  put("vcs_ai_search_coverage", build_search_coverage(log, reads))
+  record_ruleset_history(con, today, AI_RULESET_VERSION, AI_RULESET_CHANGE_KEYS)
+  # Dated once the three tables enumerate guards hold rows, so an empty first publish is never read as a loss.
+  if (nrow(reads) && nrow(log) && nrow(counts))
+    DBI::dbExecute(con, "INSERT OR IGNORE INTO pipeline_state (key, value) VALUES ('ai_state_tables_since', ?)",
+                   params = list(today))
+  # A full gate's campaign date is kept until every flagged repository has been asked since.
+  camp <- unique(stats::na.omit(from(deep, "campaign", data.frame(since = character(), stringsAsFactors = FALSE))$since))
+  stored <- DBI::dbGetQuery(con, "SELECT value FROM pipeline_state WHERE key = 'ai_campaign_since'")$value
+  since <- if (length(stored)) stored[1] else if (length(camp)) camp[1] else NA_character_
+  if (!length(stored) && !is.na(since))
+    DBI::dbExecute(con, "INSERT INTO pipeline_state (key, value) VALUES ('ai_campaign_since', ?)", params = list(since))
+  flag_ids <- unique(from(cheap, "flagged", .ai_empty_flagged())$repo_id)
+  if (!is.na(since) && length(flag_ids) && campaign_finished(flag_ids, log, reads, since)) {
+    DBI::dbExecute(con, "DELETE FROM pipeline_state WHERE key = 'ai_campaign_since'")
+    message(sprintf("ai merge: the campaign since %s has asked every flagged repository", since))
+  }
   DBI::dbExecute(con, "DELETE FROM vcs_dev_tooling_rules")
   DBI::dbWriteTable(con, "vcs_dev_tooling_rules", dev_tooling_rules_table(), append = TRUE)
 
@@ -1100,9 +1098,11 @@ run_merge <- function(io, out_dir, parts_dir) {
   active_n <- tryCatch(DBI::dbGetQuery(con,
     "SELECT COUNT(*) n FROM repos WHERE host = 'github' AND status = 'active'")$n[1],
     error = function(e) NA_integer_)
-  message(sprintf("ai merge: %d repositories failed a read this week (contents %d) of %s on the roster",
-                  length(unique(fails$repo_id)), length(unique(fails$repo_id[fails$query == "contents"])),
-                  active_n))
+  per_doc <- function(q) length(unique(fails$repo_id[fails$query == q]))
+  message(sprintf(paste0("ai merge: %d repositories failed a read this week (contents %d, activity %d, ",
+                         "accounts %d, walk %d) of %s on the roster"),
+                  length(unique(fails$repo_id)), per_doc("contents"), per_doc("activity"), per_doc("accounts"),
+                  per_doc("walk"), active_n))
   failure_stop <- scan_failure_stop_message(fails, active_n)
 
   message(sprintf("ai merge: %d prior, %d incoming, %d reduced onset rows",
@@ -1113,7 +1113,7 @@ run_merge <- function(io, out_dir, parts_dir) {
   # Raised after the data is out, so the alarm costs a red build and not a
   # week of stale dev-tooling rows.
   canary_stop <- if (nrow(canary_unexplained) > 0)
-    sprintf(paste0("AI detection canary: %d channel(s) detected nothing on the whole roster ",
+    sprintf(paste0("Silent-search check: %d search(es) matched nothing in any scanned repository ",
                    "and are not recorded in AI_SILENT_CHANNELS_KNOWN: %s. ",
                    "Either the rule is broken or the zero is real; record which, with a date."),
             nrow(canary_unexplained),

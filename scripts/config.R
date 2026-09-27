@@ -723,6 +723,9 @@ AI_COPILOT_VSCODE_FALSE_WINDOW <- c("2026-04-22", "2026-05-06")
 AI_MARKER_PREDECESSORS <- c(".cursor" = ".cursorrules")
 # Detection ruleset version, surfaced by the viewer methods note.
 AI_RULESET_VERSION <- "2026-09-19"
+# The page note a ruleset's first publish carries, by ruleset version. A version not
+# named here carries none.
+AI_RULESET_CHANGE_KEYS <- stats::setNames("ungated-weekly-read", AI_RULESET_UNGATED)
 # Tie-break order between ways a tool was found (lower sorts first).
 TIER_PRIORITY <- c(A = 1L, B = 2L, C = 3L, PR = 4L, PB = 5L, D = 6L)
 

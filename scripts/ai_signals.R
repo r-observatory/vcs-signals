@@ -1160,6 +1160,42 @@ fold_outside_prs <- function(prior, incoming) {
   all[!duplicated(paste(all$repo_id, all$pr_number, all$tool, sep = "\r")), , drop = FALSE]
 }
 
+#' Model tallies after this run: a search shard's rows replace its repositories' rows, a read to the first commit in
+#' rebuilt_repos replaces them again, and a weekly read adds its new commits only on the stored watermark. Pure.
+fold_models <- function(prior, deep, cheap, rebuilt_repos = NULL, reads = NULL) {
+  proto <- .ai_empty_models()
+  out <- .ai_bind_like(proto, list(prior))
+  deep <- .ai_bind_like(proto, list(deep))
+  if (nrow(deep)) out <- rbind(out[!(out$repo_id %in% deep$repo_id), , drop = FALSE], deep)
+  if (!is.null(cheap) && nrow(cheap)) {
+    col <- function(cn) if (cn %in% names(cheap)) as.character(cheap[[cn]]) else rep(NA_character_, nrow(cheap))
+    is_add <- col("mode") %in% "add"
+    is_replace <- col("mode") %in% "replace"
+    if (any(is_add) && is.null(reads))
+      stop("fold_models: a weekly read's tallies need the stored read state, and reads is NULL")
+    if (any(is_replace) && is.null(rebuilt_repos))
+      stop("fold_models: a read to the first commit needs rebuilt_repos, and it is NULL")
+    rep_rows <- .ai_bind_like(proto, list(cheap[is_replace & cheap$repo_id %in% rebuilt_repos, , drop = FALSE]))
+    if (nrow(rep_rows)) out <- rbind(out[!(out$repo_id %in% rep_rows$repo_id), , drop = FALSE], rep_rows)
+    add <- .ai_bind_like(proto, list(cheap[is_add, , drop = FALSE]))
+    after <- col("read_after")[is_add]
+    rd <- .ai_bind_like(.ai_empty_reads(), list(reads))
+    through <- rd$commits_read_through[match(add$repo_id, rd$repo_id)]
+    # Counted from any other watermark, the commits are in the tally already or belong to a read the state dropped.
+    same <- (is.na(after) & is.na(through)) | (!is.na(after) & !is.na(through) & after == through)
+    key <- c("repo_id", "tool", "provider", "family", "version", "context_window")
+    for (i in which(add$repo_id %in% rd$repo_id & same)) {
+      k <- which(.gate_key(out, key) == .gate_key(add[i, , drop = FALSE], key))
+      if (!length(k)) { out <- rbind(out, add[i, , drop = FALSE]); next }
+      out$commits[k] <- out$commits[k] + add$commits[i]
+      out$first_seen[k] <- .ai_earliest_chr(c(out$first_seen[k], add$first_seen[i]))
+      out$last_seen[k] <- .ai_latest_chr(c(out$last_seen[k], add$last_seen[i]))
+    }
+  }
+  rownames(out) <- NULL
+  out
+}
+
 #' Commit-credit (msg.) rules with their tool, revision and search mode. Pure.
 .ai_credit_rules <- function()
   do.call(rbind, lapply(AI_TRAILER_PATTERNS, function(r)
