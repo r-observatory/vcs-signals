@@ -71,7 +71,7 @@ test_that("coverage counts the repositories each search reached, apart from whol
   cc <- cov[cov$rule_key == "msg.claude.coauthor", ]
   expect_equal(c(cc$repos_asked, cc$repos_hit, cc$repos_refused, cc$repos_read_whole), c(2L, 1L, 1L, 1L))
   au <- cov[cov$rule_key == "author.claude", ]
-  expect_equal(c(au$repos_asked, au$repos_read_whole), c(1L, 0L))
+  expect_equal(c(au$repos_asked, au$repos_read_whole), c(1L, 1L))
   expect_equal(au$last_asked_on, "2026-10-06")
   expect_setequal(cov$rule_key, .ai_coverage_rules()$rule_key)
   expect_equal(cov$tool[cov$rule_key == "msg.any.assisted-by"], "any")
@@ -79,6 +79,24 @@ test_that("coverage counts the repositories each search reached, apart from whol
   expect_equal(cov$channel[cov$rule_key == "review.copilot.suggestion"], "review-credit")
   never <- cov[cov$rule_key == "msg.opencode.address", ]
   expect_equal(never$repos_asked, 0L); expect_true(is.na(never$last_asked_on))
+})
+
+test_that("a repository read to its first commit counts for the author and review searches too", {
+  seen <- .cov_log("w1", "review.copilot.suggestion", "hit", on = "2026-10-11"); seen$source <- "read"
+  log <- rbind(seen, .cov_log("w1", "author.noreply@anthropic.com", "none", on = "2026-10-11"),
+               .cov_log("r1", "author.noreply@anthropic.com", "hit", on = "2026-10-06"))
+  # r1's later read is not whole, so its date must not count.
+  reads <- .ai_bind_like(.ai_empty_reads(), list(data.frame(
+    repo_id = c("w1", "r1"), commits_history_complete = c(1L, 0L), commits_ruleset = AI_RULESET_VERSION,
+    commits_read_on = c("2026-10-11", "2026-10-12"), stringsAsFactors = FALSE)))
+  cov <- build_search_coverage(log, reads)
+  rv <- cov[cov$rule_key == "review.copilot.suggestion", ]
+  expect_equal(c(rv$repos_asked, rv$repos_hit, rv$repos_read_whole), c(0L, 0L, 1L))
+  expect_equal(rv$last_asked_on, "2026-10-11")
+  au <- cov[cov$rule_key == "author.claude", ]
+  expect_equal(c(au$repos_asked, au$repos_hit, au$repos_read_whole), c(1L, 1L, 1L))
+  expect_equal(au$last_asked_on, "2026-10-11")
+  expect_true(all(cov$repos_read_whole == 1L))
 })
 
 .mk_cov <- function(keys) {

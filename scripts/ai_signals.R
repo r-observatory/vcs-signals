@@ -1267,12 +1267,14 @@ derive_review_counts <- function(review, log) {
 }
 
 #' How far each search has reached, one row per rule and zeros for one never asked. A repository
-#' whose whole history was read under this ruleset counts apart from those asked. Pure.
+#' whose whole history was read under this ruleset counts apart from those asked, dated by its read. Pure.
 build_search_coverage <- function(log, reads, ruleset = AI_RULESET_VERSION) {
   rules <- .ai_coverage_rules()
   log <- .ai_bind_like(.ai_empty_log(), list(log))
   reads <- .ai_bind_like(.ai_empty_reads(), list(reads))
-  whole <- unique(reads$repo_id[reads$commits_history_complete %in% 1L & reads$commits_ruleset %in% ruleset])
+  wr <- reads[reads$commits_history_complete %in% 1L & reads$commits_ruleset %in% ruleset, , drop = FALSE]
+  whole <- unique(wr$repo_id)
+  whole_on <- .ai_latest_chr(wr$commits_read_on)
   by_addr <- do.call(rbind, lapply(AI_ACCOUNTS, function(a) data.frame(
     key = paste0("author.", c(a$graphql, a$linked)), tool_key = paste0("author.", a$tool),
     stringsAsFactors = FALSE)))
@@ -1284,13 +1286,13 @@ build_search_coverage <- function(log, reads, ruleset = AI_RULESET_VERSION) {
     asked <- g[g$source %in% "search" & g$rule_rev %in% r$rule_rev & g$outcome %in% c("hit", "none") &
                !(g$repo_id %in% whole), , drop = FALSE]
     refused <- g[g$outcome %in% "refused", , drop = FALSE]
-    read_whole <- if (r$channel %in% c("commit-credit", "commit-author-name")) length(whole) else 0L
+    # The read checks every commit's author address and review credit too, so it answers every channel.
     data.frame(rule_key = r$rule_key, tool = r$tool, channel = r$channel, rule_rev = r$rule_rev,
                repos_asked = length(unique(asked$repo_id)),
                repos_hit = length(unique(asked$repo_id[asked$outcome == "hit"])),
                repos_refused = length(unique(refused$repo_id)),
-               repos_read_whole = read_whole,
-               last_asked_on = .ai_latest_chr(c(asked$asked_on, refused$asked_on)),
+               repos_read_whole = length(whole),
+               last_asked_on = .ai_latest_chr(c(asked$asked_on, refused$asked_on, whole_on)),
                stringsAsFactors = FALSE)
   }))
 }
