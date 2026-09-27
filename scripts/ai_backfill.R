@@ -11,8 +11,8 @@
 #                list, and on a full gate work within the campaign (one job)
 #   gate-incremental -> write the same list without a campaign (the weekly gate used by
 #                .github/workflows/ai-weekly.yml in place of gate)
-#   deep      -> commit-history onset scan over one mod-N shard of the flagged roster,
-#                build vcs_ai_signals detail rows (matrix job)
+#   deep      -> ask the shard's share of the week's search list and write its dated rows,
+#                search log, account counts and campaign (matrix job)
 #   merge     -> reconcile node_id identity, reduce prior+incoming onsets, rebuild the
 #                summary rollups, and republish (one job)
 if (!exists("STARGAZER_PAGE"))       source("scripts/config.R")
@@ -815,11 +815,8 @@ export_ai_shard <- function(path, rows, model_rows = NULL, extra = list()) {
   build_ai_detail(rid, guarded, onsets, today)
 }
 
-#' The search pass over one mod-N shard of the flagged roster. Works through the gate's
-#' list most urgent first, within AI_DEEP_BUDGET_S and the point reserve: dating a tool
-#' (its files' history and, where its account committed, its first commit), counting a
-#' REST-only address, and asking commit searches. Every search is logged, refusals
-#' included, and counts are left for the merge to derive from the log.
+#' Works the gate's list most urgent first, so a stop at the budget or the point reserve leaves
+#' only the least urgent items for the next run, and logs every answer so the merge derives the counts.
 run_deep <- function(io, out_dir, roster_path, i, N,
                      marker_delay = BACKFILL_DELAY_S, search_delay = SEARCH_DELAY_S) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
@@ -841,7 +838,7 @@ run_deep <- function(io, out_dir, roster_path, i, N,
   search <- function(repo, q) tryCatch(io$search_hit(repo$owner, repo$name, q, search_delay),
                                        error = function(e) list(date = NA_character_, unavailable = TRUE))
   deadline <- Sys.time() + AI_DEEP_BUDGET_S
-  stopped_early <- FALSE; done <- 0L
+  stopped_early <- FALSE; done_why <- character(0)
   for (k in seq_len(nrow(work))) {
     if (Sys.time() >= deadline) {
       stopped_early <- TRUE
@@ -849,13 +846,17 @@ run_deep <- function(io, out_dir, roster_path, i, N,
                       i, N, k - 1L, nrow(work), AI_DEEP_BUDGET_S / 60))
       break
     }
-    rl <- graphql_rate_remaining(io)
-    if (rl < AI_POINT_RESERVE) {
-      message(sprintf("ai deep shard %d/%d: graphql rate remaining (%s) below reserve (%d); pausing after %d of %d items",
-                      i, N, rl, AI_POINT_RESERVE, k - 1L, nrow(work)))
-      break
-    }
     it <- work[k, ]; rid <- it$repo_id
+    # Only dating spends GraphQL points, and a failed probe reads as none left and pauses the
+    # shard, so the reserve is checked before a dating item only.
+    if (identical(it$reason, "onset")) {
+      rl <- graphql_rate_remaining(io)
+      if (rl < AI_POINT_RESERVE) {
+        message(sprintf("ai deep shard %d/%d: graphql rate remaining (%s) below reserve (%d); pausing after %d of %d items",
+                        i, N, rl, AI_POINT_RESERVE, k - 1L, nrow(work)))
+        break
+      }
+    }
     repo <- flagged[flagged$repo_id == rid, , drop = FALSE][1, ]
     s <- state[[rid]] %||% list(tools = character(0), marker_dates = list(), exact_ignores = character(0), extra = NULL)
     add_extra <- function(tool, tier, marker, date, confirmed)
@@ -916,7 +917,7 @@ run_deep <- function(io, out_dir, roster_path, i, N,
       }
     }
     state[[rid]] <- s
-    done <- done + 1L
+    done_why <- c(done_why, it$reason)
   }
   rows <- .ai_bind_like(.ai_empty_signals(), lapply(names(state), function(rid)
     .ai_deep_rows(rid, state[[rid]], evidence, flagged[flagged$repo_id == rid, , drop = FALSE][1, ], today)))
@@ -926,8 +927,8 @@ run_deep <- function(io, out_dir, roster_path, i, N,
                   extra = list(search_log = log_df, account_counts = .ai_bind_like(.ai_empty_counts(), counts),
                                campaign = .ai_bind_like(data.frame(since = character(), stringsAsFactors = FALSE),
                                                         list(fr$campaign))))
-  by_reason <- table(factor(work$reason[seq_len(done)], levels = names(AI_WORK_PRIORITY)))
-  message(sprintf("ai deep shard %d/%d: %d item(s) done (%s)", i, N, done,
+  by_reason <- table(factor(done_why, levels = names(AI_WORK_PRIORITY)))
+  message(sprintf("ai deep shard %d/%d: %d item(s) done (%s)", i, N, length(done_why),
                   paste(sprintf("%s %d", names(by_reason), as.integer(by_reason)), collapse = ", ")))
   # Asked, matched, none and refused for each reason, as the shard's own record of its searches.
   for (rs in intersect(names(AI_WORK_PRIORITY), unique(why))) {

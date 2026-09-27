@@ -1096,6 +1096,7 @@ test_that("run_deep counts a refused Tier-A search instead of reading it as an a
   scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db"))
   on.exit(DBI::dbDisconnect(scon))
   lg <- DBI::dbReadTable(scon, "search_log")
+  expect_setequal(lg$rule_key[startsWith(lg$rule_key, "author.")], .ai_author_keys("claude"))
   expect_true(all(lg$outcome[startsWith(lg$rule_key, "author.")] == "refused"))
   expect_true(all(is.na(lg$total_count[lg$outcome == "refused"])))
 })
@@ -1646,4 +1647,46 @@ test_that("a credit search GitHub cut short is logged as incomplete, and its mod
   expect_equal(lg$outcome, "hit"); expect_equal(lg$incomplete, 1L); expect_equal(lg$total_count, 1L)
   # One commit on the page and one counted still is not the whole tally when GitHub stopped short.
   expect_equal(DBI::dbReadTable(con, "vcs_ai_models")$window_complete, 0L)
+})
+
+test_that("a commit search is asked below the point reserve, since only dating reads GraphQL", {
+  out <- tempfile("deep_"); dir.create(out)
+  gh <- "41898282+claude[bot]@users.noreply.github.com"
+  ev <- cbind(repo_id = "github.com/d-morrison/snapr", .ai_found("claude", "D", "CLAUDE.md"))
+  work <- data.frame(repo_id = "github.com/d-morrison/snapr", tool = "claude",
+                     rule_key = c(paste0("account.", gh), "msg.claude.coauthor"),
+                     reason = c("account-count", "never-asked"), priority = c(2L, 8L), stringsAsFactors = FALSE)
+  probes <- 0L; asked <- character(0)
+  io <- list(
+    graphql = function(q) { probes <<- probes + 1L
+      list(data = list(rateLimit = list(remaining = 200, resetAt = "2026-10-04T00:00:00Z"))) },
+    search_hit = function(owner, name, query, delay = 0) { asked <<- c(asked, query)
+      list(date = NA_character_, message = NA_character_, author = NA_character_, total_count = 0L,
+           items = data.frame(date = character(), message = character()), unavailable = FALSE) })
+  msgs <- testthat::capture_messages(
+    run_deep(io, out, .deep_roster(out, ev, work), 0, 1, marker_delay = 0, search_delay = 0))
+  expect_equal(probes, 0L)
+  expect_equal(length(asked), 2L)
+  expect_false(any(grepl("below reserve", msgs, fixed = TRUE)))
+  con <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-0.db")); on.exit(DBI::dbDisconnect(con))
+  expect_setequal(DBI::dbReadTable(con, "search_log")$outcome, "none")
+})
+
+test_that("the closing tally names the reasons of the items done, not their places in the list", {
+  out <- tempfile("deep_"); dir.create(out)
+  ev <- cbind(repo_id = "github.com/d-morrison/snapr", .ai_found("claude", "D", "CLAUDE.md"))
+  # A key this code does not know is skipped, so the one item done is the second in the list.
+  work <- data.frame(repo_id = "github.com/d-morrison/snapr", tool = "claude",
+                     rule_key = c("msg.nobody.gone", "msg.claude.coauthor"),
+                     reason = c("re-ask", "never-asked"), priority = c(5L, 8L), stringsAsFactors = FALSE)
+  io <- .no_history_io(function(owner, name, query, delay = 0)
+    list(date = NA_character_, message = NA_character_, author = NA_character_, total_count = 0L,
+         items = data.frame(date = character(), message = character()), unavailable = FALSE))
+  msgs <- testthat::capture_messages(
+    run_deep(io, out, .deep_roster(out, ev, work), 0, 1, marker_delay = 0, search_delay = 0))
+  tally <- grep("item(s) done", msgs, fixed = TRUE, value = TRUE)
+  expect_length(tally, 1L)
+  expect_match(tally, "1 item(s) done", fixed = TRUE)
+  expect_match(tally, "re-ask 0", fixed = TRUE)
+  expect_match(tally, "never-asked 1", fixed = TRUE)
 })
