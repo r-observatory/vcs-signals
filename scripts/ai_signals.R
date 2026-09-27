@@ -1297,6 +1297,73 @@ build_search_coverage <- function(log, reads, ruleset = AI_RULESET_VERSION) {
   }))
 }
 
+# The stored values that name a file or an ignore line, not an account, a credit or a pull request.
+.ai_d_values <- function(m) m[!(m %in% c("A", "B", "C", "PR")) & !grepl("^(msg|name|pr)\\.", m)]
+
+#' Rows the published table holds that this ruleset files elsewhere: CodeRabbit and a
+#' review-only .gemini folder go to the review table, a Gemini credit that both Gemini
+#' searches now answer none for is dropped, and a row found only through pull requests a
+#' tool's account opened, which the full walk found only from outside the project since
+#' it began, is removed. A row that loses a code loses its date, since no per-code date
+#' was kept, and the gate asks for it again. Idempotent. Pure apart from its log lines.
+ai_reclassify_rows <- function(prior, cheap, log, reads, outside) {
+  prior <- .ai_align_signals(prior)
+  log <- .ai_bind_like(.ai_empty_log(), list(log))
+  reads <- .ai_bind_like(.ai_empty_reads(), list(reads))
+  outside <- .ai_bind_like(.ai_empty_outside(), list(outside))
+  moved <- c(coderabbit = 0L, gemini_review_folder = 0L, gemini_review_credit = 0L, pr_superseded = 0L)
+  review <- list()
+  keep <- rep(TRUE, nrow(prior)); lost <- rep(FALSE, nrow(prior))
+  to_review <- function(i, tool, tiers, markers) review[[length(review) + 1L]] <<- data.frame(
+    repo_id = prior$repo_id[i], tool = tool, first_seen_date = prior$first_seen_date[i],
+    first_seen_censored = as.integer(prior$first_seen_censored[i]), evidence_tiers = tiers, markers = markers,
+    assisted_commits = NA_integer_, assisted_measured_on = NA_character_,
+    last_confirmed_date = prior$last_confirmed_date[i], stringsAsFactors = FALSE)
+  set_row <- function(i, tiers, markers) {
+    had <- .ai_split_tiers(prior$evidence_tiers[i])
+    prior$evidence_tiers[i] <<- if (length(tiers)) paste(sort(tiers), collapse = ",") else NA_character_
+    prior$markers[i] <<- if (length(markers)) paste(sort(markers), collapse = ",") else NA_character_
+    if (!length(tiers)) keep[i] <<- FALSE else if (length(tiers) < length(had)) lost[i] <<- TRUE
+  }
+  for (i in which(prior$tool == "coderabbit")) {
+    to_review(i, "coderabbit", prior$evidence_tiers[i], prior$markers[i])
+    keep[i] <- FALSE; moved[["coderabbit"]] <- moved[["coderabbit"]] + 1L
+  }
+  review_folder <- if (is.null(cheap) || !nrow(cheap)) character(0) else
+    unique(cheap$repo_id[cheap$role %in% "review" & cheap$tool == "gemini-code-assist" & cheap$marker == ".gemini"])
+  gem_revs <- vapply(c("msg.gemini.coauthor", "msg.gemini.bot"), function(k)
+    Find(function(r) r$key == k, AI_TRAILER_PATTERNS)$rev, integer(1))
+  for (i in which(keep & prior$tool == "gemini")) {
+    tiers <- .ai_split_tiers(prior$evidence_tiers[i]); m <- .ai_split_tiers(prior$markers[i])
+    if (prior$repo_id[i] %in% review_folder && ".gemini" %in% m) {
+      m <- setdiff(m, ".gemini")
+      if (!length(.ai_d_values(m))) tiers <- setdiff(tiers, "D")
+      to_review(i, "gemini-code-assist", "D", ".gemini")
+      set_row(i, tiers, m); moved[["gemini_review_folder"]] <- moved[["gemini_review_folder"]] + 1L
+    }
+    if (!keep[i] || !("B" %in% tiers)) next
+    lg <- log[log$repo_id == prior$repo_id[i] & log$rule_key %in% names(gem_revs), , drop = FALSE]
+    if (nrow(lg) == 2L && all(lg$rule_rev == gem_revs[lg$rule_key]) && all(lg$outcome == "none")) {
+      set_row(i, setdiff(tiers, "B"), m[!(m == "B" | startsWith(m, "msg."))])
+      moved[["gemini_review_credit"]] <- moved[["gemini_review_credit"]] + 1L
+    }
+  }
+  for (i in which(keep & prior$evidence_tiers %in% "PR")) {
+    rd <- match(prior$repo_id[i], reads$repo_id)
+    if (is.na(rd) || !isTRUE(reads$prs_walk_complete[rd] == 1L) || is.na(reads$prs_walk_started_on[rd])) next
+    if (is.na(prior$last_confirmed_date[i]) || prior$last_confirmed_date[i] >= reads$prs_walk_started_on[rd]) next
+    if (!any(outside$repo_id == prior$repo_id[i] & outside$tool == prior$tool[i] &
+             grepl("pr-author", outside$found_via, fixed = TRUE))) next
+    keep[i] <- FALSE; moved[["pr_superseded"]] <- moved[["pr_superseded"]] + 1L
+  }
+  prior$first_seen_date[lost & keep] <- NA_character_
+  prior$first_seen_censored[lost & keep] <- 0L
+  for (k in names(moved)) if (moved[[k]] > 0L)
+    message(sprintf("ai merge: moved or trimmed %d row(s): %s", moved[[k]], gsub("_", " ", k)))
+  out <- prior[keep, , drop = FALSE]; rownames(out) <- NULL
+  list(signals = out, review = .ai_bind_like(.ai_empty_review(), review), moved = moved)
+}
+
 #' New-tool gate for the weekly incremental. Returns the subset of flagged repo_ids that
 #' carry at least one (repo_id, tool) pair in THIS week's cheap-pass evidence that is NOT
 #' already present in the published vcs_ai_signals detail for that repo. A repo whose current
