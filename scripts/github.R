@@ -885,6 +885,54 @@ parse_activity <- function(resp, repos) {
   out
 }
 
+#' Next pages of each repository's commit window, from its own cursor.
+build_commit_page_query <- function(repos) {
+  parts <- vapply(seq_len(nrow(repos)), function(j) sprintf(
+    'r%d: repository(owner: "%s", name: "%s") { defaultBranchRef { target { ... on Commit {
+      recent: history(first: 100, after: "%s"%s) { pageInfo { endCursor hasNextPage } nodes { %s } }
+    } } } }', j - 1L, repos$owner[j], repos$name[j], repos$after[j],
+    if (is.na(repos$since[j])) "" else sprintf(', since: "%s"', repos$since[j]),
+    .AI_COMMIT_NODE_FIELDS), character(1))
+  sprintf("query { %s }", paste(parts, collapse = "\n"))
+}
+
+#' One page of commits per repository. A null alias gives NULL. Pure.
+parse_commit_pages <- function(resp, repos) {
+  out <- vector("list", nrow(repos)); names(out) <- repos$repo_id
+  for (j in seq_len(nrow(repos))) {
+    r <- resp$data[[sprintf("r%d", j - 1L)]]
+    if (is.null(r)) { out[j] <- list(NULL); next }
+    h <- r$defaultBranchRef$target$recent
+    out[[j]] <- list(commits = .ai_commit_nodes_frame(h$nodes), has_next = isTRUE(h$pageInfo$hasNextPage),
+                     end_cursor = .nn(h$pageInfo$endCursor, NA_character_))
+  }
+  out
+}
+
+#' Older pull requests, 100 at a time, from each repository's own cursor.
+build_pr_walk_query <- function(repos) {
+  parts <- vapply(seq_len(nrow(repos)), function(j) sprintf(
+    'r%d: repository(owner: "%s", name: "%s") {
+      pullRequests(first: 100, after: "%s", orderBy: {field: CREATED_AT, direction: DESC}) {
+        pageInfo { endCursor hasNextPage } nodes { %s }
+      }
+    }', j - 1L, repos$owner[j], repos$name[j], repos$after[j], .AI_PR_NODE_FIELDS), character(1))
+  sprintf("query { %s }", paste(parts, collapse = "\n"))
+}
+
+#' One page of pull requests per repository, descriptions read and dropped. Pure.
+parse_pr_walk <- function(resp, repos) {
+  out <- vector("list", nrow(repos)); names(out) <- repos$repo_id
+  for (j in seq_len(nrow(repos))) {
+    r <- resp$data[[sprintf("r%d", j - 1L)]]
+    if (is.null(r)) { out[j] <- list(NULL); next }
+    pr <- r$pullRequests
+    out[[j]] <- list(prs = .ai_pr_nodes_frame(pr$nodes), has_next = isTRUE(pr$pageInfo$hasNextPage),
+                     end_cursor = .nn(pr$pageInfo$endCursor, NA_character_))
+  }
+  out
+}
+
 #' Pure: the earliest-match commit date from a search/commits JSON body, or NA when
 #' total_count is 0, items is empty, or the body does not parse. The match is FUZZY
 #' (substring-ish), so the caller treats this date as a CANDIDATE onset.

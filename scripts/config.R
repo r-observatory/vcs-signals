@@ -757,6 +757,16 @@ TIER_D_BATCH <- 10L
 # contributes no PR evidence and no PR onset. Full ISO date, compared lexicographically
 # against createdAt (ISO instants sort correctly as strings).
 AI_PR_CUTOFF <- "2023-01-01"
+# The weekly commit read starts this many days before the last one, for merge commits
+# that bring older committer dates in.
+AI_COMMIT_OVERLAP_DAYS <- 14L
+# Extra 100-commit pages one repository may read in a week before the gap is recorded,
+# asked for this many repositories per query.
+AI_COMMIT_PAGE_CAP <- 5L
+AI_COMMIT_PAGE_BATCH <- 5L
+# The one-off walk through older pull requests: repositories per query, points per shard.
+AI_PR_WALK_BATCH <- 5L
+AI_PR_WALK_POINTS <- 300L
 # GraphQL points left unspent as headroom for the cheap and deep passes, mirroring
 # POINT_RESERVE (the daily pass's reserve). The cheap pass's PR query
 # (pullRequests(first: 50) per alias) is not the ~1-point-per-batch the tree query is, so

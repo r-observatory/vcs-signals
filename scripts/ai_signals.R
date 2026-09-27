@@ -1525,6 +1525,125 @@ campaign_finished <- function(flag_ids, log, reads, since) {
   !any(is.na(k) | log$rule_rev[k] != always$rev[match(cand$key, always$key)] | log$asked_on[k] < since)
 }
 
+# The first value of a column, or NA when the frame or column is absent.
+.ai_col1 <- function(d, n) if (!is.null(d) && n %in% names(d) && nrow(d)) d[[n]][1] else NA
+
+#' How to read a repository's commits this week: first (the newest 100), weekly (from two weeks before the last
+#' read), or ruleset (to two weeks before the last commit read, or the first commit when read whole). Pure.
+plan_commit_read <- function(read, ruleset = AI_RULESET_VERSION) {
+  on <- .ai_col1(read, "commits_read_on")
+  if (is.na(on)) return(list(shape = "first", since = NA_character_, bound = NA_character_, to_first = FALSE))
+  if (identical(as.character(.ai_col1(read, "commits_ruleset")), ruleset))
+    return(list(shape = "weekly", since = paste0(format(as.Date(on) - AI_COMMIT_OVERLAP_DAYS), "T00:00:00Z"),
+                bound = NA_character_, to_first = FALSE))
+  through <- .ai_col1(read, "commits_read_through")
+  bound <- if (is.na(through)) NA_character_
+           else format(as.Date(substr(through, 1, 10)) - AI_COMMIT_OVERLAP_DAYS)
+  list(shape = "ruleset", since = NA_character_, bound = bound,
+       to_first = isTRUE(.ai_col1(read, "commits_history_complete") == 1L))
+}
+
+#' TRUE while a repository's read needs another page and the cap allows it. Pure.
+more_commit_pages <- function(plan, oldest, has_next, pages_done) {
+  if (!isTRUE(has_next) || identical(plan$shape, "first") || pages_done >= AI_COMMIT_PAGE_CAP) return(FALSE)
+  if (identical(plan$shape, "weekly") || isTRUE(plan$to_first) || is.na(plan$bound)) return(TRUE)
+  is.na(oldest) || substr(oldest, 1, 10) > plan$bound
+}
+
+#' The commit columns of vcs_ai_repo_reads after a read that succeeded. Pure.
+next_commit_read_state <- function(prev, plan, commits, has_next, today, ruleset = AI_RULESET_VERSION) {
+  dates <- commits$committed_at[!is.na(commits$committed_at)]
+  oldest <- if (length(dates)) min(dates) else NA_character_
+  reached_first <- !isTRUE(has_next) && !identical(plan$shape, "weekly")
+  window <- if (identical(plan$shape, "first")) 1L
+            else if (identical(plan$shape, "weekly")) as.integer(!isTRUE(has_next))
+            else as.integer(reached_first || (!isTRUE(plan$to_first) && !is.na(plan$bound) &&
+                                              !is.na(oldest) && substr(oldest, 1, 10) <= plan$bound))
+  history <- if (identical(plan$shape, "weekly"))
+               as.integer(isTRUE(.ai_col1(prev, "commits_history_complete") == 1L) && window == 1L)
+             else as.integer(reached_first)
+  list(commits_read_on = today,
+       commits_read_through = .ai_latest_chr(c(as.character(.ai_col1(prev, "commits_read_through")), dates)),
+       commits_ruleset = ruleset, commits_read = nrow(commits), commits_window_complete = window,
+       commits_history_complete = history, reached_first = as.integer(reached_first))
+}
+
+#' How a read's matches count toward exact totals: a read to the first commit replaces
+#' them, a weekly read of a whole history adds its new commits, any other counts nothing.
+read_count_mode <- function(plan, state) {
+  if (!identical(plan$shape, "weekly") && isTRUE(state$reached_first == 1L)) return("replace")
+  if (identical(plan$shape, "weekly") && isTRUE(state$commits_history_complete == 1L)) return("add")
+  NA_character_
+}
+
+#' Log rows for the rules a whole-history read matched, counting commits after `after`, which
+#' read_after carries so the log adds them only on the watermark they were counted from. Pure.
+read_log_rows <- function(hits, repo_id, today, mode, after = NA_character_) {
+  empty <- cbind(.ai_empty_log(), mode = character(), read_after = character())
+  if (is.na(mode) || is.null(hits) || !nrow(hits)) return(empty)
+  h <- hits[hits$code %in% c("B", "C"), , drop = FALSE]
+  if (!is.na(after)) h <- h[!is.na(h$committed_at) & h$committed_at > after, , drop = FALSE]
+  if (!nrow(h)) return(empty)
+  rules <- .ai_search_rules()
+  h$log_key <- ifelse(h$rule_key == "msg.any.assisted-by", paste0("msg.any.assisted-by.", h$tool), h$rule_key)
+  do.call(rbind, unname(lapply(split(h, h$log_key), function(g) data.frame(
+    repo_id = repo_id, rule_key = g$log_key[1], rule_rev = rules$rev[match(g$rule_key[1], rules$key)],
+    ruleset_version = AI_RULESET_VERSION, asked_on = today, outcome = "hit",
+    total_count = length(unique(g$oid)), verified = 1L, incomplete = 0L,
+    first_hit_on = substr(.ai_earliest_chr(g$committed_at), 1, 10), source = "read", mode = mode,
+    read_after = as.character(after), stringsAsFactors = FALSE))))
+}
+
+#' Model rows from the credits a whole-history read matched, with the same mode and read_after. Pure.
+read_model_rows <- function(repo_id, commits, hits, mode, after = NA_character_) {
+  empty <- cbind(.ai_empty_models(), mode = character(), read_after = character())
+  if (is.na(mode) || is.null(hits) || !nrow(hits)) return(empty)
+  h <- hits[hits$code == "B" & hits$role == "authoring", , drop = FALSE]
+  if (!is.na(after)) h <- h[!is.na(h$committed_at) & h$committed_at > after, , drop = FALSE]
+  parts <- lapply(unique(h$tool), function(tl) {
+    cm <- commits[commits$oid %in% h$oid[h$tool == tl], , drop = FALSE]
+    mr <- build_ai_model_rows(repo_id, tl, data.frame(date = cm$committed_at, message = cm$message,
+                                                      stringsAsFactors = FALSE), window_complete = TRUE)
+    if (nrow(mr)) cbind(mr, mode = mode, read_after = as.character(after)) else NULL
+  })
+  parts <- Filter(Negate(is.null), parts)
+  if (!length(parts)) empty else do.call(rbind, parts)
+}
+
+#' Whether this week reads more pull requests than page one: once, back to the cutoff,
+#' for a repository with more than fifty; afterwards only until the stored newest date.
+plan_pr_pages <- function(read, page1) {
+  if (is.null(page1) || !isTRUE(page1$prs_has_next)) return(list(walk = FALSE))
+  if (!isTRUE(.ai_col1(read, "prs_walk_complete") == 1L)) {
+    cursor <- .ai_col1(read, "prs_walk_cursor")
+    return(list(walk = TRUE, after = if (is.na(cursor)) page1$prs_end_cursor else cursor,
+                stop_before = AI_PR_CUTOFF, kind = "walk"))
+  }
+  newest <- .ai_col1(read, "prs_newest_created_at")
+  oldest <- .ai_earliest_chr(page1$prs$created_at)
+  if (!is.na(newest) && !is.na(oldest) && oldest > newest)
+    return(list(walk = TRUE, after = page1$prs_end_cursor, stop_before = newest, kind = "catch-up"))
+  list(walk = FALSE)
+}
+
+#' TRUE while the walk needs another page, has points left and has not reached its stop.
+more_pr_pages <- function(plan, oldest, has_next, points_left)
+  isTRUE(plan$walk) && isTRUE(has_next) && points_left > 0 && (is.na(oldest) || oldest > plan$stop_before)
+
+#' The pull request columns of vcs_ai_repo_reads after page one and any walk. Pure.
+next_pr_read_state <- function(prev, page1, plan, walked, today) {
+  started <- .ai_col1(prev, "prs_walk_started_on")
+  newest <- .ai_latest_chr(c(as.character(.ai_col1(prev, "prs_newest_created_at")), page1$prs$created_at))
+  # Nothing past page one, or a walk finished in an earlier week.
+  if (!isTRUE(page1$prs_has_next) || !isTRUE(plan$walk) || identical(plan$kind, "catch-up"))
+    return(list(prs_read_on = today, prs_newest_created_at = newest, prs_walk_complete = 1L,
+                prs_walk_started_on = if (is.na(started)) today else started, prs_walk_cursor = NA_character_))
+  complete <- isTRUE(walked$reached_stop) || !isTRUE(walked$has_next)
+  list(prs_read_on = today, prs_newest_created_at = newest, prs_walk_complete = as.integer(complete),
+       prs_walk_started_on = if (is.na(started)) today else started,
+       prs_walk_cursor = if (complete) NA_character_ else walked$end_cursor)
+}
+
 #' New-tool gate for the weekly incremental. Returns the subset of flagged repo_ids that
 #' carry at least one (repo_id, tool) pair in THIS week's cheap-pass evidence that is NOT
 #' already present in the published vcs_ai_signals detail for that repo. A repo whose current

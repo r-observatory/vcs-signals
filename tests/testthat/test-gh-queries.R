@@ -400,3 +400,55 @@ test_that("the activity parser returns both frames and says when a page stopped 
   expect_null(parse_activity(list(data = list(r0 = NULL)),
                              data.frame(repo_id = "g", owner = "o", name = "n", stringsAsFactors = FALSE))[["g"]])
 })
+
+test_that("the commit window is asked from two weeks before the last read, and in full otherwise", {
+  expect_true(is.na(plan_commit_read(NULL)$since))
+  expect_equal(plan_commit_read(NULL)$shape, "first")
+  same <- data.frame(commits_read_on = "2026-10-04", commits_ruleset = AI_RULESET_VERSION,
+                     commits_read_through = "2026-10-03T10:00:00Z", commits_history_complete = 0L,
+                     stringsAsFactors = FALSE)
+  expect_equal(plan_commit_read(same)$since, "2026-09-20T00:00:00Z")
+  # Any ruleset other than the current one.
+  other <- same; other$commits_ruleset <- "2026-01-01"
+  p <- plan_commit_read(other)
+  expect_true(is.na(p$since)); expect_equal(p$shape, "ruleset"); expect_equal(p$bound, "2026-09-19")
+  other$commits_history_complete <- 1L
+  expect_true(plan_commit_read(other)$to_first)
+})
+
+test_that("follow-up pages carry each repository's own cursor", {
+  q <- build_commit_page_query(data.frame(owner = c("o", "p"), name = c("n", "m"), after = c("C1", "C2"),
+                                          since = c(NA, "2026-09-20T00:00:00Z"), stringsAsFactors = FALSE))
+  expect_match(q, 'recent: history(first: 100, after: "C1") {', fixed = TRUE)
+  expect_match(q, 'recent: history(first: 100, after: "C2", since: "2026-09-20T00:00:00Z") {', fixed = TRUE)
+  w <- build_pr_walk_query(data.frame(owner = "o", name = "n", after = "P1", stringsAsFactors = FALSE))
+  expect_match(w, 'pullRequests(first: 100, after: "P1", orderBy: {field: CREATED_AT, direction: DESC})', fixed = TRUE)
+})
+
+test_that("no query the weekly read sends nests authors or reviews", {
+  one <- data.frame(owner = "o", name = "n", after = "X", since = NA, stringsAsFactors = FALSE)
+  for (q in c(build_tree_query(one), build_activity_query(one), build_account_count_query(one),
+              build_commit_page_query(one), build_pr_walk_query(one))) {
+    expect_false(grepl("authors(", q, fixed = TRUE)); expect_false(grepl("reviews(", q, fixed = TRUE))
+  }
+})
+
+test_that("follow-up pages parse per repository, and a repository GitHub did not answer gives NULL", {
+  repos <- data.frame(repo_id = c("g/o/n", "g/p/m"), owner = c("o", "p"), name = c("n", "m"),
+                      stringsAsFactors = FALSE)
+  resp <- list(data = list(r0 = list(defaultBranchRef = list(target = list(recent = list(
+    pageInfo = list(endCursor = "C2", hasNextPage = TRUE),
+    nodes = list(list(oid = "a", committedDate = "2026-09-20T00:00:00Z", message = "x",
+                      author = list(name = "p", email = "p@e.org", user = NULL))))))), r1 = NULL))
+  got <- parse_commit_pages(resp, repos)
+  expect_equal(names(got), repos$repo_id)
+  expect_equal(nrow(got[["g/o/n"]]$commits), 1L); expect_true(got[["g/o/n"]]$has_next)
+  expect_equal(got[["g/o/n"]]$end_cursor, "C2"); expect_null(got[["g/p/m"]])
+  pr <- list(data = list(r0 = list(pullRequests = list(pageInfo = list(endCursor = NULL, hasNextPage = FALSE),
+    nodes = list(list(number = 7L, createdAt = "2022-11-01T00:00:00Z", author = NULL, authorAssociation = "NONE",
+                      isCrossRepository = TRUE, headRefName = "x", body = "y"))))))
+  w <- parse_pr_walk(pr, repos[1, ])[["g/o/n"]]
+  expect_equal(w$prs$number, 7L); expect_false(w$has_next); expect_true(is.na(w$end_cursor))
+  expect_false("body" %in% names(w$prs))
+  expect_null(parse_pr_walk(list(data = list(r0 = NULL)), repos[1, ])[["g/o/n"]])
+})
