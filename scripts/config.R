@@ -512,9 +512,8 @@ AI_PR_AGENT_LOGINS <- c(
   "openai-code-agent"          = "codex",
   "kiro-agent"                 = "kiro"
 )
-# Pull requests a tool wrote that a person opened. Matched on the raw branch name or
-# description, case-sensitive unless the pattern says (?i). names = FALSE never names the
-# tool: a codex/ branch only admits the repository to the search pass that week.
+# Pull requests a tool wrote that a person opened, matched on the raw branch or description,
+# case-sensitive unless (?i). names = FALSE names no tool, only admits the repository that week.
 AI_PR_RULES <- list(
   list(key = "pr.cursor.agent-body", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "cursor",
        field = "body", names = TRUE, min_created = "2025-05-01",

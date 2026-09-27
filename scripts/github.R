@@ -828,9 +828,8 @@ parse_account_counts <- function(resp, repos) {
 .AI_PR_NODE_FIELDS <- "number createdAt author { login __typename } authorAssociation isCrossRepository headRefName body"
 .AI_COMMIT_NODE_FIELDS <- "oid committedDate message author { name email user { login } }"
 
-#' One aliased query per batch: the newest 50 pull requests with their description and
-#' branch, and the default branch's commits since `since` (NA asks for the newest 100).
-#' No authors() or reviews() connections: either multiplies the point cost.
+#' One aliased query per batch: the newest 50 pull requests and the default branch's commits since
+#' `since` (NA asks for the newest 100). No authors() or reviews(): either multiplies the point cost.
 build_activity_query <- function(repos) {
   since <- if ("since" %in% names(repos)) repos$since else rep(NA_character_, nrow(repos))
   parts <- vapply(seq_len(nrow(repos)), function(j) sprintf(

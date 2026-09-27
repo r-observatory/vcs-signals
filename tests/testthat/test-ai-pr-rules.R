@@ -130,3 +130,13 @@ test_that("a description written in the browser, with CRLF endings, still names 
   sess <- classify_prs(.one_pr("fix", body = "Summary\r\n\r\nhttps://app.devin.ai/sessions/0a1b\r\n"))
   expect_equal(sess$rule_key, "pr.devin.session")
 })
+
+test_that("a pull request frame whose rule columns were renamed stops instead of finding nothing", {
+  # data.frame() renames the hyphenated keys, which would silently drop every Cursor pull request.
+  pr <- .one_pr("cursor/fix-docs-a1b2")
+  expect_equal(nrow(classify_prs(pr)), 1L)
+  expect_error(classify_prs(data.frame(pr)), "pr.cursor.agent-branch", fixed = TRUE)
+  old <- data.frame(login = "copilot-swe-agent", typename = "Bot", created_at = "2026-06-01T00:00:00Z",
+                    stringsAsFactors = FALSE)
+  expect_equal(classify_prs(old)$code, "PR")
+})

@@ -399,7 +399,7 @@ repo_has_ai_signal <- function(evidence) {
   !is.null(evidence) && nrow(evidence) > 0
 }
 
-#' The pull request rule keys that never name a tool. Pure.
+#' The pull request rule keys that name no tool, kept only on the package's own pull requests. Pure.
 ai_non_naming_pr_keys <- function()
   vapply(Filter(function(r) !isTRUE(r$names), AI_PR_RULES), `[[`, "", "key")
 
@@ -408,13 +408,15 @@ ai_non_naming_pr_keys <- function()
              rule_key = character(), role = character(), from_fork = integer(), association = character(),
              stringsAsFactors = FALSE)
 
-#' Which tool each pull request shows, and whether it is the package's own use. A tool's
-#' account counts for the package unless it came from a fork. A pull request a tool
-#' wrote counts only from a branch in the repository opened by an owner, member or
-#' collaborator; anything else is an outside contributor's tool. A rule that does not
-#' name its tool admits the repository only, and only from those people. Pure.
+#' Which tool each pull request shows and whether the package's own people used it: a tool's account
+#' not from a fork, or an owner, member or collaborator on a branch in the repository. Pure.
 classify_prs <- function(prs, cutoff = AI_PR_CUTOFF) {
-  if (is.null(prs) || !nrow(prs)) return(.ai_empty_pr_findings())
+  if (is.null(prs)) return(.ai_empty_pr_findings())
+  lost <- setdiff(vapply(AI_PR_RULES, `[[`, "", "key"), names(prs))
+  # Some rule columns but not all means a rebuild renamed them; stop rather than find nothing.
+  if (length(lost) && length(lost) < length(AI_PR_RULES))
+    stop("pull request frame lacks rule columns: ", paste(lost, collapse = ", "), call. = FALSE)
+  if (!nrow(prs)) return(.ai_empty_pr_findings())
   col <- function(n, d) if (n %in% names(prs)) prs[[n]] else rep(d, nrow(prs))
   number <- as.integer(col("number", NA_integer_)); created <- col("created_at", NA_character_)
   login <- tolower(col("login", NA_character_)); assoc <- col("association", NA_character_)
