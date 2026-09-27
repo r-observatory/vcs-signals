@@ -1758,16 +1758,13 @@ build_release_notes <- function(summary, changed_shards, tag) {
 
 #' The rules for vcs_ai_models: what each repository keeps, and how many keep it.
 #'
-#' The merge replaces model rows per repository rather than reducing them,
-#' because a model tally describes the window that was examined this run and
-#' folding it into an older window produces a count belonging to neither. So a
-#' plain total row count is not an invariant here, and the first attempt at this
-#' replaced it with a count of repositories carrying model rows and stopped
-#' there. That check cannot fire on the path it was written for. The merge
-#' DELETEs only the repo_ids present in the incoming shards and then inserts
-#' those same shards, so every repository it touches is guaranteed at least one
-#' row back and COUNT(DISTINCT repo_id) is non-decreasing across a merge by
-#' construction. Deleting half the model rows while leaving every repository in
+#' The merge keeps one row per model. A week asks only some of a repository's
+#' rules, so a search raises a model's stored count and never removes a row, and
+#' only a read to the first commit replaces a repository's rows. So a plain total
+#' row count is not an invariant here, and the first attempt at this replaced it
+#' with a count of repositories carrying model rows and stopped there. That
+#' check cannot fire on the merge, where every repository a search touches keeps
+#' its rows. Deleting half the model rows while leaving every repository in
 #' place produced no finding at all, which is a table with no rule on it.
 #'
 #' What the row count was worth is per (repository, tool). The scan pages the
@@ -1791,15 +1788,15 @@ build_release_notes <- function(summary, changed_shards, tag) {
 #'   carried, so those rows were cut off at whatever page size was in force when
 #'   they were written and nothing can be said to be missing from them.
 #'
-#'   A pair that is gone from the outgoing table entirely is the throttle, not
-#'   the scan's reach: a refused search leaves the deep pass with no rows for
-#'   that tool and the merge writes back only what came, so the pair drops out
-#'   until the next scan. SEARCH_DELAY_S exists because that refusal is routine,
-#'   and refusing the publish over it would red most weeks.
+#'   A pair that is gone from the outgoing table entirely is not held. It began
+#'   as the throttle, when the merge wrote back only what a search brought and a
+#'   refused search dropped the pair until the next scan. The merge now keeps a
+#'   pair's rows through a refusal, so a pair leaves only when a read to the
+#'   first commit names none of its models.
 #'
 #' Exact, with no proportional allowance, because outside those two exemptions
 #' there is no ordinary churn to allow for: a search that fails is a refusal and
-#' lands in the second exemption, so a scan that came back and came back
+#' leaves the stored rows in place, so a scan that came back and came back
 #' shorter is either the ruleset reading less than it did or the repository's
 #' history having been rewritten under it. Both are worth a red run. A rebase
 #' over the oldest AI-trailer commits of one repository would refuse a publish,

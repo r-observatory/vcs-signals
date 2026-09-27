@@ -833,7 +833,7 @@ run_deep <- function(io, out_dir, roster_path, i, N,
   message(sprintf("ai deep shard %d/%d: %d item(s) for %d of %d flagged repos", i, N, nrow(work),
                   length(unique(work$repo_id)), nrow(flagged)))
   rules <- c(AI_TRAILER_PATTERNS, AI_AUTHOR_SUFFIXES, AI_REVIEW_RULES)
-  state <- list(); logs <- list(); why <- character(0); counts <- list(); model_rows <- list()
+  state <- list(); logs <- list(); why <- character(0); counts <- list(); credits <- list()
   put_log <- function(row, reason) { logs[[length(logs) + 1L]] <<- row; why <<- c(why, reason) }
   search <- function(repo, q) tryCatch(io$search_hit(repo$owner, repo$name, q, search_delay),
                                        error = function(e) list(date = NA_character_, unavailable = TRUE))
@@ -911,8 +911,8 @@ run_deep <- function(io, out_dir, roster_path, i, N,
           n <- .nn(hit$total_count, NA_integer_)
           # A search GitHub cut short returned part of the credits, so its tally is never the whole one.
           whole <- (is.na(n) || n <= nrow(hit$items)) && !isTRUE(hit$incomplete == 1L)
-          mr <- build_ai_model_rows(rid, v$tool, hit$items, window_complete = whole)
-          if (nrow(mr)) model_rows[[length(model_rows) + 1L]] <- mr
+          credits[[length(credits) + 1L]] <- data.frame(repo_id = rid, tool = v$tool, date = hit$items$date,
+            message = hit$items$message, whole = whole, stringsAsFactors = FALSE)
         }
       }
     }
@@ -921,7 +921,8 @@ run_deep <- function(io, out_dir, roster_path, i, N,
   }
   rows <- .ai_bind_like(.ai_empty_signals(), lapply(names(state), function(rid)
     .ai_deep_rows(rid, state[[rid]], evidence, flagged[flagged$repo_id == rid, , drop = FALSE][1, ], today)))
-  models_df <- .ai_bind_like(.ai_empty_models(), model_rows)
+  # Rules match the same commits, so a repository and tool get one tally over every page they matched.
+  models_df <- pool_model_rows(if (length(credits)) do.call(rbind, credits) else NULL)
   log_df <- .ai_bind_like(.ai_empty_log(), logs)
   export_ai_shard(file.path(out_dir, sprintf("vcs-ai-shard-%d.db", i)), rows, models_df,
                   extra = list(search_log = log_df, account_counts = .ai_bind_like(.ai_empty_counts(), counts),

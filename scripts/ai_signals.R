@@ -976,6 +976,18 @@ build_ai_model_rows <- function(repo_id, tool, items, window_complete = TRUE) {
   out
 }
 
+#' One tally per repository and tool over every credit page this run's searches returned. Rules overlap, so a
+#' commit (date and message) counts once, and the tally is whole only when every page it pools was. Pure.
+pool_model_rows <- function(pages) {
+  if (is.null(pages) || !nrow(pages)) return(.ai_empty_models())
+  pair <- paste(pages$repo_id, pages$tool, sep = "\r")
+  rows <- lapply(split(pages, factor(pair, levels = unique(pair))), function(g) {
+    items <- g[!duplicated(paste(g$date, g$message, sep = "\r")), c("date", "message"), drop = FALSE]
+    build_ai_model_rows(g$repo_id[1], g$tool[1], items, window_complete = all(g$whole))
+  })
+  .ai_bind_like(.ai_empty_models(), unname(rows))
+}
+
 .ai_empty_signals <- function()
   data.frame(repo_id = character(), tool = character(), first_seen_date = character(),
              first_seen_censored = integer(), evidence_tiers = character(),
@@ -1178,15 +1190,18 @@ fold_outside_prs <- function(prior, incoming) {
   all[!duplicated(paste(all$repo_id, all$pr_number, all$tool, sep = "\r")), , drop = FALSE]
 }
 
-#' Model tallies after this run: a search shard's rows replace its repositories' rows, a read to the first commit in
-#' rebuilt_repos replaces them again, and a weekly read adds its new commits only on the stored watermark. Pure.
+#' Model tallies after this run, one row per model. A week asks only some of a repository's rules, so a search shard's
+#' tally raises a model's stored count to its own and keeps the models it does not name. A read to the first commit in
+#' rebuilt_repos replaces a repository's rows, and a weekly read adds its new commits only on the stored watermark. Pure.
 fold_models <- function(prior, deep, cheap, rebuilt_repos = NULL, reads = NULL) {
   proto <- .ai_empty_models()
-  out <- .ai_bind_like(proto, list(prior))
+  key <- c("repo_id", "tool", "provider", "family", "version", "context_window")
+  # Tables written with one tally per rule hold a model more than once.
+  out <- .ai_fold_model_keys(.ai_bind_like(proto, list(prior)), key)
   # A read to the first commit is the whole tally, so a model it no longer names loses its row, as in the log.
   out <- out[!(out$repo_id %in% rebuilt_repos), , drop = FALSE]
   deep <- .ai_bind_like(proto, list(deep))
-  if (nrow(deep)) out <- rbind(out[!(out$repo_id %in% deep$repo_id), , drop = FALSE], deep)
+  if (nrow(deep)) out <- .ai_fold_model_keys(rbind(out, deep), key)
   if (!is.null(cheap) && nrow(cheap)) {
     col <- function(cn) if (cn %in% names(cheap)) as.character(cheap[[cn]]) else rep(NA_character_, nrow(cheap))
     is_add <- col("mode") %in% "add"
@@ -1203,7 +1218,6 @@ fold_models <- function(prior, deep, cheap, rebuilt_repos = NULL, reads = NULL) 
     through <- rd$commits_read_through[match(add$repo_id, rd$repo_id)]
     # Counted from any other watermark, the commits are in the tally already or belong to a read the state dropped.
     same <- (is.na(after) & is.na(through)) | (!is.na(after) & !is.na(through) & after == through)
-    key <- c("repo_id", "tool", "provider", "family", "version", "context_window")
     for (i in which(add$repo_id %in% rd$repo_id & same)) {
       k <- which(.gate_key(out, key) == .gate_key(add[i, , drop = FALSE], key))
       if (!length(k)) { out <- rbind(out, add[i, , drop = FALSE]); next }
@@ -1212,6 +1226,20 @@ fold_models <- function(prior, deep, cheap, rebuilt_repos = NULL, reads = NULL) 
       out$last_seen[k] <- .ai_latest_chr(c(out$last_seen[k], add$last_seen[i]))
     }
   }
+  rownames(out) <- NULL
+  out
+}
+
+# One row per model: the larger count, the widest dates, whole only when every row folded in was. Pure.
+.ai_fold_model_keys <- function(df, key) {
+  k <- .gate_key(df, key)
+  if (!anyDuplicated(k)) return(df)
+  g <- factor(k, levels = unique(k))
+  out <- df[!duplicated(k), , drop = FALSE]
+  out$commits <- as.integer(tapply(df$commits, g, function(x) if (all(is.na(x))) NA_integer_ else max(x, na.rm = TRUE)))
+  out$first_seen <- as.character(tapply(df$first_seen, g, .ai_earliest_chr))
+  out$last_seen <- as.character(tapply(df$last_seen, g, .ai_latest_chr))
+  out$window_complete <- as.integer(tapply(df$window_complete, g, function(x) all(is.na(x) | x != 0)))
   rownames(out) <- NULL
   out
 }
