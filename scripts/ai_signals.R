@@ -198,8 +198,9 @@ ai_is_ignore_marker <- function(marker) {
 #' ambient one would pull a repository whose only marker is an editor artifact into the
 #' AI roster. Recording a gitignored .positai needs the dev-tooling classifier to see
 #' the ignore lines, which is a separate change to its signature.
-scan_ignore_tokens <- function(gitignore_lines, rbuildignore_lines) {
+scan_ignore_tokens <- function(gitignore_lines, rbuildignore_lines, root_entries = NULL) {
   sources <- list(gitignore = gitignore_lines, rbuildignore = rbuildignore_lines)
+  review_gemini <- identical(classify_gemini_dir(root_entries), "review")
   rows <- list()
   add <- function(tool, value) rows[[length(rows) + 1L]] <<-
     data.frame(tool = tool, tier = "D", marker = value, agnostic = FALSE, stringsAsFactors = FALSE)
@@ -214,6 +215,8 @@ scan_ignore_tokens <- function(gitignore_lines, rbuildignore_lines) {
       # AGENTS.md and .agents name no tool, and some editors write a tool's line themselves.
       if (isTRUE(m$agnostic) || identical(m$ignore_line, FALSE)) next
       if (is.character(m$ignore_line) && !(src %in% m$ignore_line)) next
+      # A line for a .gemini folder of review settings belongs to that review setup, as in classify_tree_markers.
+      if (identical(m$path, ".gemini") && review_gemini) next
       if (any(ai_ignore_line_matches(toks, m$path))) add(m$tool, paste0(src, ":", m$path))
     }
   }
@@ -422,7 +425,7 @@ assemble_repo_evidence <- function(tree, activity = NULL, accounts = NULL, cutof
   tree <- tree %||% list()
   at_scan <- paste0(scanned_on, "T23:59:59Z")
   files <- rbind(classify_tree_markers(tree$root_entries, tree$github_entries),
-                 scan_ignore_tokens(tree$gitignore_lines, tree$rbuildignore_lines))
+                 scan_ignore_tokens(tree$gitignore_lines, tree$rbuildignore_lines, tree$root_entries))
   review <- match_review_files(tree$root_entries)
   out <- rbind(
     if (nrow(files)) .ai_found(files$tool, files$tier, files$marker, onset = at_scan,

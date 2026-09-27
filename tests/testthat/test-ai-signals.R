@@ -940,6 +940,22 @@ test_that("a .gemini folder holding only review settings is Gemini Code Assist, 
   expect_equal(classify_gemini_dir(".gemini"), "authoring")
 })
 
+test_that("an ignore line for a .gemini folder of review settings adds no Gemini row", {
+  # synthesizebio/rsynthbio: review settings in .gemini and a `.gemini/*` line in .Rbuildignore.
+  tree <- list(root_entries = c(".gemini", ".gemini/config.yaml", ".gemini/styleguide.md", "DESCRIPTION"),
+               github_entries = character(0), gitignore_lines = character(0),
+               rbuildignore_lines = ".gemini/*")
+  f <- assemble_repo_evidence(tree, scanned_on = "2026-09-27")
+  expect_false("gemini" %in% f$tool)
+  expect_equal(f$tool[f$role == "review"], "gemini-code-assist")
+  expect_false(repo_has_ai_signal(f))
+  expect_equal(nrow(scan_ignore_tokens(character(0), ".gemini/*", tree$root_entries)), 0L)
+  # No folder committed, or a Gemini CLI folder: the line still names Gemini.
+  expect_equal(scan_ignore_tokens(character(0), ".gemini/*")$marker, "rbuildignore:.gemini")
+  expect_equal(scan_ignore_tokens(character(0), ".gemini/*", c(".gemini", ".gemini/settings.json"))$marker,
+               "rbuildignore:.gemini")
+})
+
 test_that("a CodeRabbit file is a review tool and never a coding tool", {
   root <- c(".coderabbit.yaml", "DESCRIPTION")
   expect_equal(nrow(classify_tree_markers(root, character(0))), 0L)
