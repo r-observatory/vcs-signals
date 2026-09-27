@@ -171,13 +171,19 @@ AI_MARKERS <- list(
   # Devin and Devin Desktop (Windsurf renamed) keep rules and DeepWiki settings here.
   list(path = ".devin",         tool = "devin",     kind = "dir",  location = "root",   agnostic = FALSE),
   list(path = ".devinignore",   tool = "devin",     kind = "file", location = "root",   agnostic = FALSE),
+  # Copilot's .github folders share plain names with root folders people ignore (prompts/, skills/),
+  # so only the committed folder counts.
   # Copilot custom agents count only when the folder holds a Markdown agent file.
   list(path = "agents",         tool = "copilot",   kind = "dir",  location = "github", agnostic = FALSE,
-       requires = "^agents/[^/]+\\.md$"),
-  list(path = "instructions",   tool = "copilot",   kind = "dir",  location = "github", agnostic = FALSE),
-  list(path = "prompts",        tool = "copilot",   kind = "dir",  location = "github", agnostic = FALSE),
-  list(path = "chatmodes",      tool = "copilot",   kind = "dir",  location = "github", agnostic = FALSE),
-  list(path = "skills",         tool = "copilot",   kind = "dir",  location = "github", agnostic = FALSE),
+       requires = "^agents/[^/]+\\.md$", ignore_line = FALSE),
+  list(path = "instructions",   tool = "copilot",   kind = "dir",  location = "github", agnostic = FALSE,
+       ignore_line = FALSE),
+  list(path = "prompts",        tool = "copilot",   kind = "dir",  location = "github", agnostic = FALSE,
+       ignore_line = FALSE),
+  list(path = "chatmodes",      tool = "copilot",   kind = "dir",  location = "github", agnostic = FALSE,
+       ignore_line = FALSE),
+  list(path = "skills",         tool = "copilot",   kind = "dir",  location = "github", agnostic = FALSE,
+       ignore_line = FALSE),
   list(path = "workflows/copilot-setup-steps.yml", tool = "copilot", kind = "file", location = "github",
        agnostic = FALSE),
   # RStudio 2026.06 and later write these into the ignore files once the folder exists, so
