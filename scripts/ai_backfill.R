@@ -152,7 +152,14 @@ ai_query_canary <- function(io) {
   cfg <- AI_QUERY_CANARY
   fail <- function(fmt, ...) stop(sprintf(paste0("AI query canary: ", fmt), ...), call. = FALSE)
   ask <- function(q, label) {
-    res <- tryCatch(io$graphql(q), error = function(e) fail("the %s document failed: %s", label, conditionMessage(e)))
+    get <- function() tryCatch(io$graphql(q), error = function(e) list(.err = conditionMessage(e)))
+    res <- get()
+    # As in the contents check, only a request that threw (a 502 or a timeout) is sent again.
+    if (!is.null(res$.err)) {
+      (if (is.function(io$sleep)) io$sleep else Sys.sleep)(AI_BATCH_RETRY_WAIT_S)
+      res <- get()
+    }
+    if (!is.null(res$.err)) fail("the %s document failed: %s", label, res$.err)
     if (is.null(res$data)) fail("the %s document returned no data: %s", label, .fetch_first_error(res))
     if (!is.null(res$errors) && !errors_are_alias_not_found(res$errors))
       fail("the %s document returned an error: %s", label, .fetch_first_error(res))
@@ -184,6 +191,13 @@ ai_query_canary <- function(io) {
         !all(c("oid", "committed_at", "message", "author_name", "author_email") %in% names(a$commits)))
       fail("%s: the activity document's pull request or commit frame lacks a column", rid)
   }
+  # Floors that only grow: the read takes pull requests in any state, #49 among them, and
+  # the newest commits with no since, so an empty list is a fault in the reply.
+  rows <- function(slug, part) NROW(act[[paste0("github.com/", slug)]][[part]])
+  if (rows("ericrayanderson/shinyglass", "prs") < 1L)
+    fail("ericrayanderson/shinyglass read no pull requests in the activity document, at least 1 expected")
+  if (rows("ss3sim/ss3sim", "commits") < 1L)
+    fail("ss3sim/ss3sim read no commits in the activity document, at least 1 expected")
   fixed <- ask(build_fixed_object_query(cfg$prs, cfg$commits), "fixed-object")$data
   pr <- function(k) fixed[[sprintf("p%d", k)]]$pullRequest
   cm <- function(k) fixed[[sprintf("c%d", k)]]$object
@@ -195,14 +209,16 @@ ai_query_canary <- function(io) {
   if (!(nrow(sg) == 1L && sg$tool == "cursor" && sg$code == "PB" && sg$role == "authoring"))
     fail("ericrayanderson/shinyglass #49 no longer reads as a pull request Cursor wrote for its maintainer")
   na <- assemble_repo_evidence(list(), list(prs = .ai_pr_nodes_frame(list(pr(1L)))))
-  if (nrow(build_cheap_rows(cbind(repo_id = "github.com/apache/arrow-nanoarrow", na), "canary")) > 0L ||
-      !any(na$role == "outside" & na$tool == "cursor"))
+  if (!any(na$role == "outside" & na$tool == "cursor"))
+    fail("apache/arrow-nanoarrow #927 no longer reads as a Cursor pull request from outside the project")
+  if (nrow(build_cheap_rows(cbind(repo_id = "github.com/apache/arrow-nanoarrow", na), "canary")) > 0L)
     fail("apache/arrow-nanoarrow #927 would count as the package's own Cursor use")
   if (!("msg.cursor.made-with" %in% match_commit_findings(.ai_commit_nodes_frame(list(cm(0L))))$rule_key))
     fail("xrobin/pROC fe5c63c no longer matches its Made-with: Cursor line")
   bg <- unique(match_commit_findings(.ai_commit_nodes_frame(list(cm(1L))))$tool)
   if (!identical(bg, "antigravity"))
-    fail("alyssafrazee/ballgown ab1da7b names %s, where Antigravity alone is right", paste(bg, collapse = ", "))
+    fail("alyssafrazee/ballgown ab1da7b names %s, where Antigravity alone is right",
+         if (length(bg)) paste(bg, collapse = ", ") else "no tool")
   message("AI query canary: passed")
   invisible(TRUE)
 }

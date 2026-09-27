@@ -32,6 +32,8 @@ ai_canary_io <- function(accounts = NULL, activity = NULL, fixed = NULL) {
               defaultBranchRef = list(target = list(recent = list(pageInfo = list(endCursor = NULL, hasNextPage = FALSE),
                                                                   nodes = list()))))
   good_activity <- list(data = list(r0 = one, r1 = one))
+  good_activity$data$r0$pullRequests$nodes <- list(prs$r0$pullRequests$nodes[[1]])
+  good_activity$data$r1$defaultBranchRef$target$recent$nodes <- list(pick("fe5c63c197db1fe8ce70eb740bb5ffe4af0f4e99"))
   list(graphql = function(q) {
     if (grepl("pullRequest(number:", q, fixed = TRUE)) return(fixed %||% good_fixed)
     if (grepl("a_claude:", q, fixed = TRUE)) return(accounts %||% good_accounts)

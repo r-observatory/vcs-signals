@@ -1576,9 +1576,29 @@ test_that("a summary from before the weekly read is a first run, not a lost one"
 })
 
 test_that("a release whose recent shard cannot be read stops the week", {
-  rel <- tempfile("rel_"); dir.create(rel)
   io <- list(download = function(pattern, dir) FALSE, release_exists = function() TRUE)
   expect_error(.ai_read_pipeline_state(io, tempfile("st_")), "vcs-signals-recent.db")
   none <- list(download = function(pattern, dir) FALSE, release_exists = function() FALSE)
   expect_equal(.ai_read_pipeline_state(none, tempfile("st_")), character(0))
+})
+
+test_that("each state table, empty or missing once it has been published, stops the week", {
+  state <- c(ai_state_tables_since = "2026-10-06")
+  filled <- function() {
+    con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+    ensure_repo_schema(con); ensure_series_schema(con)
+    DBI::dbExecute(con, "INSERT INTO vcs_ai_repo_reads (repo_id, commits_read_on) VALUES ('github.com/a/keep', '2026-10-04')")
+    DBI::dbExecute(con, "INSERT INTO vcs_ai_search_log VALUES ('github.com/a/keep','msg.x',1,'v','2026-10-05','none',0,NULL,0,NULL,'search')")
+    DBI::dbExecute(con, "INSERT INTO vcs_ai_account_counts VALUES ('github.com/a/keep','claude','graphql',1,NULL,'2026-10-04')")
+    con
+  }
+  for (t in c("vcs_ai_repo_reads", "vcs_ai_search_log", "vcs_ai_account_counts")) {
+    con <- filled()
+    expect_true(.ai_state_guard(con, state))
+    DBI::dbExecute(con, sprintf('DELETE FROM "%s"', t))
+    expect_error(.ai_state_guard(con, state), sprintf("summary has no %s rows", t), info = paste(t, "empty"))
+    DBI::dbExecute(con, sprintf('DROP TABLE "%s"', t))
+    expect_error(.ai_state_guard(con, state), sprintf("summary has no %s rows", t), info = paste(t, "dropped"))
+    DBI::dbDisconnect(con)
+  }
 })
