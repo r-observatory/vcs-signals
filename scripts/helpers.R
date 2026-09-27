@@ -526,7 +526,7 @@ reconcile_ai_identity <- function(con) {
 .reconcile_ai_signals <- function(con, shared, map) {
   healed <- 0L; moved <- 0L; merged <- 0L
   # Every column, derived from the table's own shape. This named seven of ten
-  # and then deleted the rows and wrote the seven back, so markers and both
+  # and then deleted the rows and wrote the seven back, so "markers" and both
   # commit counts were destroyed on every merge that folded a renamed repo.
   # The loss was permanent: select_incremental_repos never revisits a repo
   # that is already published, so nothing would have measured them again.

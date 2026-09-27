@@ -1389,7 +1389,7 @@ build_search_coverage <- function(log, reads, ruleset = AI_RULESET_VERSION) {
     asked <- g[g$source %in% "search" & g$rule_rev %in% r$rule_rev & g$outcome %in% c("hit", "none") &
                !(g$repo_id %in% whole), , drop = FALSE]
     refused <- g[g$outcome %in% "refused", , drop = FALSE]
-    # The read checks every commit's author address and review credit too, so it answers every channel.
+    # A whole read checks every commit's message, author address and review credit, so it answers every rule.
     data.frame(rule_key = r$rule_key, tool = r$tool, channel = r$channel, rule_rev = r$rule_rev,
                repos_asked = length(unique(asked$repo_id)),
                repos_hit = length(unique(asked$repo_id[asked$outcome == "hit"])),
@@ -1755,7 +1755,7 @@ next_pr_read_state <- function(prev, page1, plan, walked, today) {
 #' TRUE for each vcs_ai_signals row that says nothing but when it was confirmed: no
 #' onset, no evidence tier and no marker. That is the shape of a confirmation row, and
 #' of the published row the reducer made out of one. A frame without a markers column
-#' (the old gate's confirmation rows had seven columns) reads as carrying no markers. Pure.
+#' (the old gate's confirmation rows had seven columns) reads as blank there. Pure.
 .ai_is_hollow <- function(rows) {
   blank <- function(cn) {
     x <- rows[[cn]]

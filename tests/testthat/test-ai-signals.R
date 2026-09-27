@@ -498,7 +498,7 @@ test_that("a row is empty only when its onset, tiers and markers are all blank",
                      authored = 0L, authored_commits = NA_integer_, assisted_commits = NA_integer_,
                      last_confirmed_date = "2026-09-20", stringsAsFactors = FALSE)
   expect_identical(.ai_is_hollow(rows), c(TRUE, TRUE, FALSE, FALSE, FALSE))
-  # With no markers column, as the old gate's confirmation rows had, only the other two count.
+  # Rows without the "markers" column, as the old gate wrote them, count only the other two.
   expect_identical(.ai_is_hollow(rows[setdiff(names(rows), "markers")]),
                    c(TRUE, TRUE, FALSE, FALSE, TRUE))
   expect_equal(drop_unanchored_confirmations(.ai_empty_signals(), rows)$tool,
