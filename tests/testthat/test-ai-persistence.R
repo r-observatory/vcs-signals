@@ -217,6 +217,50 @@ test_that("an older read merged after a newer one moves no watermark back", {
   expect_equal(same_day$commits_read_through, "2026-10-10T22:00:00Z")
 })
 
+test_that(
+  "a same-day read that saw less, merged second, moves no watermark back and nothing is counted twice", {
+  t0 <- "2026-10-03T12:00:00Z"
+  hits <- c("2026-10-05T10:00:00Z", "2026-10-11T00:20:00Z", "2026-10-11T02:30:00Z")
+  week <- function(on, after, through) {
+    n <- sum(hits > after & hits <= through)
+    list(add = if (n) .add(n, on, after), reads = .read_state(on, through))
+  }
+  log <- .log("github.com/o/r", "msg.claude.coauthor", "hit", 10, src = "read", on = "2026-10-04")
+  reads <- .read_state("2026-10-04", t0)
+  runs <- list(week("2026-10-11", t0, "2026-10-11T02:30:00Z"), week("2026-10-11", t0, "2026-10-11T00:30:00Z"))
+  for (run in runs) {
+    log <- fold_search_log(log, run$add, reads = reads)
+    reads <- fold_repo_reads(reads, run$reads)
+  }
+  expect_equal(log$total_count, 13L)
+  expect_equal(reads$commits_read_through, "2026-10-11T02:30:00Z")
+  nxt <- week("2026-10-18", reads$commits_read_through, "2026-10-11T02:30:00Z")
+  expect_equal(fold_search_log(log, nxt$add, reads = reads)$total_count, 13L)
+})
+
+test_that("the read that saw further keeps the whole commit group, whichever day its scan started", {
+  t0 <- "2026-10-03T12:00:00Z"
+  before_midnight <- .read_state("2026-10-10", "2026-10-11T00:30:00Z")
+  after_midnight <- .read_state("2026-10-11", "2026-10-11T00:05:00Z")
+  both <- list(fold_repo_reads(before_midnight, after_midnight),
+               fold_repo_reads(after_midnight, before_midnight))
+  for (got in both) {
+    expect_equal(got$commits_read_through, "2026-10-11T00:30:00Z")
+    expect_equal(got$commits_read_on, "2026-10-10")
+  }
+  expect_equal(fold_repo_reads(after_midnight, before_midnight)$accounts_counted_on, "2026-10-11")
+  old_rules <- .read_state("2026-10-04", t0); old_rules$commits_ruleset <- "2026-01-01"
+  quiet <- fold_repo_reads(old_rules, .read_state("2026-10-11", t0))
+  expect_equal(quiet$commits_read_on, "2026-10-11"); expect_equal(quiet$commits_ruleset, AI_RULESET_VERSION)
+  saw_none <- fold_repo_reads(.read_state("2026-10-04", t0), .read_state("2026-10-11", NA_character_))
+  expect_equal(saw_none$commits_read_through, t0); expect_equal(saw_none$commits_read_on, "2026-10-04")
+  first_seen <- fold_repo_reads(.read_state("2026-10-04", NA_character_), .read_state("2026-10-11", t0))
+  expect_equal(first_seen$commits_read_through, t0)
+  still_empty <- fold_repo_reads(.read_state("2026-10-04", NA_character_),
+                                 .read_state("2026-10-11", NA_character_))
+  expect_equal(still_empty$commits_read_on, "2026-10-11")
+})
+
 test_that("an author-name suffix count is not a count of commits crediting aider", {
   r <- "github.com/o/r"
   aid <- .row(NA, NA, "assisted"); aid$tool <- "aider"; aid$evidence_tiers <- "C"

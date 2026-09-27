@@ -91,6 +91,7 @@ test_that("a count survives an older zero merged after it", {
   later_zero <- fold_account_counts(sun, .ai_empty_counts(), counted_repos = setNames("2026-10-18", r))
   expect_equal(nrow(later_zero), 0L)
   expect_error(fold_account_counts(sun, .ai_empty_counts(), counted_repos = r), "counted_repos must name")
+  expect_error(fold_account_counts(sun, .ai_empty_counts(), counted_repos = NULL), "counted_repos must name")
 })
 
 test_that("a repository whose count failed keeps its rows and its counted date", {

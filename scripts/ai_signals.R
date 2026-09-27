@@ -1023,8 +1023,12 @@ ai_onset_reducer <- function(prior_rows, incoming_rows) {
   }))
 }
 
+# Compare two ISO dates, NA before any date: -1 earlier, 0 the same, 1 later.
+.ai_date_cmp <- function(a, b)
+  if (is.na(a) || is.na(b)) (!is.na(a)) - (!is.na(b)) else (a > b) - (a < b)
+
 #' Fold this run's read state over the stored state, one column group at a time: a group moves
-#' only when this run read it on or after the stored date, so a failed or older read moves nothing. Pure.
+#' only when this run read it and is not behind, the commit group judged by its watermark first. Pure.
 fold_repo_reads <- function(prior, incoming) {
   empty <- .ai_empty_reads()
   prior <- .ai_bind_like(empty, list(prior)); incoming <- .ai_bind_like(empty, list(incoming))
@@ -1039,9 +1043,12 @@ fold_repo_reads <- function(prior, incoming) {
     k <- match(incoming$repo_id[i], prior$repo_id)
     if (is.na(k)) { prior <- rbind(prior, incoming[i, , drop = FALSE]); next }
     for (g in names(groups)) {
-      d <- incoming[[g]][i]
-      if (!is.na(d) && (is.na(prior[[g]][k]) || d >= prior[[g]][k]))
-        prior[k, groups[[g]]] <- incoming[i, groups[[g]]]
+      if (is.na(incoming[[g]][i])) next
+      # The commit group goes by its watermark first: moved back, it would let a later read count a match twice.
+      w <- if (g == "commits_read_on") "commits_read_through" else g
+      by <- .ai_date_cmp(incoming[[w]][i], prior[[w]][k])
+      if (by == 0L) by <- .ai_date_cmp(incoming[[g]][i], prior[[g]][k])
+      if (by >= 0L) prior[k, groups[[g]]] <- incoming[i, groups[[g]]]
     }
   }
   prior
@@ -1050,7 +1057,7 @@ fold_repo_reads <- function(prior, incoming) {
 #' Keep the newest count per repository, tool and address set. A repository counted on day d (counted_repos,
 #' repo_id to d) loses a GraphQL count dated d or earlier for a tool with none now; REST counts stand. Pure.
 fold_account_counts <- function(prior, incoming, counted_repos) {
-  if (length(counted_repos) && is.null(names(counted_repos)))
+  if (is.null(counted_repos) || (length(counted_repos) && is.null(names(counted_repos))))
     stop("fold_account_counts: counted_repos must name each repository with the day it was counted")
   empty <- .ai_empty_counts()
   inc <- .ai_bind_like(empty, list(incoming))
