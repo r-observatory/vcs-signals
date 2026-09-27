@@ -12,6 +12,7 @@ setwd(.aibf_wd)
   if (length(state)) DBI::dbWriteTable(con, "pipeline_state",
     data.frame(key = names(state), value = unname(state), stringsAsFactors = FALSE), append = TRUE)
 }
+.no_release_io <- function() list(download = function(pattern, dir) FALSE, release_exists = function() FALSE)
 
 test_that("write_ai_roster / load_ai_roster round-trip a node_id-carrying, stars-free roster", {
   p <- tempfile(fileext = ".db")
@@ -192,7 +193,7 @@ test_that("run_gate unions and dedups cheap partials into one flagged roster", {
     data.frame(repo_id = "github.com/b/y", tool = "copilot", tier = "PR", marker = "PR",
                agnostic = 0L, stringsAsFactors = FALSE))
   out <- tempfile("out_"); dir.create(out)
-  run_gate(out, parts)
+  run_gate(.no_release_io(), out, parts, full = FALSE)
   fr <- read_flagged(file.path(out, "vcs-ai-flagged-roster.db"))
   expect_setequal(fr$flagged$repo_id, c("github.com/a/x", "github.com/b/y"))
   expect_equal(nrow(fr$evidence), 2)
@@ -420,22 +421,20 @@ test_that("run_merge with zero dev-tooling shards leaves the prior snapshot inta
   expect_equal(got$repo_id, "github.com/keep/me")
 })
 
-test_that("run_gate_incremental narrows the flagged roster to new-tool repos", {
+.gate_parts <- function() {
   parts <- tempfile("parts_"); dir.create(parts)
-  # Cheap partials: A already-published claude (skip), B new cursor (keep),
-  #                 C already-published claude PLUS a new copilot PR (keep - adopted a 2nd tool).
   write_flagged_partial(file.path(parts, "vcs-ai-cheap-0.db"),
-    data.frame(repo_id = c("github.com/a/x", "github.com/b/y", "github.com/c/z"),
-               owner = c("a", "b", "c"), name = c("x", "y", "z"),
-               node_id = c("R_a", "R_b", "R_c"), is_fork = 0L,
+    data.frame(repo_id = c("github.com/a/x", "github.com/b/y", "github.com/c/z"), owner = c("a", "b", "c"),
+               name = c("x", "y", "z"), node_id = c("R_a", "R_b", "R_c"), is_fork = 0L,
                parent = NA_character_, pr_onset_date = NA_character_, stringsAsFactors = FALSE),
     data.frame(repo_id = c("github.com/a/x", "github.com/b/y", "github.com/c/z", "github.com/c/z"),
-               tool = c("claude", "cursor", "claude", "copilot"),
-               tier = c("D", "D", "D", "PR"),
-               marker = c("CLAUDE.md", ".cursor", "CLAUDE.md", "PR"),
-               agnostic = 0L, stringsAsFactors = FALSE))
+               tool = c("claude", "cursor", "claude", "copilot"), tier = c("D", "D", "D", "PR"),
+               marker = c("CLAUDE.md", ".cursor", "CLAUDE.md", "PR"), agnostic = 0L, stringsAsFactors = FALSE))
+  parts
+}
 
-  # Published baseline in a fake summary release: A/claude and C/claude already onset.
+test_that("the gate lists dating for a new tool, keeps every flagged repository and writes no confirmation shard", {
+  parts <- .gate_parts()
   rel <- tempfile("rel_"); dir.create(rel)
   scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel, "vcs-signals-summary.db"))
   ensure_repo_schema(scon); ensure_series_schema(scon)
@@ -443,48 +442,70 @@ test_that("run_gate_incremental narrows the flagged roster to new-tool repos", {
     ('github.com/a/x','claude','2024-01-01',0,'D',0,'2024-01-01'),
     ('github.com/c/z','claude','2024-02-01',0,'D',0,'2024-02-01')")
   DBI::dbDisconnect(scon)
-
-  io <- list(download = function(pattern, dir) {
-    f <- list.files(rel, pattern = utils::glob2rx(pattern), full.names = TRUE)
-    if (!length(f)) return(FALSE)
-    file.copy(f, file.path(dir, basename(f)), overwrite = TRUE); TRUE })
-
+  io <- local_release_io(rel)
   out <- tempfile("out_"); dir.create(out)
-  run_gate_incremental(io, out, parts)
+  suppressMessages(run_gate_incremental(io, out, parts))
   fr <- read_flagged(file.path(out, "vcs-ai-flagged-roster.db"))
-  expect_setequal(fr$flagged$repo_id, c("github.com/b/y", "github.com/c/z"))  # A skipped
-  expect_false("github.com/a/x" %in% fr$flagged$repo_id)
-  # C survives with both its evidence rows so the deep pass re-onsets its new copilot.
-  expect_true("copilot" %in% fr$evidence$tool[fr$evidence$repo_id == "github.com/c/z"])
-
-  # A's skipped claude and C's already-published claude both get a confirmation row (their
-  # last_confirmed_date must keep advancing even though A never reaches the deep matrix); B's
-  # cursor and C's copilot are new adoptions, not confirmations, so they get none.
-  ccon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-confirm.db"))
-  on.exit(DBI::dbDisconnect(ccon), add = TRUE)
-  confirm <- DBI::dbReadTable(ccon, "vcs_ai_signals")
-  expect_setequal(paste(confirm$repo_id, confirm$tool),
-                  c("github.com/a/x claude", "github.com/c/z claude"))
-  expect_true(all(is.na(confirm$first_seen_date)))
+  expect_setequal(fr$flagged$repo_id, c("github.com/a/x", "github.com/b/y", "github.com/c/z"))
+  onset <- paste(fr$work$repo_id, fr$work$tool)[fr$work$reason == "onset"]
+  expect_setequal(onset, c("github.com/b/y cursor", "github.com/c/z copilot"))
+  expect_true(any(fr$work$reason %in% c("rule-new", "never-asked")))
+  expect_true(is.na(fr$campaign$since))
+  expect_false(file.exists(file.path(out, "vcs-ai-shard-confirm.db")))
 })
 
-test_that("run_gate_incremental keeps everything when no published detail exists (first weekly run)", {
-  parts <- tempfile("parts_"); dir.create(parts)
-  write_flagged_partial(file.path(parts, "vcs-ai-cheap-0.db"),
-    data.frame(repo_id = "github.com/a/x", owner = "a", name = "x", node_id = "R_a",
-               is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_,
-               stringsAsFactors = FALSE),
-    data.frame(repo_id = "github.com/a/x", tool = "claude", tier = "D", marker = "CLAUDE.md",
-               agnostic = 0L, stringsAsFactors = FALSE))
-  io <- list(download = function(pattern, dir) FALSE)   # no published release yet
+test_that("a first week with nothing published dates every tool", {
   out <- tempfile("out_"); dir.create(out)
-  run_gate_incremental(io, out, parts)
+  suppressMessages(run_gate_incremental(.no_release_io(), out, .gate_parts()))
   fr <- read_flagged(file.path(out, "vcs-ai-flagged-roster.db"))
-  expect_equal(fr$flagged$repo_id, "github.com/a/x")    # nothing published -> everything is new
+  expect_equal(sum(fr$work$reason == "onset"), 4L)
+})
 
-  ccon <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-confirm.db"))
-  on.exit(DBI::dbDisconnect(ccon), add = TRUE)
-  expect_equal(nrow(DBI::dbReadTable(ccon, "vcs_ai_signals")), 0)  # nothing to confirm yet
+test_that("the gate stops when the release exists and its summary cannot be read", {
+  io <- list(download = function(pattern, dir) FALSE, release_exists = function() TRUE)
+  expect_error(suppressMessages(run_gate(io, tempfile("out_"), .gate_parts(), full = FALSE)),
+               "vcs-signals-summary.db")
+})
+
+test_that("a full gate starts a campaign or resumes the stored one", {
+  rel <- tempfile("rel_"); dir.create(rel)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel, "vcs-signals-summary.db"))
+  ensure_repo_schema(scon); ensure_series_schema(scon); DBI::dbDisconnect(scon)
+  .fake_recent(rel, c(ai_campaign_since = "2026-09-01"))
+  out <- tempfile("out_"); dir.create(out)
+  suppressMessages(run_gate(local_release_io(rel), out, .gate_parts(), full = TRUE))
+  fr <- read_flagged(file.path(out, "vcs-ai-flagged-roster.db"))
+  expect_equal(fr$campaign$since, "2026-09-01")
+  expect_true(any(fr$work$reason == "campaign"))
+  fresh <- tempfile("out_"); dir.create(fresh)
+  suppressMessages(run_gate(.no_release_io(), fresh, .gate_parts(), full = TRUE))
+  expect_equal(read_flagged(file.path(fresh, "vcs-ai-flagged-roster.db"))$campaign$since, format(Sys.Date()))
+})
+
+test_that("the gate reads a cheap partial whole and asks the count of a REST-only address beside a GraphQL one", {
+  rid <- "github.com/g/w"
+  rest <- "account.41898282+claude[bot]@users.noreply.github.com"
+  # Commits by a GraphQL address and by a REST-only one, in the order that dropped the second.
+  ev <- rbind(
+    cbind(repo_id = rid, .ai_found("claude", "A", "A", onset = "2026-09-01T10:00:00Z",
+                                   newest_at = "2026-09-20T10:00:00Z")),
+    cbind(repo_id = rid, .ai_found("claude", "A", "A", rule_key = rest, onset = "2026-09-02T10:00:00Z",
+                                   newest_at = "2026-09-21T10:00:00Z")))
+  parts <- tempfile("parts_"); dir.create(parts)
+  write_cheap_partial(file.path(parts, "vcs-ai-cheap-0.db"), list(
+    flagged = data.frame(repo_id = rid, owner = "g", name = "w", node_id = "R_g", is_fork = 0L,
+                         stringsAsFactors = FALSE),
+    evidence = ev,
+    repo_reads = data.frame(repo_id = rid, commits_read_on = "2026-09-27", commits_read_through = "2026-09-21T10:00:00Z",
+                            commits_ruleset = AI_RULESET_VERSION, commits_read = 40L, commits_window_complete = 1L,
+                            commits_history_complete = 1L, reached_first = 1L, stringsAsFactors = FALSE)))
+  out <- tempfile("out_"); dir.create(out)
+  suppressMessages(run_gate_incremental(.no_release_io(), out, parts))
+  fr <- read_flagged(file.path(out, "vcs-ai-flagged-roster.db"))
+  expect_setequal(fr$evidence$rule_key, c(NA, rest))
+  expect_equal(fr$work$rule_key[fr$work$reason == "account-count"], rest)
+  # This week's read reached the first commit under the current rules, so no message or name search is due.
+  expect_false(any(fr$work$reason %in% c("rule-new", "never-asked")))
 })
 
 test_that("run_deep dates a github-located marker via its .github/ real path", {
@@ -565,6 +586,25 @@ test_that("main dispatches gate-incremental to run_gate_incremental", {
   expect_true(isTRUE(rec$hit))
   expect_equal(rec$out, "myout")
   expect_equal(rec$parts, "myparts")   # read from VCS_PARTS, same as the plain gate
+})
+
+test_that("main runs the plain gate as a full gate over the release", {
+  rec <- new.env()
+  orig_fn <- run_gate
+  orig_parts <- Sys.getenv("VCS_PARTS", unset = NA)
+  on.exit({
+    run_gate <<- orig_fn
+    if (is.na(orig_parts)) Sys.unsetenv("VCS_PARTS") else Sys.setenv(VCS_PARTS = orig_parts)
+  }, add = TRUE)
+  run_gate <<- function(io, out_dir, parts_dir, full = TRUE) {
+    rec$io <- io; rec$out <- out_dir; rec$parts <- parts_dir; rec$full <- full; invisible(TRUE)
+  }
+  io <- .no_release_io()
+  Sys.setenv(VCS_PARTS = "myparts")
+  main("gate", "myout", io = io)
+  expect_identical(rec$io, io)
+  expect_equal(c(rec$out, rec$parts), c("myout", "myparts"))
+  expect_true(rec$full)
 })
 
 test_that("write_dev_tooling_partial / read_dev_tooling round-trip a stamped snapshot row", {

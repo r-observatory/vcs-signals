@@ -1650,48 +1650,6 @@ next_pr_read_state <- function(prev, page1, plan, walked, today) {
        prs_walk_cursor = if (stopped) NA_character_ else as.character(walked$end_cursor %||% plan$after))
 }
 
-#' New-tool gate for the weekly incremental. Returns the subset of flagged repo_ids that
-#' carry at least one (repo_id, tool) pair in THIS week's cheap-pass evidence that is NOT
-#' already present in the published vcs_ai_signals detail for that repo. A repo whose current
-#' tools are all already published (their onsets are immutable and done) is skipped, so the
-#' deep matrix only re-onsets genuinely new adoptions. agents-md is not special-cased: it is a
-#' stored tool row like any other (build_ai_detail / ai_onset_reducer treat it uniformly; only
-#' the summary rollup excludes agnostic tools), so a newly-adopted agents-md selects its repo
-#' and an already-published one does not. published_detail may be empty (the first weekly run
-#' before any onset has been published), in which case every flagged repo is new. Pure.
-select_incremental_repos <- function(flagged, evidence, published_detail) {
-  if (is.null(flagged) || nrow(flagged) == 0) return(character(0))
-  if (is.null(evidence) || nrow(evidence) == 0) return(character(0))
-  cur_key <- paste(evidence$repo_id, evidence$tool, sep = "\r")
-  pub_key <- if (is.null(published_detail) || nrow(published_detail) == 0) character(0)
-             else paste(published_detail$repo_id, published_detail$tool, sep = "\r")
-  new_repos <- unique(evidence$repo_id[!(cur_key %in% pub_key)])
-  flagged$repo_id[flagged$repo_id %in% new_repos]
-}
-
-#' Confirmation rows for the weekly incremental: for every (repo_id, tool) pair present in
-#' BOTH this week's cheap-pass evidence and the published vcs_ai_signals detail (an
-#' already-published tool the roster still shows this week), emit a lightweight row that
-#' carries only last_confirmed_date = today, in the exact 7-col vcs_ai_signals shape
-#' ai_onset_reducer consumes. This reuses the cheap-pass data already fetched for the gate -
-#' no new API calls. The returned row's first_seen_date is NA (dropped by the reducer's
-#' non-NA date filter), evidence_tiers is NA (contributes nothing to the tier union), and
-#' authored is 0 (OR'd with the prior value) - so the prior row's exact onset, tiers, and
-#' authored flag all survive untouched through ai_onset_reducer; only last_confirmed_date
-#' advances via max(). Pure.
-select_confirmation_rows <- function(evidence, published_detail, today) {
-  if (is.null(evidence) || nrow(evidence) == 0) return(.ai_empty_signals())
-  if (is.null(published_detail) || nrow(published_detail) == 0) return(.ai_empty_signals())
-  cur_key <- paste(evidence$repo_id, evidence$tool, sep = "\r")
-  pub_key <- paste(published_detail$repo_id, published_detail$tool, sep = "\r")
-  hit <- !duplicated(cur_key) & (cur_key %in% pub_key)
-  if (!any(hit)) return(.ai_empty_signals())
-  data.frame(repo_id = evidence$repo_id[hit], tool = evidence$tool[hit],
-             first_seen_date = NA_character_, first_seen_censored = 0L,
-             evidence_tiers = NA_character_, authored = 0L,
-             last_confirmed_date = today, stringsAsFactors = FALSE)
-}
-
 #' TRUE for each vcs_ai_signals row that says nothing but when it was confirmed: no
 #' onset, no evidence tier and no marker. That is the shape of a confirmation row, and
 #' of the published row the reducer made out of one. A frame without a markers column

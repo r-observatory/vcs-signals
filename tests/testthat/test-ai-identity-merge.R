@@ -4,6 +4,11 @@
 source(file.path(.repo_root, "scripts", "ai_backfill.R"))
 setwd(.aiim_wd)
 
+# The shape the old weekly gate wrote for a tool it saw again: a date and nothing else.
+.confirm_rows <- function(repo, tool, today)
+  data.frame(repo_id = repo, tool = tool, first_seen_date = NA_character_, first_seen_censored = 0L,
+             evidence_tiers = NA_character_, authored = 0L, last_confirmed_date = today, stringsAsFactors = FALSE)
+
 # Two CRAN packages whose DESCRIPTION URLs name two slugs of ONE GitHub repository,
 # both still listed, so both repo_ids stay active: the uchidamizuki/japanstat and
 # uchidamizuki/jpstat shape. The fold used to collapse them onto japanstat on every
@@ -54,8 +59,8 @@ setwd(.aiim_wd)
          "SELECT package, repo_id, ai_markers_detected, ai_tools FROM vcs_signals_summary"))
 }
 
-# The shard the incremental gate writes: a confirmation for every published key the
-# cheap pass saw again this week. Both slugs are scanned, since both are active.
+# The shard the old weekly gate wrote: a confirmation for every published key the
+# cheap pass saw again that week. Both slugs are scanned, since both are active.
 .confirm_parts <- function(io, today) {
   pub <- .published(io)$ai
   ev <- data.frame(repo_id = rep(c(.JAP, .JP), each = 2), tool = rep(c("claude", "agents-md"), 2),
@@ -63,7 +68,8 @@ setwd(.aiim_wd)
                    agnostic = rep(c(0L, 1L), 2), stringsAsFactors = FALSE)
   parts <- tempfile("parts_"); dir.create(parts)
   export_ai_shard(file.path(parts, "vcs-ai-shard-confirm.db"),
-                  select_confirmation_rows(ev, pub, today))
+                  .confirm_rows(pub$repo_id[paste(pub$repo_id, pub$tool) %in% paste(ev$repo_id, ev$tool)],
+                                pub$tool[paste(pub$repo_id, pub$tool) %in% paste(ev$repo_id, ev$tool)], today))
   list(parts = parts, ev = ev, pub = pub)
 }
 
@@ -107,11 +113,6 @@ test_that("a hollow row already published on an active sibling heals on the next
     .hollow_row(.JP, "agents-md", "2026-09-13")))
 
   cp <- .confirm_parts(io, "2026-09-20")
-  # A hollow key counts as published, so the incremental gate never schedules the
-  # deep scan that could rebuild it. Healing has to come from the sibling.
-  flagged <- data.frame(repo_id = c(.JAP, .JP), stringsAsFactors = FALSE)
-  expect_length(select_incremental_repos(flagged, cp$ev, cp$pub), 0L)
-
   msgs <- testthat::capture_messages(run_merge(io, tempfile("m_"), cp$parts))
   got <- .published(io)
   expect_equal(.merge_prior_count(msgs), 4L)
@@ -135,19 +136,13 @@ test_that("a confirmation for a key the merge holds no row for creates nothing",
   stale <- data.frame(repo_id = c(.JAP, .JP), tool = "claude", first_seen_date = "2026-06-22",
                       first_seen_censored = 0L, evidence_tiers = "D", authored = 0L,
                       last_confirmed_date = "2026-09-13", stringsAsFactors = FALSE)
-  ev <- data.frame(repo_id = c(.JAP, .JP), tool = "claude", tier = "D", marker = ".claude",
-                   agnostic = 0L, stringsAsFactors = FALSE)
   parts <- tempfile("parts_"); dir.create(parts)
   export_ai_shard(file.path(parts, "vcs-ai-shard-confirm.db"),
-                  select_confirmation_rows(ev, stale, "2026-09-20"))
+                  .confirm_rows(stale$repo_id, stale$tool, "2026-09-20"))
 
   suppressMessages(run_merge(io, tempfile("m_"), parts))
   got <- .published(io)$ai
   expect_equal(got$repo_id, .JAP)
   expect_equal(got$last_confirmed_date, "2026-09-20")
   expect_false(any(.hollow(got)))
-  # Dropping it loses nothing for good: the key is not published, so the next gate
-  # deep-scans jpstat, which is still active and still flagged, and dates it.
-  flagged <- data.frame(repo_id = c(.JAP, .JP), stringsAsFactors = FALSE)
-  expect_equal(select_incremental_repos(flagged, ev, got), .JP)
 })

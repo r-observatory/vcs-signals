@@ -342,19 +342,30 @@ run_enumerate_ai <- function(io, out_dir) {
   data.frame(repo_id = character(), tool = character(), tier = character(),
              marker = character(), agnostic = integer(), stringsAsFactors = FALSE)
 
-write_flagged_partial <- function(path, flagged_df, evidence_df) {
+write_flagged_partial <- function(path, flagged_df, evidence_df, work = NULL, campaign = NULL) {
   if (file.exists(path)) unlink(path)
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   DBI::dbExecute(con, "PRAGMA journal_mode=DELETE")
-  DBI::dbExecute(con, "CREATE TABLE flagged (repo_id TEXT PRIMARY KEY, owner TEXT, name TEXT,
-    node_id TEXT, is_fork INTEGER, parent TEXT, pr_onset_date TEXT)")
-  DBI::dbExecute(con, "CREATE TABLE evidence (repo_id TEXT, tool TEXT, tier TEXT,
-    marker TEXT, agnostic INTEGER)")
-  if (nrow(flagged_df) > 0) DBI::dbWriteTable(con, "flagged", flagged_df, append = TRUE)
-  if (nrow(evidence_df) > 0) DBI::dbWriteTable(con, "evidence", evidence_df, append = TRUE)
+  DBI::dbWriteTable(con, "flagged", .ai_bind_like(.ai_empty_flagged(), list(flagged_df)), overwrite = TRUE)
+  DBI::dbWriteTable(con, "evidence", .ai_bind_like(cbind(repo_id = character(0), .ai_empty_found()),
+                                                   list(evidence_df)), overwrite = TRUE)
+  # A roster written without a list keeps no work table, so the search pass can tell it
+  # from a week with nothing to do.
+  if (!is.null(work))
+    DBI::dbWriteTable(con, "work", .ai_bind_like(.ai_empty_work(), list(work)), overwrite = TRUE)
+  if (!is.null(campaign))
+    DBI::dbWriteTable(con, "campaign", .ai_bind_like(data.frame(since = character(), stringsAsFactors = FALSE),
+                                                     list(campaign)), overwrite = TRUE)
   DBI::dbExecute(con, "VACUUM")
   invisible(path)
+}
+
+# One table of a partial, or NULL when the partial predates it.
+.ai_part_table <- function(path, table) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  if (DBI::dbExistsTable(con, table)) DBI::dbReadTable(con, table) else NULL
 }
 
 read_flagged <- function(path) {
@@ -680,70 +691,59 @@ run_cheap <- function(io, out_dir, roster_path, i, N, batch_size = TIER_D_BATCH)
 }
 
 # ---- gate -------------------------------------------------------------------
-#' Union every cheap shard's flagged partial into one smaller flagged-roster the deep
-#' matrix shards over. Dedups flagged rows by repo_id and evidence rows by
-#' (repo_id, tool, marker), so a repo split across a shard boundary is folded once.
-run_gate <- function(out_dir, parts_dir) {
+#' The published tables the gate plans from. A release whose summary cannot be read stops
+#' the gate: planning from nothing would put every repository back on the list.
+.ai_read_published_detail <- function(io, out_dir) {
+  empty <- list(signals = .ai_empty_signals(), search_log = .ai_empty_log(),
+                repo_reads = .ai_empty_reads(), account_counts = .ai_empty_counts())
+  if (!isTRUE(io$download("vcs-signals-summary.db", out_dir))) {
+    if (isTRUE(io$release_exists()))
+      stop("release 'current' exists but vcs-signals-summary.db could not be downloaded; the gate ",
+           "stops rather than plan the week from nothing", call. = FALSE)
+    return(empty)
+  }
+  con <- DBI::dbConnect(RSQLite::SQLite(), file.path(out_dir, "vcs-signals-summary.db"))
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  get <- function(t, e) if (DBI::dbExistsTable(con, t)) .ai_bind_like(e, list(DBI::dbReadTable(con, t))) else e
+  list(signals = get("vcs_ai_signals", empty$signals), search_log = get("vcs_ai_search_log", empty$search_log),
+       repo_reads = get("vcs_ai_repo_reads", empty$repo_reads),
+       account_counts = get("vcs_ai_account_counts", empty$account_counts))
+}
+
+#' Union the cheap partials into the flagged roster and write the week's search work.
+#' A full gate works on a campaign: the stored one, or one dated today.
+run_gate <- function(io, out_dir, parts_dir, full = TRUE) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   parts <- list.files(parts_dir, pattern = "^vcs-ai-cheap-.*\\.db$", full.names = TRUE)
-  fl <- lapply(parts, function(p) read_flagged(p)$flagged)
-  ev <- lapply(parts, function(p) read_flagged(p)$evidence)
-  flagged_df <- if (length(fl)) do.call(rbind, fl) else .ai_empty_flagged()
-  ev_df <- if (length(ev)) do.call(rbind, ev) else .ai_empty_ev()
+  fr <- lapply(parts, read_flagged)
+  flagged_df <- .ai_bind_like(.ai_empty_flagged(), lapply(fr, `[[`, "flagged"))
   flagged_df <- flagged_df[!duplicated(flagged_df$repo_id), , drop = FALSE]
-  ev_df <- ev_df[!duplicated(paste(ev_df$repo_id, ev_df$tool, ev_df$marker, sep = "\r")), , drop = FALSE]
-  write_flagged_partial(file.path(out_dir, "vcs-ai-flagged-roster.db"), flagged_df, ev_df)
-  message(sprintf("ai gate: %d flagged repos, %d evidence rows across %d shard(s)",
-                  nrow(flagged_df), nrow(ev_df), length(parts)))
-}
-
-#' Read the published vcs_ai_signals detail (the incremental baseline) out of the current
-#' release's summary shard. Returns the typed 0-row frame when no release exists yet (first
-#' ever weekly run) or the table is absent, so the gate treats every flagged repo as new
-#' rather than erroring - absence is never read as "clean".
-.ai_read_published_detail <- function(io, out_dir) {
-  if (!isTRUE(io$download("vcs-signals-summary.db", out_dir))) return(.ai_empty_signals())
-  p <- file.path(out_dir, "vcs-signals-summary.db")
-  con <- DBI::dbConnect(RSQLite::SQLite(), p)
-  on.exit(DBI::dbDisconnect(con), add = TRUE)
-  if (!DBI::dbExistsTable(con, "vcs_ai_signals")) return(.ai_empty_signals())
-  DBI::dbReadTable(con, "vcs_ai_signals")
-}
-
-#' The weekly incremental gate. Unions the cheap partials into the full flagged roster with
-#' run_gate verbatim, then narrows it to only the repos carrying a tool not yet present in the
-#' published vcs_ai_signals detail (select_incremental_repos), so the deep matrix re-onsets
-#' only genuinely new adoptions - re-detecting an already-published tool's ONSET would be a
-#' no-op through ai_onset_reducer. The published detail is the sole baseline (no separate
-#' last-week store). Before narrowing, also computes select_confirmation_rows over the FULL
-#' evidence frame and writes it with export_ai_shard (the same writer run_deep uses) as
-#' out_dir/vcs-ai-shard-confirm.db, so an already-published tool's last_confirmed_date still
-#' advances even though its repo is skipped below - without that, the skip branch would freeze
-#' last_confirmed_date at the onset date forever, since run_deep is the only other path that
-#' stamps it. The name rides run_merge's unchanged vcs-ai-shard-*.db glob (ai_backfill.R:347),
-#' so no merge code changes; only the workflow (Task 4) has to route the file into the merge
-#' job's parts directory. A week with no new adoptions narrows the flagged roster to empty; the
-#' deep matrix then produces empty shards and run_merge folds prior + nothing + confirmations =
-#' prior with last_confirmed refreshed. Rewrites the same vcs-ai-flagged-roster.db the deep
-#' matrix reads, so no downstream job changes to that artifact.
-run_gate_incremental <- function(io, out_dir, parts_dir) {
-  run_gate(out_dir, parts_dir)                       # full flagged roster (B2 verbatim)
-  roster_path <- file.path(out_dir, "vcs-ai-flagged-roster.db")
-  fr <- read_flagged(roster_path)
-  published <- .ai_read_published_detail(io, out_dir)
-  keep <- select_incremental_repos(fr$flagged, fr$evidence, published)
-
+  ev_df <- .ai_bind_like(cbind(repo_id = character(0), .ai_empty_found()), lapply(fr, `[[`, "evidence"))
+  # rule_key keeps the commits of a REST-only address apart from those of the GraphQL addresses.
+  ev_df <- ev_df[!duplicated(paste(ev_df$repo_id, ev_df$tool, ev_df$tier, ev_df$marker, ev_df$role,
+                                   ev_df$rule_key, sep = "\r")), , drop = FALSE]
+  pub <- .ai_read_published_detail(io, out_dir)
+  reads <- fold_repo_reads(pub$repo_reads, .ai_bind_like(.ai_empty_reads(),
+                                                         lapply(parts, .ai_part_table, table = "repo_reads")))
   today <- format(Sys.Date())
-  confirm_rows <- select_confirmation_rows(fr$evidence, published, today)
-  export_ai_shard(file.path(out_dir, "vcs-ai-shard-confirm.db"), confirm_rows)
-
-  flagged_df <- fr$flagged[fr$flagged$repo_id %in% keep, , drop = FALSE]
-  ev_df      <- fr$evidence[fr$evidence$repo_id %in% keep, , drop = FALSE]
-  write_flagged_partial(roster_path, flagged_df, ev_df)
-  message(sprintf(
-    "ai gate (incremental): %d of %d flagged repos carry a new tool since the last publish, %d confirmation rows",
-    nrow(flagged_df), nrow(fr$flagged), nrow(confirm_rows)))
+  since <- NA_character_
+  if (isTRUE(full)) {
+    stored <- unname(.ai_read_pipeline_state(io, file.path(out_dir, "_state"))["ai_campaign_since"])
+    since <- campaign_start(TRUE, if (length(stored)) stored else NA_character_, today)
+  }
+  work <- select_deep_work(flagged_df, ev_df, pub$signals, pub$search_log, reads, pub$account_counts,
+                           campaign_since = since, today = today, full = full)
+  write_flagged_partial(file.path(out_dir, "vcs-ai-flagged-roster.db"), flagged_df, ev_df, work = work,
+                        campaign = data.frame(since = since, stringsAsFactors = FALSE))
+  counts <- table(factor(work$reason, levels = names(AI_WORK_PRIORITY)))
+  message(sprintf("ai gate: %d flagged repos across %d shard(s), %d searches or datings to do (%s)%s",
+                  nrow(flagged_df), length(parts), nrow(work),
+                  paste(sprintf("%s %d", names(counts), as.integer(counts)), collapse = ", "),
+                  if (is.na(since)) "" else sprintf(", campaign since %s", since)))
 }
+
+#' The weekly gate: the same work list without a campaign.
+run_gate_incremental <- function(io, out_dir, parts_dir) run_gate(io, out_dir, parts_dir, full = FALSE)
 
 # ---- deep onset shard IO ----------------------------------------------------
 export_ai_shard <- function(path, rows, model_rows = NULL) {
@@ -1236,7 +1236,7 @@ main <- function(mode, out_dir, io = NULL) {
     roster_dir <- Sys.getenv("VCS_ROSTER", out_dir)
     run_cheap(io, out_dir, file.path(roster_dir, "vcs-ai-roster.db"), i, N)
   } else if (mode == "gate") {
-    run_gate(out_dir, Sys.getenv("VCS_PARTS", "parts"))
+    run_gate(io, out_dir, Sys.getenv("VCS_PARTS", "parts"), full = TRUE)
   } else if (mode == "gate-incremental") {
     run_gate_incremental(io, out_dir, Sys.getenv("VCS_PARTS", "parts"))
   } else if (mode == "deep") {
