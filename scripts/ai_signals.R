@@ -248,33 +248,106 @@ match_bot_identity <- function(emails, logins) {
   .ai_rows(unique(hit), "A")
 }
 
-#' Tier B: a commit message matches a canonical AI trailer pattern.
+#' The tools each message's Assisted-by lines name, per AI_ASSISTED_BY_TOOLS. Pure.
+ai_assisted_by_tools <- function(messages) {
+  lapply(tolower(messages %||% character(0)), function(m) {
+    if (is.na(m)) return(character(0))
+    vals <- regmatches(m, gregexpr("(^|\\n)assisted-by:[^\\n]*", m, perl = TRUE))[[1]]
+    vals <- sub("^\\n?assisted-by:\\s*", "", vals, perl = TRUE)
+    unique(as.character(unlist(lapply(vals, function(v) {
+      hit <- Filter(function(p) grepl(p, v, perl = TRUE), names(AI_ASSISTED_BY_TOOLS))
+      if (length(hit)) unname(AI_ASSISTED_BY_TOOLS[hit[[1]]]) else character(0)
+    }))))
+  })
+}
+
+#' TRUE for dates inside the VS Code Copilot false window, inclusive. Pure.
+.ai_in_false_window <- function(dates) {
+  d <- substr(as.character(dates), 1, 10)
+  !is.na(d) & d >= AI_COPILOT_VSCODE_FALSE_WINDOW[1] & d <= AI_COPILOT_VSCODE_FALSE_WINDOW[2]
+}
+
+#' Commit messages crediting a tool, one row per tool named. Pure.
 scan_trailers <- function(messages) {
   msgs <- tolower(messages %||% character(0))
   tools <- character(0)
-  for (p in AI_TRAILER_PATTERNS)
+  for (p in AI_TRAILER_PATTERNS) {
+    if (identical(p$key, "msg.any.assisted-by")) next
     if (any(grepl(p$pattern, msgs, perl = TRUE))) tools <- c(tools, p$tool)
-  .ai_rows(tools, "B")
+  }
+  .ai_rows(c(tools, unlist(ai_assisted_by_tools(messages))), "B")
 }
 
-#' Verify a commit-search hit against the real rule it was searched for.
-#'
-#' Commit search does no regex, so a hit is a candidate. Running the actual pattern over
-#' the returned message (or the suffix over the author name) is what separates a genuine
-#' trailer from a human named Claude. A verified hit may carry an exact onset; an
-#' unverified one is still evidence the tier fired, but its date is only a floor.
-#'
-#' Returns list(tool, tier, confirmed). Pure.
+#' Check a commit-search hit against the rule it was searched for. Commit search does no
+#' regex, so an unchecked hit dates only a floor. The Assisted-by rule takes its tool from
+#' the line, and a VS Code Copilot hit inside the false window is not a use. Pure.
 verify_search_hit <- function(rule, tier, hit) {
   msg <- .nn(hit$message, NA_character_)
   aut <- .nn(hit$author, NA_character_)
+  if (identical(rule$key, "msg.any.assisted-by")) {
+    mapped <- if (is.na(msg)) character(0) else ai_assisted_by_tools(msg)[[1]]
+    return(list(tool = if (length(mapped)) mapped[1] else NA_character_, tier = tier,
+                confirmed = length(mapped) > 0))
+  }
   confirmed <- if (identical(tier, "B")) {
-    !is.na(msg) && nrow(scan_trailers(msg)) > 0 &&
-      any(grepl(rule$pattern, tolower(msg), perl = TRUE))
+    !is.na(msg) && any(grepl(rule$pattern, tolower(msg), perl = TRUE))
   } else {
     !is.na(aut) && any(endsWith(trimws(aut), rule$suffix))
   }
+  if (identical(rule$key, "msg.copilot.vscode") && isTRUE(.ai_in_false_window(.nn(hit$date, NA_character_))))
+    confirmed <- FALSE
   list(tool = rule$tool, tier = tier, confirmed = isTRUE(confirmed))
+}
+
+.ai_empty_commit_hits <- function()
+  data.frame(oid = character(), committed_at = character(), tool = character(), code = character(),
+             rule_key = character(), role = character(), stringsAsFactors = FALSE)
+
+#' Every rule a commit matches, read locally: commits by a tool's account (code A, from
+#' the author address or bot name, never the GraphQL login), commits crediting it (B),
+#' an author-name suffix (C), and review credits (role review). Pure.
+match_commit_findings <- function(commits) {
+  if (is.null(commits) || !nrow(commits)) return(.ai_empty_commit_hits())
+  lower <- function(x) { x <- tolower(as.character(x)); x[is.na(x)] <- ""; x }
+  em <- lower(commits$author_email); nm <- trimws(lower(commits$author_name)); msg <- lower(commits$message)
+  hits <- list()
+  put <- function(rows, tool, code, key, role = "authoring") {
+    rows <- !is.na(rows) & rows
+    if (any(rows)) hits[[length(hits) + 1L]] <<- data.frame(
+      oid = commits$oid[rows], committed_at = commits$committed_at[rows], tool = tool, code = code,
+      rule_key = key, role = role, stringsAsFactors = FALSE)
+  }
+  for (a in AI_ACCOUNTS) {
+    rest <- tolower(a$rest_only)
+    put((em %in% tolower(c(a$graphql, a$linked)) | nm %in% tolower(a$names)) & !(em %in% rest),
+        a$tool, "A", NA_character_)
+    for (addr in a$rest_only) put(em == tolower(addr), a$tool, "A", paste0("account.", addr))
+  }
+  for (r in AI_TRAILER_PATTERNS) {
+    if (identical(r$key, "msg.any.assisted-by")) next
+    m <- grepl(r$pattern, msg, perl = TRUE)
+    if (identical(r$key, "msg.copilot.vscode")) m <- m & !.ai_in_false_window(commits$committed_at)
+    put(m, r$tool, "B", r$key)
+  }
+  named <- ai_assisted_by_tools(msg)
+  for (tl in unique(unlist(named)))
+    put(vapply(named, function(x) tl %in% x, logical(1)), tl, "B", "msg.any.assisted-by")
+  for (s in AI_AUTHOR_SUFFIXES) put(endsWith(nm, tolower(s$suffix)), s$tool, "C", s$key)
+  for (r in AI_REVIEW_RULES) put(grepl(r$pattern, msg, perl = TRUE), r$tool, "B", r$key, role = "review")
+  if (!length(hits)) return(.ai_empty_commit_hits())
+  do.call(rbind, hits)
+}
+
+#' Every keyed rule with its revision and the text a revision pins. Pure.
+ai_rule_rev_table <- function() {
+  one <- function(r, pattern) data.frame(key = r$key, rev = as.integer(r$rev), since_ruleset = r$since_ruleset,
+                                         pattern = pattern, query = r$query %||% NA_character_,
+                                         stringsAsFactors = FALSE)
+  pr_rules <- if (exists("AI_PR_RULES")) AI_PR_RULES else list()
+  do.call(rbind, c(lapply(AI_TRAILER_PATTERNS, function(r) one(r, r$pattern)),
+                   lapply(AI_AUTHOR_SUFFIXES, function(r) one(r, r$suffix)),
+                   lapply(AI_REVIEW_RULES, function(r) one(r, r$pattern)),
+                   lapply(pr_rules, function(r) one(r, r$pattern))))
 }
 
 #' Tier C: an author display name ends with a known agent suffix.
@@ -459,7 +532,8 @@ ai_rule_inventory <- function() {
   tool_of <- function(xs) vapply(xs, function(x) x$tool, character(1))
   inv <- rbind(
     data.frame(tier = "A", tool = vapply(AI_ACCOUNTS, `[[`, "", "tool"), stringsAsFactors = FALSE),
-    data.frame(tier = "B", tool = unname(tool_of(AI_TRAILER_PATTERNS)), stringsAsFactors = FALSE),
+    data.frame(tier = "B", tool = c(unname(Filter(function(t) t != "any", tool_of(AI_TRAILER_PATTERNS))),
+                                    unname(AI_ASSISTED_BY_TOOLS)), stringsAsFactors = FALSE),
     data.frame(tier = "C", tool = unname(tool_of(AI_AUTHOR_SUFFIXES)), stringsAsFactors = FALSE),
     # ai_deliberate_markers(), not AI_MARKERS: the classifier drops ambient
     # markers, so .positai and .idx can never produce a tier-D detection. Listing

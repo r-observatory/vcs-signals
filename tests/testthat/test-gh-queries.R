@@ -120,15 +120,14 @@ test_that("a search query containing a space survives the shell", {
                info = "the unquoted form silently breaks every multi-word query")
 })
 
-test_that("every trailer query the ruleset ships contains a space", {
-  # This is what made the bug total rather than partial: there is no single-word
-  # trailer, so no tier-B search could ever have worked.
-  for (r in AI_TRAILER_PATTERNS) {
-    expect_true(grepl(" ", r$query, fixed = TRUE) || !grepl(" ", r$query, fixed = TRUE))
+test_that("every search query reaches gh as one argument, spaces and quotes included", {
+  # The transport pastes arguments into a shell line, so each query is single-quoted.
+  rules <- c(AI_TRAILER_PATTERNS, AI_AUTHOR_SUFFIXES, AI_REVIEW_RULES)
+  for (r in rules) {
+    q <- sprintf("repo:%s/%s %s", "o", "n", r$query)
+    got <- system2("printf", c("%s", shQuote(paste0("q=", q))), stdout = TRUE)
+    expect_equal(paste(got, collapse = "\n"), paste0("q=", q), info = r$key)
   }
-  spaced <- vapply(AI_TRAILER_PATTERNS, function(r) grepl(" ", r$query, fixed = TRUE), logical(1))
-  expect_true(any(spaced),
-              info = "if this ever goes all-FALSE the quoting bug stops being detectable here")
 })
 
 test_that("the tree query fetches the subtrees the ruleset actually reads", {

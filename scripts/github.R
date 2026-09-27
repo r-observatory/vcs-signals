@@ -813,6 +813,18 @@ parse_account_counts <- function(resp, repos) {
   out
 }
 
+#' GraphQL commit nodes as a frame. The message is kept for matching in memory only and
+#' is never written anywhere.
+.ai_commit_nodes_frame <- function(nodes) {
+  nodes <- nodes %||% list()
+  chr <- function(f) vapply(nodes, function(n) { v <- f(n); if (is.null(v)) NA_character_ else as.character(v) },
+                            character(1))
+  data.frame(oid = chr(function(n) n$oid), committed_at = chr(function(n) n$committedDate),
+             message = chr(function(n) n$message), author_name = chr(function(n) n$author$name),
+             author_email = chr(function(n) n$author$email), author_login = chr(function(n) n$author$user$login),
+             stringsAsFactors = FALSE)
+}
+
 #' Pure: the earliest-match commit date from a search/commits JSON body, or NA when
 #' total_count is 0, items is empty, or the body does not parse. The match is FUZZY
 #' (substring-ish), so the caller treats this date as a CANDIDATE onset.

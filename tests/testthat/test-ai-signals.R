@@ -770,13 +770,15 @@ test_that("every tool that signs commits has a trailer rule keyed on its address
     jules     = "Co-authored-by: google-labs-jules[bot] <1+google-labs-jules[bot]@users.noreply.github.com>",
     windsurf  = "Co-authored-by: Windsurf Cascade <cascade@windsurf.ai>",
     gemini    = "Co-Authored-By: Gemini 2.5 Flash <noreply@google.com>",
-    gemini2   = "Co-authored-by: gemini-code-assist[bot] <1+gemini-code-assist[bot]@users.noreply.github.com>",
     aider     = "Co-authored-by: aider (openai/DeepSeek-R1) <aider@aider.chat>"
   )
   for (nm in names(real)) {
     hit <- scan_trailers(real[[nm]])
     expect_true(nrow(hit) > 0, info = paste(nm, real[[nm]]))
   }
+  # Gemini Code Assist accepting a review suggestion is a review credit, not Gemini writing code.
+  expect_equal(nrow(scan_trailers(
+    "Co-authored-by: gemini-code-assist[bot] <1+gemini-code-assist[bot]@users.noreply.github.com>")), 0L)
 
   # Humans who share a name with an agent must not be flagged. These appeared in
   # the same searches as the agents above.
