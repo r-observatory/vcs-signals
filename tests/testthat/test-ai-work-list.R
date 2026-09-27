@@ -1,29 +1,32 @@
-.f <- function(repo, tool, tier, marker, rule_key = NA_character_, newest = NA_character_, role = "authoring")
-  cbind(repo_id = repo, .ai_found(tool, tier, marker, role = role, rule_key = rule_key,
+.bot <- "account.41898282+claude[bot]@users.noreply.github.com"
+.f <- function(repo, tool, code, value, rule_key = NA_character_, newest = NA_character_, role = "authoring")
+  cbind(repo_id = repo, .ai_found(tool, code, value, role = role, rule_key = rule_key,
                                   onset = "2026-10-04T23:59:59Z", newest_at = newest))
 .lg <- function(repo, key, outcome, on, rev = 1L)
   data.frame(repo_id = repo, rule_key = key, rule_rev = rev, ruleset_version = AI_RULESET_VERSION,
-             asked_on = on, outcome = outcome, total_count = if (outcome == "refused") NA_integer_ else 1L,
+             asked_on = on, outcome = outcome,
+             total_count = switch(outcome, refused = NA_integer_, none = 0L, hit = 1L),
              verified = if (outcome == "hit") 1L else NA_integer_, incomplete = 0L,
              first_hit_on = if (outcome == "hit") "2025-01-01" else NA_character_, source = "search",
              stringsAsFactors = FALSE)
-.pub <- function(repo, tool, tiers) .ai_align_signals(data.frame(repo_id = repo, tool = tool,
-  first_seen_date = "2025-01-01", first_seen_censored = 0L, evidence_tiers = tiers, markers = tiers,
-  authored = 0L, last_confirmed_date = "2026-09-27", stringsAsFactors = FALSE))
+.pub <- function(repo, tool, codes, date = "2025-01-01", censored = 0L) .ai_align_signals(data.frame(
+  repo_id = repo, tool = tool, first_seen_date = date, first_seen_censored = censored, evidence_tiers = codes,
+  markers = codes, authored = 0L, last_confirmed_date = "2026-09-27", stringsAsFactors = FALSE))
+.fl <- function(ids, fork = 0L) data.frame(repo_id = ids, is_fork = fork, stringsAsFactors = FALSE)
+.whole <- function(repo) .ai_bind_like(.ai_empty_reads(), list(data.frame(repo_id = repo,
+  commits_history_complete = 1L, commits_ruleset = AI_RULESET_VERSION, stringsAsFactors = FALSE)))
 .world <- function() {
-  gh <- "account.41898282+claude[bot]@users.noreply.github.com"
   list(
-    flagged = data.frame(repo_id = paste0("r", 1:7), is_fork = 0L, stringsAsFactors = FALSE),
+    flagged = .fl(paste0("r", 1:7)),
     found = rbind(.f("r1", "claude", "D", "CLAUDE.md"),
-                  .f("r2", "claude", "A", "A", rule_key = gh, newest = "2026-10-03T00:00:00Z"),
+                  .f("r2", "claude", "A", "A", rule_key = .bot, newest = "2026-10-03T00:00:00Z"),
                   .f("r3", "corteza", "B", "msg.corteza.address", "msg.corteza.address", "2026-10-02T00:00:00Z"),
                   .f("r4", "claude", "B", "msg.claude.coauthor", "msg.claude.coauthor", "2026-10-03T00:00:00Z"),
                   .f("r7", "codex", "PB", "pr.codex.branch", "pr.codex.branch")),
     published = rbind(.pub("r4", "claude", "B"), .pub("r5", "claude", "D")),
     log = rbind(.lg("r4", "msg.claude.coauthor", "hit", "2026-09-28"),
                 .lg("r5", "msg.claude.generated", "refused", "2026-09-28")),
-    reads = .ai_bind_like(.ai_empty_reads(), list(data.frame(repo_id = "r6", commits_history_complete = 1L,
-              commits_ruleset = AI_RULESET_VERSION, stringsAsFactors = FALSE))),
+    reads = .whole("r6"),
     counts = .ai_empty_counts())
 }
 .work <- function(w, ...) select_deep_work(w$flagged, w$found, w$published, w$log, w$reads, w$counts,
@@ -33,7 +36,7 @@
 test_that("the work list puts dating first and backfills last, each item once", {
   w <- .work(.world())
   expect_setequal(w$repo_id[w$reason == "onset"], c("r1", "r2", "r3"))
-  expect_true(.has(w, "r2", "account.41898282+claude[bot]@users.noreply.github.com", "account-count"))
+  expect_true(.has(w, "r2", .bot, "account-count"))
   expect_true(.has(w, "r3", "msg.corteza.address", "window-hit"))
   expect_true(.has(w, "r4", "msg.claude.coauthor", "count-refresh"))
   expect_true(.has(w, "r5", "msg.claude.generated", "re-ask"))
@@ -99,4 +102,67 @@ test_that("a full gate starts a campaign, and a later dispatch skips what it alr
     .lg("r1", k, "none", "2026-10-05", rev = always$rev[always$key == k])))
   expect_true(campaign_finished("r1", done, .ai_empty_reads(), "2026-10-04"))
   expect_false(campaign_finished("r1", done[-1, ], .ai_empty_reads(), "2026-10-04"))
+})
+
+test_that("a rule matched after its none or never asked is refreshed, and one matched before its none is not", {
+  cred <- function(at) .f("r8", "claude", "B", "msg.claude.coauthor", "msg.claude.coauthor", at)
+  sw <- function(at, log) select_deep_work(.fl("r8"), cred(at), NULL, log, NULL, NULL, today = "2026-10-04")
+  none <- .lg("r8", "msg.claude.coauthor", "none", "2026-09-28")
+  expect_true(.has(sw("2026-10-02T00:00:00Z", none), "r8", "msg.claude.coauthor", "count-refresh"))
+  expect_false(any(sw("2026-09-20T00:00:00Z", none)$rule_key %in% "msg.claude.coauthor"))
+  expect_true(.has(sw("2026-10-02T00:00:00Z", NULL), "r8", "msg.claude.coauthor", "count-refresh"))
+  refused <- .lg("r8", "msg.claude.coauthor", "refused", "2026-09-28")
+  expect_true(.has(sw("2026-10-02T00:00:00Z", refused), "r8", "msg.claude.coauthor", "re-ask"))
+})
+
+test_that("scan-day floors and account-dated rows go back for dating only when something can date them", {
+  floor <- "2026-09-27T23:59:59Z"
+  p <- rbind(.pub("a", "claude", "D", floor, 1L), .pub("b", "claude", "D", floor, 1L),
+             .pub("c", "claude", "D", floor, 1L), .pub("d", "claude", "D"))
+  fd <- rbind(.f("a", "claude", "D", "CLAUDE.md"), .f("b", "claude", "D", "gitignore:.claude"),
+              .f("c", "claude", "D", "CLAUDE.md"), .f("d", "claude", "D", "CLAUDE.md"))
+  w <- select_deep_work(rbind(.fl(c("a", "b", "d")), .fl("c", 1L)), fd, p, NULL, NULL, NULL,
+                        today = "2026-10-04")
+  expect_equal(w$repo_id[w$reason == "onset"], "a")
+  acct <- .pub("e", "claude", "A", "2026-09-01T00:00:00Z", 1L)
+  w <- select_deep_work(.fl("e"), NULL, acct, NULL, NULL, NULL, today = "2026-10-04")
+  expect_true(any(w$repo_id == "e" & w$reason == "onset"))
+  asked <- .lg("e", "author.noreply@anthropic.com", "none", "2026-09-28")
+  w <- select_deep_work(.fl("e"), NULL, acct, asked, NULL, NULL, today = "2026-10-04")
+  expect_false(any(w$reason == "onset"))
+})
+
+test_that("a REST-only count is due for a newer commit, and a refused one is asked again while REST-only", {
+  seen <- .f("r2", "claude", "A", "A", rule_key = .bot, newest = "2026-10-03T00:00:00Z")
+  cnt <- function(on) data.frame(repo_id = "r2", tool = "claude", identity_set = sub("^account\\.", "", .bot),
+                                 commits = 3L, newest_commit_date = NA_character_, measured_on = on,
+                                 stringsAsFactors = FALSE)
+  expect_false(any(select_deep_work(.fl("r2"), seen, NULL, NULL, NULL, cnt("2026-10-03"),
+                                    today = "2026-10-04")$reason == "account-count"))
+  expect_true(any(select_deep_work(.fl("r2"), seen, NULL, NULL, NULL, cnt("2026-10-02"),
+                                   today = "2026-10-04")$reason == "account-count"))
+  w <- select_deep_work(.fl("w1"), NULL, NULL, .lg("w1", .bot, "refused", "2026-10-04"), .whole("w1"), NULL,
+                        today = "2026-10-11")
+  expect_true(.has(w, "w1", .bot, "re-ask"))
+  expect_equal(w$tool[w$rule_key %in% .bot], "claude")
+  retired <- .lg("r5", "account.gone[bot]@users.noreply.github.com", "refused", "2026-10-04")
+  w <- select_deep_work(.fl("r5"), NULL, NULL, retired, NULL, NULL, today = "2026-10-11")
+  expect_false(any(w$rule_key %in% retired$rule_key))
+})
+
+test_that("a history read whole gets neither a refresh nor a message re-ask", {
+  f <- .f("w1", "claude", "B", "msg.claude.coauthor", "msg.claude.coauthor", "2026-10-02T00:00:00Z")
+  lg <- rbind(.lg("w1", "msg.claude.coauthor", "hit", "2026-09-28"),
+              .lg("w1", "msg.claude.generated", "refused", "2026-09-28"))
+  w <- select_deep_work(.fl("w1"), f, NULL, lg, .whole("w1"), NULL, today = "2026-10-04")
+  expect_false(any(w$reason %in% c("count-refresh", "re-ask")))
+})
+
+test_that("a campaign is not finished while a rule was last asked at an older revision", {
+  always <- .ai_search_rules(); always <- always[always$search == "always", ]
+  done <- do.call(rbind, lapply(seq_len(nrow(always)), function(i)
+    .lg("r1", always$key[i], "none", "2026-10-05", rev = always$rev[i])))
+  expect_true(campaign_finished("r1", done, .ai_empty_reads(), "2026-10-04"))
+  done$rule_rev[1] <- done$rule_rev[1] - 1L
+  expect_false(campaign_finished("r1", done, .ai_empty_reads(), "2026-10-04"))
 })

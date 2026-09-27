@@ -131,9 +131,24 @@ test_that("a credit count is the largest usable rule count, and zero only when e
   claude_always <- Filter(function(x) identical(x$tool, "claude") && identical(x$search, "always"),
                           AI_TRAILER_PATTERNS)
   none <- do.call(rbind, lapply(claude_always, function(x) .log(r, x$key, "none", 0, rev = x$rev)))
-  expect_equal(derive_assisted_counts(sig, none, .ai_empty_reads())$assisted_commits, 0L)
+  bare <- sig; bare$markers <- "B"
+  expect_equal(derive_assisted_counts(bare, none, .ai_empty_reads())$assisted_commits, 0L)
   some_refused <- none; some_refused$outcome[1] <- "refused"; some_refused$total_count[1] <- NA_integer_
-  expect_true(is.na(derive_assisted_counts(sig, some_refused, .ai_empty_reads())$assisted_commits))
+  expect_true(is.na(derive_assisted_counts(bare, some_refused, .ai_empty_reads())$assisted_commits))
+})
+
+test_that("a row that names a credit rule is never given a zero by searches answering none", {
+  r <- "github.com/o/r"
+  claude_always <- Filter(function(x) identical(x$tool, "claude") && identical(x$search, "always"),
+                          AI_TRAILER_PATTERNS)
+  none <- do.call(rbind, lapply(claude_always, function(x) .log(r, x$key, "none", 0, rev = x$rev)))
+  sig <- .row(NA, NA, "assisted"); sig$evidence_tiers <- "B"; sig$markers <- "msg.claude.coauthor"
+  expect_true(is.na(derive_assisted_counts(sig, none, .ai_empty_reads())$assisted_commits))
+  ab <- sig; ab$markers <- "B,msg.any.assisted-by"
+  expect_true(is.na(derive_assisted_counts(ab, none, .ai_empty_reads())$assisted_commits))
+  kept <- .row(5, "2026-09-01", "assisted"); kept$evidence_tiers <- "B"; kept$markers <- "msg.claude.coauthor"
+  got <- derive_assisted_counts(kept, none, .ai_empty_reads())
+  expect_equal(got$assisted_commits, 5L); expect_equal(got$assisted_measured_on, "2026-09-01")
 })
 
 test_that("Assisted-by counts come from a read of the whole history, never from its search", {

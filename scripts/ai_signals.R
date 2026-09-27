@@ -1192,7 +1192,7 @@ derive_authored_counts <- function(signals, counts, reads) {
 }
 
 #' assisted_commits: the largest usable commit-credit count of the tool, a floor. 0 only where a whole-history
-#' read matched none of its rules or each always rule answered none at its current revision. Pure.
+#' read matched none of its rules, or each always rule answered none and the row names no credit rule. Pure.
 derive_assisted_counts <- function(signals, log, reads, ruleset = AI_RULESET_VERSION) {
   if (is.null(signals) || !nrow(signals)) return(signals)
   log <- .ai_bind_like(.ai_empty_log(), list(log))
@@ -1227,7 +1227,8 @@ derive_assisted_counts <- function(signals, log, reads, ruleset = AI_RULESET_VER
     if (!nrow(always)) next
     asked <- log[log$repo_id == rid & log$rule_key %in% always$key & log$source == "search", , drop = FALSE]
     at_rev <- asked$rule_rev == always$rev[match(asked$rule_key, always$key)]
-    if (nrow(asked) == nrow(always) && all(at_rev) && all(asked$outcome == "none")) {
+    credited <- any(startsWith(.ai_split_tiers(signals$markers[i]), "msg."))
+    if (!credited && nrow(asked) == nrow(always) && all(at_rev) && all(asked$outcome == "none")) {
       signals$assisted_commits[i] <- 0L
       signals$assisted_measured_on[i] <- max(asked$asked_on)
     }
@@ -1421,12 +1422,12 @@ select_deep_work <- function(flagged, found, published, log, reads, counts,
   floors <- pub_f[pub_f$first_seen_censored %in% 1L & grepl("T23:59:59Z$", pub_f$first_seen_date) &
                   pair(pub_f) %in% pair(datable), , drop = FALSE]
   add(floors$repo_id, floors$tool, NA_character_, "onset")
-  a_rows <- pub_f[pub_f$first_seen_censored %in% 1L & grepl("(^|,)A(,|$)", pub_f$evidence_tiers), ,
-                  drop = FALSE]
-  if (nrow(a_rows)) {
-    asked <- vapply(seq_len(nrow(a_rows)), function(i) any(log$repo_id == a_rows$repo_id[i] &
-      log$rule_key %in% .ai_author_keys(a_rows$tool[i]) & log$outcome %in% c("hit", "none")), logical(1))
-    add(a_rows$repo_id[!asked], a_rows$tool[!asked], NA_character_, "onset")
+  acct_rows <- pub_f[pub_f$first_seen_censored %in% 1L & grepl("(^|,)A(,|$)", pub_f$evidence_tiers), ,
+                     drop = FALSE]
+  if (nrow(acct_rows)) {
+    asked <- vapply(seq_len(nrow(acct_rows)), function(i) any(log$repo_id == acct_rows$repo_id[i] &
+      log$rule_key %in% .ai_author_keys(acct_rows$tool[i]) & log$outcome %in% c("hit", "none")), logical(1))
+    add(acct_rows$repo_id[!asked], acct_rows$tool[!asked], NA_character_, "onset")
   }
 
   # A REST-only address seen in the read with no count, or a commit newer than its count.
@@ -1439,8 +1440,8 @@ select_deep_work <- function(flagged, found, published, log, reads, counts,
     add(ac$repo_id[due], ac$tool[due], ac$rule_key[due], "account-count")
   }
 
-  # Rules the read matched: watched rules are asked where they matched, others refreshed
-  # when the read found a commit newer than their last answer.
+  # Rules the read matched: watched rules are asked where they matched, others refreshed when never asked
+  # or older than the matched commit. A refused answer waits for its re-ask below.
   latest <- function(repo, key) match(paste(repo, key), paste(log$repo_id, log$rule_key))
   cur_rev <- function(key) rules$rev[match(key, rules$key)]
   matched <- found[!is.na(found$rule_key) & found$rule_key %in% rules$key & !(found$repo_id %in% whole), ,
@@ -1453,15 +1454,18 @@ select_deep_work <- function(flagged, found, published, log, reads, counts,
     win <- mode == "on_window_hit" & stale
     add(matched$repo_id[win], rules$tool[match(matched$rule_key[win], rules$key)], matched$rule_key[win],
         "window-hit")
-    ref <- mode == "always" & !is.na(k) & !win & stale & log$outcome[k] %in% "hit"
+    ref <- mode == "always" & !win & stale & !(log$outcome[k] %in% "refused")
     add(matched$repo_id[ref], rules$tool[match(matched$rule_key[ref], rules$key)], matched$rule_key[ref],
         "count-refresh")
   }
 
-  # Refused searches, and both Gemini searches for a published Gemini credit.
-  refused <- log[log$outcome == "refused" & log$repo_id %in% setdiff(flag_ids, whole) &
-                 (log$rule_key %in% rules$key | startsWith(log$rule_key, "account.")), , drop = FALSE]
-  idx <- .ai_account_index()
+  # Refused searches, and both Gemini searches for a published Gemini credit. A REST-only count is asked
+  # again even in a history read whole, and only while its address is still counted by REST.
+  idx <- .ai_account_index(); idx <- idx[idx$kind == "rest_only", , drop = FALSE]
+  acct_key <- startsWith(log$rule_key, "account.") &
+              tolower(sub("^account\\.", "", log$rule_key)) %in% idx$value
+  refused <- log[log$outcome == "refused" & log$repo_id %in% flag_ids &
+                 ((log$rule_key %in% rules$key & !(log$repo_id %in% whole)) | acct_key), , drop = FALSE]
   owner_of <- idx$tool[match(tolower(sub("^account\\.", "", refused$rule_key)), idx$value)]
   add(refused$repo_id, ifelse(refused$rule_key %in% rules$key, rules$tool[match(refused$rule_key, rules$key)],
       owner_of), refused$rule_key, "re-ask")
@@ -1507,7 +1511,7 @@ campaign_start <- function(full, stored, today)
   if (!isTRUE(full)) NA_character_ else if (!is.na(stored)) stored else today
 
 #' TRUE once every always rule of every flagged repository not read whole has been asked
-#' on or after the campaign date. Pure.
+#' at its current revision on or after the campaign date. Pure.
 campaign_finished <- function(flag_ids, log, reads, since) {
   if (is.na(since)) return(FALSE)
   log <- .ai_bind_like(.ai_empty_log(), list(log))
@@ -1518,7 +1522,7 @@ campaign_finished <- function(flag_ids, log, reads, since) {
   if (!length(open_ids)) return(TRUE)
   cand <- expand.grid(repo_id = open_ids, key = always$key, stringsAsFactors = FALSE)
   k <- match(paste(cand$repo_id, cand$key), paste(log$repo_id, log$rule_key))
-  !any(is.na(k) | log$asked_on[k] < since)
+  !any(is.na(k) | log$rule_rev[k] != always$rev[match(cand$key, always$key)] | log$asked_on[k] < since)
 }
 
 #' New-tool gate for the weekly incremental. Returns the subset of flagged repo_ids that
