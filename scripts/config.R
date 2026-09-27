@@ -550,14 +550,8 @@ AI_TRAILER_PATTERNS <- list(
        pattern = "codex-cli",                                               tool = "codex",
        query = "\"codex-cli\""),
 
-  # Every rule below keys on the agent's ADDRESS, never on its name. Devin's own
-  # search returns Devin Logan and devin.logan alongside the agent, and Jules is
-  # a person's name too; a name match would flag them. Each shape here was
-  # counted in real commit messages, not inferred from documentation.
-  #
-  # Devin and OpenHands leave no config marker anywhere in AI_MARKERS, so until
-  # these rules the only way either could be seen was a pull request it happened
-  # to open. These give both a channel that works on commits.
+  # Every rule below keys on an address, a bot account or a line the tool writes, never on a name
+  # alone: Devin's search also returns Devin Logan and devin.logan, and Jules is a person's name.
   list(key = "msg.cursor.agent-coauthor", rev = 1L, since_ruleset = "2026-09-19", search = "always",
        pattern = "co-authored-by:[^<\\n]*<cursoragent@cursor\\.com>",           tool = "cursor",
        query = "\"cursoragent@cursor.com\""),
@@ -579,14 +573,13 @@ AI_TRAILER_PATTERNS <- list(
   list(key = "msg.windsurf.bot", rev = 1L, since_ruleset = "2026-09-19", search = "always",
        pattern = "co-authored-by:[^<\\n]*<[^>\\n]*windsurf-bot\\[bot\\]@",          tool = "windsurf",
        query = "\"windsurf-bot\""),
-  # Antigravity signs with Google addresses, so it is read before the Gemini rules. The
-  # lookahead leaves out an "Antigravity Bot" credit whose origin is unknown.
+  # Antigravity signs with Google addresses, which the Gemini rules match only beside Gemini's
+  # name or gemini-cli. The lookahead leaves out an "Antigravity Bot" credit of unknown origin.
   list(key = "msg.antigravity.coauthor", rev = 1L, since_ruleset = AI_RULESET_UNGATED, search = "always",
        pattern = "co-authored-by:\\s*antigravity[^<\\n]*<(?!bot@antigravity\\.ai>)[^>\\n]*@([a-z0-9.-]+\\.)?(google\\.com|antigravity\\.(ai|dev))>",
        tool = "antigravity", query = "\"Co-Authored-By: Antigravity\""),
-  # Gemini signs four ways. noreply@google.com is generic, so that rule also
-  # requires the name to start with Gemini; the bot addresses are distinctive
-  # enough on their own.
+  # A Gemini credit at a google.com address must start with Gemini's name, since the address
+  # is generic. An address naming gemini-cli is distinctive on its own.
   list(key = "msg.gemini.coauthor", rev = 1L, since_ruleset = "2026-09-19", search = "always",
        pattern = "co-authored-by:\\s*gemini[^<\\n]*<[^>\\n]*@google\\.com>",  tool = "gemini",
        query = "\"Co-Authored-By: Gemini\""),

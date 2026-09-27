@@ -114,6 +114,8 @@ test_that("a search hit on the Assisted-by line is credited to the tool the line
   vs <- Find(function(r) r$key == "msg.copilot.vscode", AI_TRAILER_PATTERNS)
   inside <- list(message = "x\n\nCo-authored-by: Copilot <copilot@github.com>", date = "2026-04-30T00:00:00Z")
   expect_false(verify_search_hit(vs, "B", inside)$confirmed)
+  expect_true(is.na(verify_search_hit(vs, "B", inside)$tool))
   inside$date <- "2026-05-07T00:00:00Z"
   expect_true(verify_search_hit(vs, "B", inside)$confirmed)
+  expect_equal(verify_search_hit(vs, "B", inside)$tool, "copilot")
 })

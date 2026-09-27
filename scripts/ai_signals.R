@@ -267,20 +267,19 @@ ai_assisted_by_tools <- function(messages) {
   !is.na(d) & d >= AI_COPILOT_VSCODE_FALSE_WINDOW[1] & d <= AI_COPILOT_VSCODE_FALSE_WINDOW[2]
 }
 
-#' Commit messages crediting a tool, one row per tool named. Pure.
+#' Commit messages crediting a tool, one row per tool named: match_commit_findings on the
+#' messages alone, so the corpus tests the weekly read's matcher. Pure.
 scan_trailers <- function(messages) {
-  msgs <- tolower(messages %||% character(0))
-  tools <- character(0)
-  for (p in AI_TRAILER_PATTERNS) {
-    if (identical(p$key, "msg.any.assisted-by")) next
-    if (any(grepl(p$pattern, msgs, perl = TRUE))) tools <- c(tools, p$tool)
-  }
-  .ai_rows(c(tools, unlist(ai_assisted_by_tools(messages))), "B")
+  msgs <- as.character(messages %||% character(0))
+  if (!length(msgs)) return(.ai_empty_evidence())
+  h <- match_commit_findings(data.frame(oid = as.character(seq_along(msgs)), committed_at = NA_character_,
+    message = msgs, author_name = "", author_email = "", author_login = "", stringsAsFactors = FALSE))
+  .ai_rows(h$tool[h$code == "B" & h$role == "authoring"], "B")
 }
 
 #' Check a commit-search hit against the rule it was searched for. Commit search does no
 #' regex, so an unchecked hit dates only a floor. The Assisted-by rule takes its tool from
-#' the line, and a VS Code Copilot hit inside the false window is not a use. Pure.
+#' the line, and a VS Code Copilot hit inside the false window names no tool. Pure.
 verify_search_hit <- function(rule, tier, hit) {
   msg <- .nn(hit$message, NA_character_)
   aut <- .nn(hit$author, NA_character_)
@@ -289,23 +288,26 @@ verify_search_hit <- function(rule, tier, hit) {
     return(list(tool = if (length(mapped)) mapped[1] else NA_character_, tier = tier,
                 confirmed = length(mapped) > 0))
   }
+  tool <- rule$tool
   confirmed <- if (identical(tier, "B")) {
     !is.na(msg) && any(grepl(rule$pattern, tolower(msg), perl = TRUE))
   } else {
     !is.na(aut) && any(endsWith(trimws(aut), rule$suffix))
   }
-  if (identical(rule$key, "msg.copilot.vscode") && isTRUE(.ai_in_false_window(.nn(hit$date, NA_character_))))
+  if (identical(rule$key, "msg.copilot.vscode") && isTRUE(.ai_in_false_window(.nn(hit$date, NA_character_)))) {
     confirmed <- FALSE
-  list(tool = rule$tool, tier = tier, confirmed = isTRUE(confirmed))
+    tool <- NA_character_
+  }
+  list(tool = tool, tier = tier, confirmed = isTRUE(confirmed))
 }
 
 .ai_empty_commit_hits <- function()
   data.frame(oid = character(), committed_at = character(), tool = character(), code = character(),
              rule_key = character(), role = character(), stringsAsFactors = FALSE)
 
-#' Every rule a commit matches, read locally: commits by a tool's account (code A, from
-#' the author address or bot name, never the GraphQL login), commits crediting it (B),
-#' an author-name suffix (C), and review credits (role review). Pure.
+#' Every rule a commit matches, read locally: commits by a tool's account (from the author
+#' address or bot name, never the GraphQL login), commits crediting it, an author-name suffix,
+#' and review credits (role review). Pure.
 match_commit_findings <- function(commits) {
   if (is.null(commits) || !nrow(commits)) return(.ai_empty_commit_hits())
   lower <- function(x) { x <- tolower(as.character(x)); x[is.na(x)] <- ""; x }
