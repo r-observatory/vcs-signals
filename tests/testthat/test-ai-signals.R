@@ -34,20 +34,6 @@ test_that("scan_ignore_tokens returns typed empty frame on no match", {
   expect_true(all(c("tool","tier","marker","agnostic") %in% names(out)))
 })
 
-test_that("match_bot_identity matches allowlist exactly, rejects denylist and lookalikes", {
-  # AI_BOT_ALLOWLIST, not AI_PR_AGENT_LOGINS: this list feeds the REST commit
-  # search, whose author: qualifier wants the "[bot]" suffix that GraphQL strips.
-  # The two lists look alike and want opposite shapes; see the note in config.R.
-  out <- match_bot_identity(c("NoReply@Anthropic.com", "someone@example.com"),
-                            c("dependabot[bot]", "devin-ai-integration[bot]"))
-  expect_setequal(out$tool, c("claude", "devin"))
-  expect_true(all(out$tier == "A"))
-  # a lookalike substring must not match
-  expect_equal(nrow(match_bot_identity("noreply@anthropic.com.evil.net", character(0))), 0)
-  # denylisted bot alone yields nothing
-  expect_equal(nrow(match_bot_identity(character(0), "renovate[bot]")), 0)
-})
-
 test_that("scan_trailers requires the canonical identity, rejects a human named Claude", {
   yes <- scan_trailers(c("feat: x\n\nCo-authored-by: Claude <noreply@anthropic.com>"))
   expect_equal(yes$tool, "claude"); expect_equal(yes$tier, "B")

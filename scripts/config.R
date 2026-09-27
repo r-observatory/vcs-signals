@@ -439,40 +439,63 @@ DEV_TOOLING_DERIVED <- list(
 # v1 first scan 2026-07-18 (d115e2d), v2 00312fe, b903376, f861918 (2026-07-29 to 08-02), v3 this change.
 DEV_TOOLING_RULESET_VERSION <- "v3 (2026-09-26)"
 
-# Tier A bot identities: exact, case-normalized email/login match only.
-AI_BOT_ALLOWLIST <- c(
-  "noreply@anthropic.com"      = "claude",
-  "devin-ai-integration[bot]"  = "devin",
-  "openhands-agent"            = "openhands",
-  "google-labs-jules[bot]"     = "jules",
-  "cursor[bot]"                = "cursor",
-  "copilot-swe-agent[bot]"     = "copilot"
+# Commits by a tool's accounts. graphql: counted by one GraphQL history filter per tool.
+# rest_only: counted by REST author-email. The filter resolves 41898282+ to github-actions[bot],
+# and its <id>+ form misses commits written with a bot's id-less address.
+# linked: addresses the graphql count already includes, matched in the commit read and
+# never counted on their own. names: bot author names.
+AI_ACCOUNTS <- list(
+  list(tool = "claude",
+       graphql = c("noreply@anthropic.com", "209825114+claude[bot]@users.noreply.github.com",
+                   "242468646+Claude@users.noreply.github.com"),
+       rest_only = c("41898282+claude[bot]@users.noreply.github.com", "claude[bot]@users.noreply.github.com"),
+       linked = character(0), names = "claude[bot]"),
+  list(tool = "copilot", graphql = "198982749+Copilot@users.noreply.github.com",
+       rest_only = character(0), linked = character(0), names = "copilot-swe-agent[bot]"),
+  list(tool = "cursor",
+       graphql = c("cursoragent@cursor.com", "composer@anysphere.co",
+                   "206951365+cursor[bot]@users.noreply.github.com"),
+       rest_only = "cursor[bot]@users.noreply.github.com", linked = character(0), names = "cursor[bot]"),
+  list(tool = "devin", graphql = "158243242+devin-ai-integration[bot]@users.noreply.github.com",
+       rest_only = character(0), linked = character(0), names = "devin-ai-integration[bot]"),
+  list(tool = "jules", graphql = "161369871+google-labs-jules[bot]@users.noreply.github.com",
+       rest_only = character(0), linked = character(0), names = "google-labs-jules[bot]"),
+  list(tool = "openhands", graphql = "openhands@all-hands.dev",
+       rest_only = character(0), linked = character(0), names = character(0)),
+  list(tool = "amazonq", graphql = "208079219+amazon-q-developer[bot]@users.noreply.github.com",
+       rest_only = character(0), linked = character(0), names = "amazon-q-developer[bot]"),
+  list(tool = "codex",
+       graphql = c("242516109+Codex@users.noreply.github.com", "267193182+codex@users.noreply.github.com"),
+       rest_only = character(0), linked = character(0), names = character(0)),
+  list(tool = "kiro",
+       graphql = c("244629292+kiro-agent@users.noreply.github.com",
+                   "245459735+kiro-agent[bot]@users.noreply.github.com"),
+       rest_only = character(0), linked = character(0), names = "kiro-agent[bot]"),
+  list(tool = "junie", graphql = "junie@jetbrains.com",
+       rest_only = character(0), linked = character(0), names = character(0)),
+  list(tool = "replit", graphql = "agent@replit.com",
+       rest_only = character(0), linked = character(0), names = character(0)),
+  # Roo Code's cloud agent, counted under Roo Code.
+  list(tool = "roo",
+       graphql = c("301996811+roomote-roomote[bot]@users.noreply.github.com",
+                   "263205322+roomote[bot]@users.noreply.github.com", "roomote@roomote.dev"),
+       rest_only = character(0), linked = character(0), names = character(0)),
+  list(tool = "amp", graphql = "amp@ampcode.com",
+       rest_only = character(0), linked = character(0), names = character(0))
 )
+# Account ids behind every <id>+ address above, each checked on the REST users API.
+AI_VERIFIED_ACCOUNT_IDS <- c(209825114, 242468646, 198982749, 206951365, 158243242, 161369871,
+                             208079219, 242516109, 267193182, 244629292, 245459735, 301996811,
+                             263205322)
+# Repositories per account-count query.
+AI_ACCOUNT_BATCH <- 10L
 # Non-AI bots that must never be flagged (backstops the allowlist).
 AI_BOT_DENYLIST <- c(
   "dependabot[bot]", "renovate[bot]", "github-actions[bot]", "pre-commit-ci[bot]",
   "codecov[bot]", "allcontributors[bot]", "web-flow", "lintr-bot", "styler-bot"
 )
-# PR-authorship channel: agent logins that open PRs (exact, lowercase).
-# PR channel (GraphQL). Spelled WITHOUT the "[bot]" suffix, because
-# author { login } returns a bot's login stripped. Four of the six entries here
-# used to carry the suffix, so they matched nothing and the channel published a
-# confident zero across the whole roster while copilot-swe-agent was opening
-# pull requests in the roster's busiest repositories.
-#
-# These are NOT the same strings as AI_BOT_ALLOWLIST above, and the difference
-# is not an oversight. The two lists feed different APIs, which want opposite
-# shapes. Measured against dotnet/runtime:
-#
-#   REST  search/commits  author:copilot-swe-agent[bot]  -> 982 hits
-#   REST  search/commits  author:copilot-swe-agent       ->   0 hits
-#   GraphQL author { login }                             -> "copilot-swe-agent"
-#
-# So AI_BOT_ALLOWLIST keeps its suffixes and this list drops them. Making them
-# agree would break whichever one is changed.
-#
-# Bare "copilot" is deliberately absent: it is a person's account, not the
-# agent, and including it would trade a false zero for a false positive.
+# Accounts that open pull requests, spelled as GraphQL returns author { login } (no
+# "[bot]"). Bare "copilot", "devin", "jules", "amp", "kiro" and "junie" are people.
 AI_PR_AGENT_LOGINS <- c(
   "copilot-swe-agent"          = "copilot",
   "devin-ai-integration"       = "devin",
@@ -647,9 +670,7 @@ AI_CANARY_MIN_ROSTER <- 200L
 # The Roo Code extension shut down on 2026-05-15, the day its repository was archived: https://github.com/RooCodeInc/Roo-Code (README)
 AI_SILENT_CHANNELS_KNOWN <- read.csv(text = trimws(r"(
 tier,tool,status,reason,recorded_on
-A,cursor,open,"We search for commits by cursor[bot], the account the Cursor app uses to review and merge pull requests. Cursor's coding agent commits under another account, cursoragent (cursoragent@cursor.com), which had made 120 commits in 11 repositories, 6 of them with no Cursor finding here. The search also runs only where a file, a line in an ignore file or a pull request already named Cursor. This is settled once commits by cursoragent are counted in every repository.",2026-09-25
-A,devin,genuine,"No repository has a commit by Devin's account (devin-ai-integration[bot]) on its default branch, checked across 15,875. The search itself runs only in xsdm-devel, where Devin's account opened pull requests, and that repository has no commits by the account and 29 commits crediting Devin. Devin also appears in pull requests that maintainers opened from a Devin session in sobol and maxentcpp, which this page does not count yet.",2026-09-25
-A,openhands,open,"The account we look for is right (openhands-agent, openhands@all-hands.dev), but the search runs only where a pull request opened by OpenHands's account was found, and none has been. One commit by that account exists, in kuzuR, which this page counts only through a commit crediting OpenHands. This is settled once commits by the account are counted in every repository.",2026-09-25
+A,devin,genuine,"No repository has a commit by Devin's account (devin-ai-integration[bot]) on its default branch. Commits by it are counted in every repository each week, and a check of all 15,875 on 2026-09-25 found none. Devin shows up through pull requests instead: its account opened 6 in xsdm-devel, and maintainers opened pull requests from a Devin session in sobol and maxentcpp.",2026-09-25
 B,replit,genuine,"Searched on 2026-07-31 in the 1,964 repositories found by then, with no match. Other checks agree: no repository has a .replit, replit.nix or replit.md file, no default branch has a commit by Replit Agent's account (agent@replit.com), and the newest 100 commits of 600 sampled repositories have no Replit-Commit-Author line.",2026-09-25
 B,windsurf,genuine,"Searches for commits crediting Windsurf began on 2026-08-02 and no full search of every repository has finished since, so every public commit crediting Windsurf was listed instead: 963 naming Windsurf, 552 naming its bot account (windsurf-bot) and 76 at codeium.com. None is in a repository we scan. Windsurf became Devin Desktop on 2026-06-02 and now keeps its rules in .devin/rules.",2026-09-25
 D,amazonq,genuine,"No repository has an .amazonq folder, checked across 15,875. Amazon Q is found another way: its account opened a pull request in ss3sim, merged in May 2025, and made 2 commits there. Its command-line tool has been Kiro since November 2025, which this page lists as its own tool.",2026-09-25
@@ -664,6 +685,12 @@ D,crush,genuine,"No CRUSH.md file in any repository, checked across 15,875 on 20
 D,goose,genuine,"No .goosehints file in any repository, checked across 15,875 on 2026-09-25. The files at the top of every repository are read each week.",2026-09-25
 D,factory,genuine,"No .factory folder in any repository, checked across 15,875 on 2026-09-25. The files at the top of every repository are read each week.",2026-09-25
 D,vibe,genuine,"No .vibe folder in any repository, checked across 15,875 on 2026-09-25. The files at the top of every repository are read each week.",2026-09-25
+A,codex,genuine,"No commit by Codex's accounts (openai-code-agent[bot] and codex) has been found. Commits by them are counted in every repository each week.",2026-09-27
+A,kiro,genuine,"No commit by Kiro's accounts (kiro-agent and kiro-agent[bot]) on any default branch, checked across 15,875 on 2026-09-25. Commits by them are counted in every repository each week.",2026-09-25
+A,junie,genuine,"No commit by Junie's account (junie@jetbrains.com) on any default branch, checked across 15,875 on 2026-09-25. Commits by it are counted in every repository each week.",2026-09-25
+A,replit,genuine,"No commit by Replit Agent's account (agent@replit.com) on any default branch, checked across 15,875 on 2026-09-25. Commits by it are counted in every repository each week.",2026-09-25
+A,roo,genuine,"No commit by Roo Code's cloud agent accounts (roomote-roomote[bot], roomote[bot] and roomote@roomote.dev) has been found. The older roomote[bot] had none on any default branch across 15,875 on 2026-09-25, and all three are counted in every repository each week.",2026-09-25
+A,amp,genuine,"No commit by Amp's account (amp@ampcode.com) has been found. Commits by it are counted in every repository each week.",2026-09-27
 )"), stringsAsFactors = FALSE)
 
 # Tables the summary shard carries beyond the five it takes as named arguments.

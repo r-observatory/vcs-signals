@@ -228,14 +228,24 @@ scan_ignore_tokens <- function(gitignore_lines, rbuildignore_lines) {
              stringsAsFactors = FALSE)
 }
 
-#' Tier A: commit author email/login exactly (case-normalized) in the bot
-#' allowlist and not in the denylist.
+#' Every account address and bot name, lowercased, with its tool and kind. Pure.
+.ai_account_index <- function() {
+  do.call(rbind, lapply(AI_ACCOUNTS, function(a) {
+    kinds <- list(graphql = a$graphql, rest_only = a$rest_only, linked = a$linked, names = a$names)
+    do.call(rbind, lapply(names(kinds), function(k) if (length(kinds[[k]]))
+      data.frame(value = tolower(kinds[[k]]), tool = a$tool, kind = k, stringsAsFactors = FALSE)))
+  }))
+}
+
+#' Commits by a tool's account: an author address or bot name, exact and case-normalised,
+#' that belongs to a tool's accounts and not to the denylist.
 match_bot_identity <- function(emails, logins) {
   ids <- tolower(c(emails %||% character(0), logins %||% character(0)))
   ids <- ids[!ids %in% tolower(AI_BOT_DENYLIST)]
-  hit <- ids[ids %in% tolower(names(AI_BOT_ALLOWLIST))]
+  idx <- .ai_account_index()
+  hit <- idx$tool[idx$value %in% ids]
   if (!length(hit)) return(.ai_empty_evidence())
-  .ai_rows(unname(AI_BOT_ALLOWLIST[match(hit, tolower(names(AI_BOT_ALLOWLIST)))]), "A")
+  .ai_rows(unique(hit), "A")
 }
 
 #' Tier B: a commit message matches a canonical AI trailer pattern.
@@ -448,7 +458,7 @@ order_ai_tools <- function(ai_rows) {
 ai_rule_inventory <- function() {
   tool_of <- function(xs) vapply(xs, function(x) x$tool, character(1))
   inv <- rbind(
-    data.frame(tier = "A", tool = unname(AI_BOT_ALLOWLIST), stringsAsFactors = FALSE),
+    data.frame(tier = "A", tool = vapply(AI_ACCOUNTS, `[[`, "", "tool"), stringsAsFactors = FALSE),
     data.frame(tier = "B", tool = unname(tool_of(AI_TRAILER_PATTERNS)), stringsAsFactors = FALSE),
     data.frame(tier = "C", tool = unname(tool_of(AI_AUTHOR_SUFFIXES)), stringsAsFactors = FALSE),
     # ai_deliberate_markers(), not AI_MARKERS: the classifier drops ambient

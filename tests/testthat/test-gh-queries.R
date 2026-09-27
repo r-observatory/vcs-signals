@@ -349,3 +349,28 @@ test_that("entries of the four folders reach the classifiers under their own pre
                   got$root_entries))
   expect_true("agents/reviewer.agent.md" %in% got$github_entries)
 })
+
+test_that("the account document never asks for the github-actions account", {
+  q <- build_account_count_query(data.frame(owner = c("ss3sim", "o"), name = c("ss3sim", "n"),
+                                            stringsAsFactors = FALSE))
+  # GitHub resolves <id>+anything to account <id>, and 41898282 is github-actions[bot].
+  expect_false(grepl("41898282+", q, fixed = TRUE))
+  ids <- as.numeric(sub("\\+$", "", unlist(regmatches(q, gregexpr("(?<=\")[0-9]+\\+", q, perl = TRUE)))))
+  expect_true(length(ids) > 0)
+  expect_equal(setdiff(ids, AI_VERIFIED_ACCOUNT_IDS), numeric(0))
+  for (a in AI_ACCOUNTS) {
+    expect_false(any(grepl("^41898282\\+", c(a$graphql, a$linked))), info = a$tool)
+    d <- as.numeric(sub("\\+.*$", "", grep("^[0-9]+\\+", a$graphql, value = TRUE)))
+    expect_equal(setdiff(d, AI_VERIFIED_ACCOUNT_IDS), numeric(0), info = a$tool)
+  }
+})
+
+test_that("the account document asks one newest-first count per tool with accounts", {
+  q <- build_account_count_query(data.frame(owner = "o", name = "n", stringsAsFactors = FALSE))
+  for (a in AI_ACCOUNTS)
+    expect_true(grepl(sprintf("%s: history(first: 1, author: {emails: [", .ai_account_alias(a$tool)), q,
+                      fixed = TRUE), info = a$tool)
+  expect_equal(.ai_account_alias("posit-assistant"), "a_posit_assistant")
+  expect_false(grepl("authors(", q, fixed = TRUE))
+  expect_false(grepl("reviews(", q, fixed = TRUE))
+})

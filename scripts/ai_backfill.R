@@ -489,27 +489,12 @@ export_ai_shard <- function(path, rows, model_rows = NULL) {
   invisible(path)
 }
 
-#' Structured author-email commit search query for a bot-identity tool, or NA when the
-#' tool has no email in AI_BOT_ALLOWLIST (marker-only tools like cursor/gemini/windsurf).
-#' The author-email qualifier is an EXACT match, so a hit is a confirmed Tier-A onset,
-#' unlike a fuzzy message-token search (a floor). Internal.
-#' Every Tier-A search term for a tool, one per allowlisted identity.
-#'
-#' The allowlist holds two shapes and only one was ever searched: an email
-#' (noreply@anthropic.com) and a bot login (copilot-swe-agent[bot], cursor[bot],
-#' devin-ai-integration[bot], google-labs-jules[bot], openhands-agent). The old
-#' helper filtered on grepl("@"), so five of the six identities were silently
-#' skipped and no Copilot, Cursor, Devin, Jules or OpenHands commit could ever be
-#' found by Tier A, however well the query was formed.
-#'
-#' An email goes to author-email:, a login to author:. Returns character(0) when a
-#' tool has no allowlisted identity, so the caller simply searches nothing.
+#' First-date searches for a tool's accounts: REST author-email is exact, so a hit dates
+#' the account's first commit here. The REST-only address has its own count search.
 .ai_author_queries <- function(tool) {
-  ids <- names(AI_BOT_ALLOWLIST)[AI_BOT_ALLOWLIST == tool]
-  if (!length(ids)) return(character(0))
-  vapply(ids, function(id) {
-    if (grepl("@", id, fixed = TRUE)) paste0("author-email:", id) else paste0("author:", id)
-  }, character(1), USE.NAMES = FALSE)
+  a <- Find(function(x) identical(x$tool, tool), AI_ACCOUNTS)
+  if (is.null(a)) return(character(0))
+  paste0("author-email:", c(a$graphql, a$linked))
 }
 
 # ---- deep onset scan --------------------------------------------------------

@@ -849,35 +849,13 @@ test_that("a scan whose io has no trailer channel still runs", {
                            marker_delay = 0, search_delay = 0))
 })
 
-test_that("Tier A searches every allowlisted identity, not just email-shaped ones", {
-  # The allowlist holds two shapes and only one was ever searched. Filtering on
-  # grepl("@") silently skipped five of six identities, so no Copilot, Cursor,
-  # Devin, Jules or OpenHands commit could be found by Tier A however well the
-  # query was formed. That looked exactly like those tools not being used.
-  expect_equal(.ai_author_queries("claude"), "author-email:noreply@anthropic.com")
-  expect_equal(.ai_author_queries("copilot"), "author:copilot-swe-agent[bot]")
-  expect_equal(.ai_author_queries("cursor"), "author:cursor[bot]")
-  expect_equal(.ai_author_queries("devin"), "author:devin-ai-integration[bot]")
-  expect_equal(.ai_author_queries("jules"), "author:google-labs-jules[bot]")
-  expect_equal(.ai_author_queries("openhands"), "author:openhands-agent")
-
-  # An email takes author-email:, a login takes author:. Mixing them finds nothing.
-  expect_true(all(grepl("^author-email:", .ai_author_queries("claude"))))
-  expect_true(all(grepl("^author:", .ai_author_queries("copilot"))))
-
-  # A tool with no allowlisted identity searches nothing rather than erroring.
+test_that("the first-date search asks every address the account filter counts", {
+  for (a in AI_ACCOUNTS)
+    expect_equal(.ai_author_queries(a$tool), paste0("author-email:", c(a$graphql, a$linked)), info = a$tool)
   expect_equal(.ai_author_queries("gemini"), character(0))
-})
-
-test_that("every allowlisted identity is reachable by some Tier A query", {
-  # The regression guard: an identity added to the allowlist that no query shape
-  # covers is an identity that can never be detected, and nothing else would say so.
-  for (tool in unique(unname(AI_BOT_ALLOWLIST))) {
-    expect_true(length(.ai_author_queries(tool)) > 0, info = tool)
-  }
-  expect_equal(length(unlist(lapply(unique(unname(AI_BOT_ALLOWLIST)), .ai_author_queries))),
-               length(AI_BOT_ALLOWLIST),
-               info = "one query per allowlisted identity, none dropped")
+  # The github-actions address has its own count, never this search.
+  expect_false(any(grepl("41898282", unlist(lapply(unique(vapply(AI_ACCOUNTS, `[[`, "", "tool")),
+                                                   .ai_author_queries)), fixed = TRUE)))
 })
 
 test_that("Tier A takes the earliest across a tool's identities", {

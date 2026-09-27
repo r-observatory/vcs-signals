@@ -769,6 +769,50 @@ parse_pr_agents <- function(resp, repos) {
   out
 }
 
+#' The alias a tool's count takes inside a repository block.
+.ai_account_alias <- function(tool) paste0("a_", gsub("-", "_", tool, fixed = TRUE))
+
+#' One aliased query counting, per repository, the default branch's commits by each
+#' tool's accounts. history is newest first, so nodes[0] dates the newest such commit.
+build_account_count_query <- function(repos) {
+  counts <- vapply(AI_ACCOUNTS, function(a) sprintf(
+    '%s: history(first: 1, author: {emails: [%s]}) { totalCount nodes { committedDate } }',
+    .ai_account_alias(a$tool), paste(sprintf('"%s"', a$graphql), collapse = ", ")), character(1))
+  parts <- vapply(seq_len(nrow(repos)), function(j) sprintf(
+    'r%d: repository(owner: "%s", name: "%s") {
+      defaultBranchRef { target { ... on Commit {
+        %s
+      } } }
+    }', j - 1L, repos$owner[j], repos$name[j], paste(counts, collapse = "\n        ")), character(1))
+  sprintf("query { %s }", paste(parts, collapse = "\n"))
+}
+
+#' Positive counts per repository. A repository with no default branch was counted and
+#' has none; a null alias was not counted, so its entry is NULL. Pure.
+parse_account_counts <- function(resp, repos) {
+  out <- vector("list", nrow(repos)); names(out) <- repos$repo_id
+  for (j in seq_len(nrow(repos))) {
+    r <- resp$data[[sprintf("r%d", j - 1L)]]
+    if (is.null(r)) { out[j] <- list(NULL); next }
+    tgt <- r$defaultBranchRef$target
+    rows <- lapply(AI_ACCOUNTS, function(a) {
+      h <- tgt[[.ai_account_alias(a$tool)]]
+      n <- as.integer(.nn(h$totalCount, 0L))
+      if (is.na(n) || n <= 0L) return(NULL)
+      nodes <- .nn(h$nodes, list())
+      data.frame(tool = a$tool, commits = n,
+                 newest_commit_date = if (length(nodes)) .nn(nodes[[1]]$committedDate, NA_character_)
+                                      else NA_character_,
+                 stringsAsFactors = FALSE)
+    })
+    rows <- Filter(Negate(is.null), rows)
+    out[[j]] <- if (length(rows)) do.call(rbind, rows) else
+      data.frame(tool = character(), commits = integer(), newest_commit_date = character(),
+                 stringsAsFactors = FALSE)
+  }
+  out
+}
+
 #' Pure: the earliest-match commit date from a search/commits JSON body, or NA when
 #' total_count is 0, items is empty, or the body does not parse. The match is FUZZY
 #' (substring-ish), so the caller treats this date as a CANDIDATE onset.
