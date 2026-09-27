@@ -1680,6 +1680,20 @@ build_release_notes <- function(summary, changed_shards, tag) {
           t, length(lost), paste(sub("\t", "/", lost), collapse = ", "))
 }
 
+#' The rule for vcs_ai_search_coverage, rebuilt from the log on every merge: a search may
+#' leave the table only when its rule has left the ruleset.
+.regress_search_coverage <- function(pc, nc) {
+  t <- "vcs_ai_search_coverage"
+  prev <- .gate_rows(pc, t); nxt <- .gate_rows(nc, t)
+  if (is.null(prev) || nrow(prev) == 0) return(character(0))
+  if (!exists(".ai_coverage_rules", mode = "function")) return(.regress_row_count(t, pc, nc, 0))
+  have <- if (is.null(nxt)) character(0) else nxt$rule_key
+  lost <- setdiff(intersect(prev$rule_key, .ai_coverage_rules()$rule_key), have)
+  if (!length(lost)) return(character(0))
+  sprintf("%s: %d search(es) the ruleset still has left the table: %s",
+          t, length(lost), paste(lost, collapse = ", "))
+}
+
 #' The rules for vcs_ai_models: what each repository keeps, and how many keep it.
 #'
 #' The merge replaces model rows per repository rather than reducing them,
@@ -1918,6 +1932,7 @@ summary_regressions <- function(prev_path, next_path, tol = 0.02) {
       vcs_ai_rule_inventory  = .regress_rule_inventory(pc, nc),
       vcs_ai_models          = .regress_ai_models(pc, nc, tol),
       repo_package_links     = .regress_package_links(pc, nc),
+      vcs_ai_search_coverage = .regress_search_coverage(pc, nc),
       # Rebuilt from config each merge: a smaller rule set is a ruleset change, not a loss.
       vcs_dev_tooling_rules  = character(0),
       vcs_repo_owner         = .regress_repo_owner(pc, nc),

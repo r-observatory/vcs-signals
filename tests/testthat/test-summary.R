@@ -51,3 +51,65 @@ test_that("the first publish of a ruleset is dated once, with its change key whe
   expect_equal(got$change_key[1], "ungated-weekly-read")
   expect_true(is.na(got$change_key[2]))
 })
+
+.cov_log <- function(repo, key, outcome, rev = 1L, on = "2026-10-05")
+  data.frame(repo_id = repo, rule_key = key, rule_rev = rev, ruleset_version = AI_RULESET_VERSION,
+             asked_on = on, outcome = outcome, total_count = if (outcome == "refused") NA_integer_ else 1L,
+             verified = NA_integer_, incomplete = 0L, first_hit_on = NA_character_, source = "search",
+             stringsAsFactors = FALSE)
+
+test_that("coverage counts the repositories each search reached, apart from whole-history reads", {
+  log <- rbind(.cov_log("r1", "msg.claude.coauthor", "hit"), .cov_log("r2", "msg.claude.coauthor", "none"),
+               .cov_log("r3", "msg.claude.coauthor", "refused"),
+               .cov_log("r4", "msg.claude.coauthor", "none", rev = 0L),
+               .cov_log("r6", "msg.claude.coauthor", "none"),
+               .cov_log("r5", "author.noreply@anthropic.com", "hit", on = "2026-10-06"))
+  reads <- .ai_bind_like(.ai_empty_reads(), list(data.frame(
+    repo_id = c("r6", "r7"), commits_history_complete = 1L,
+    commits_ruleset = c(AI_RULESET_VERSION, "2026-01-01"), stringsAsFactors = FALSE)))
+  cov <- build_search_coverage(log, reads)
+  cc <- cov[cov$rule_key == "msg.claude.coauthor", ]
+  expect_equal(c(cc$repos_asked, cc$repos_hit, cc$repos_refused, cc$repos_read_whole), c(2L, 1L, 1L, 1L))
+  au <- cov[cov$rule_key == "author.claude", ]
+  expect_equal(c(au$repos_asked, au$repos_read_whole), c(1L, 0L))
+  expect_equal(au$last_asked_on, "2026-10-06")
+  expect_setequal(cov$rule_key, .ai_coverage_rules()$rule_key)
+  expect_equal(cov$tool[cov$rule_key == "msg.any.assisted-by"], "any")
+  expect_equal(cov$channel[cov$rule_key == "name.aider.suffix"], "commit-author-name")
+  expect_equal(cov$channel[cov$rule_key == "review.copilot.suggestion"], "review-credit")
+  never <- cov[cov$rule_key == "msg.opencode.address", ]
+  expect_equal(never$repos_asked, 0L); expect_true(is.na(never$last_asked_on))
+})
+
+.mk_cov <- function(keys) {
+  path <- tempfile(fileext = ".db")
+  con <- DBI::dbConnect(RSQLite::SQLite(), path); on.exit(DBI::dbDisconnect(con))
+  ensure_repo_schema(con); ensure_series_schema(con)
+  DBI::dbWriteTable(con, "vcs_ai_search_coverage", data.frame(rule_key = keys, tool = "claude",
+    channel = "commit-credit", rule_rev = 1L, repos_asked = 1L, repos_hit = 0L, repos_refused = 0L,
+    repos_read_whole = 0L, last_asked_on = "2026-10-05", stringsAsFactors = FALSE), append = TRUE)
+  path
+}
+
+test_that("a search leaves the coverage table only when its rule has left the ruleset", {
+  keys <- .ai_coverage_rules()$rule_key
+  prev <- .mk_cov(c(keys[1:3], "msg.retired.rule"))
+  expect_equal(summary_regressions(prev, .mk_cov(keys[1:3])), character(0))
+  bad <- summary_regressions(prev, .mk_cov(keys[1:2]))
+  expect_true(any(grepl("vcs_ai_search_coverage", bad)))
+  expect_true(any(grepl(keys[3], bad, fixed = TRUE)))
+})
+
+test_that("the weekly read's state tables refuse a build that lost their rows", {
+  mk <- function(n) {
+    path <- tempfile(fileext = ".db")
+    con <- DBI::dbConnect(RSQLite::SQLite(), path); on.exit(DBI::dbDisconnect(con))
+    ensure_repo_schema(con); ensure_series_schema(con)
+    if (n) DBI::dbWriteTable(con, "vcs_ai_search_log", do.call(rbind, lapply(seq_len(n), function(i)
+      .cov_log(sprintf("r%d", i), "msg.claude.coauthor", "none"))), append = TRUE)
+    path
+  }
+  prev <- mk(100L)
+  expect_equal(summary_regressions(prev, mk(99L)), character(0))
+  expect_true(any(grepl("vcs_ai_search_log", summary_regressions(prev, mk(50L)))))
+})

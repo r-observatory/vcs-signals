@@ -1255,6 +1255,46 @@ derive_review_counts <- function(review, log) {
   review
 }
 
+#' Every search the coverage table reports on, one per rule, author searches per tool. Pure.
+.ai_coverage_rules <- function() {
+  row <- function(key, tool, channel, rev) data.frame(rule_key = key, tool = tool, channel = channel,
+                                                      rule_rev = as.integer(rev), stringsAsFactors = FALSE)
+  do.call(rbind, c(
+    lapply(AI_TRAILER_PATTERNS, function(r) row(r$key, r$tool, "commit-credit", r$rev)),
+    lapply(AI_AUTHOR_SUFFIXES, function(r) row(r$key, r$tool, "commit-author-name", r$rev)),
+    lapply(AI_REVIEW_RULES, function(r) row(r$key, r$tool, "review-credit", r$rev)),
+    lapply(AI_ACCOUNTS, function(a) row(paste0("author.", a$tool), a$tool, "commit-author", 1L))))
+}
+
+#' How far each search has reached, one row per rule and zeros for one never asked. A repository
+#' whose whole history was read under this ruleset counts apart from those asked. Pure.
+build_search_coverage <- function(log, reads, ruleset = AI_RULESET_VERSION) {
+  rules <- .ai_coverage_rules()
+  log <- .ai_bind_like(.ai_empty_log(), list(log))
+  reads <- .ai_bind_like(.ai_empty_reads(), list(reads))
+  whole <- unique(reads$repo_id[reads$commits_history_complete %in% 1L & reads$commits_ruleset %in% ruleset])
+  by_addr <- do.call(rbind, lapply(AI_ACCOUNTS, function(a) data.frame(
+    key = paste0("author.", c(a$graphql, a$linked)), tool_key = paste0("author.", a$tool),
+    stringsAsFactors = FALSE)))
+  hit <- match(log$rule_key, by_addr$key)
+  log$rolled <- ifelse(is.na(hit), log$rule_key, by_addr$tool_key[hit])
+  do.call(rbind, lapply(seq_len(nrow(rules)), function(i) {
+    r <- rules[i, ]
+    g <- log[log$rolled %in% r$rule_key, , drop = FALSE]
+    asked <- g[g$source %in% "search" & g$rule_rev %in% r$rule_rev & g$outcome %in% c("hit", "none") &
+               !(g$repo_id %in% whole), , drop = FALSE]
+    refused <- g[g$outcome %in% "refused", , drop = FALSE]
+    read_whole <- if (r$channel %in% c("commit-credit", "commit-author-name")) length(whole) else 0L
+    data.frame(rule_key = r$rule_key, tool = r$tool, channel = r$channel, rule_rev = r$rule_rev,
+               repos_asked = length(unique(asked$repo_id)),
+               repos_hit = length(unique(asked$repo_id[asked$outcome == "hit"])),
+               repos_refused = length(unique(refused$repo_id)),
+               repos_read_whole = read_whole,
+               last_asked_on = .ai_latest_chr(c(asked$asked_on, refused$asked_on)),
+               stringsAsFactors = FALSE)
+  }))
+}
+
 #' New-tool gate for the weekly incremental. Returns the subset of flagged repo_ids that
 #' carry at least one (repo_id, tool) pair in THIS week's cheap-pass evidence that is NOT
 #' already present in the published vcs_ai_signals detail for that repo. A repo whose current
