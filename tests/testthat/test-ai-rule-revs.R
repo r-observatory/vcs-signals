@@ -25,3 +25,11 @@ test_that("rules new in this ruleset carry its date and older ones the date the 
   expect_equal(sum(always & !(keys %in% new)), 14L)
   expect_true(all(now$since_ruleset[now$key %in% keys[always & !(keys %in% new)]] == "2026-09-19"))
 })
+
+test_that("the ruleset that began reading every repository carries its page note", {
+  expect_equal(AI_RULESET_VERSION, AI_RULESET_UNGATED)
+  expect_true(all(grepl("^\\d{4}-\\d{2}-\\d{2}$", names(AI_RULESET_CHANGE_KEYS))))
+  expect_true(all(names(AI_RULESET_CHANGE_KEYS) <= AI_RULESET_VERSION))
+  expect_equal(anyDuplicated(unname(AI_RULESET_CHANGE_KEYS)), 0L)
+  expect_true("ungated-weekly-read" %in% AI_RULESET_CHANGE_KEYS)
+})

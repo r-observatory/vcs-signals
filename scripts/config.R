@@ -722,7 +722,7 @@ AI_COPILOT_VSCODE_FALSE_WINDOW <- c("2026-04-22", "2026-05-06")
 # not reset onset.
 AI_MARKER_PREDECESSORS <- c(".cursor" = ".cursorrules")
 # Detection ruleset version, surfaced by the viewer methods note.
-AI_RULESET_VERSION <- "2026-09-19"
+AI_RULESET_VERSION <- AI_RULESET_UNGATED
 # The page note a ruleset's first publish carries, by ruleset version. A version not
 # named here carries none.
 AI_RULESET_CHANGE_KEYS <- stats::setNames("ungated-weekly-read", AI_RULESET_UNGATED)

@@ -159,3 +159,13 @@ test_that("a review row gone with no current name to fold into is refused", {
   expect_true(any(grepl("vcs_ai_review_signals: 1 rows, was 2",
                         summary_regressions(prev, .rn_gate("github.com/a/new")), fixed = TRUE)))
 })
+
+test_that("the first publish of this ruleset carries the weekly-read note, a later one none", {
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:"); on.exit(DBI::dbDisconnect(con))
+  ensure_series_schema(con)
+  record_ruleset_history(con, "2026-10-06", AI_RULESET_VERSION, AI_RULESET_CHANGE_KEYS)
+  record_ruleset_history(con, "2099-01-02", "2099-01-01", AI_RULESET_CHANGE_KEYS)
+  got <- DBI::dbGetQuery(con, "SELECT * FROM vcs_ai_ruleset_history ORDER BY ruleset_version")
+  expect_equal(got$change_key[got$ruleset_version == AI_RULESET_VERSION], "ungated-weekly-read")
+  expect_true(is.na(got$change_key[got$ruleset_version == "2099-01-01"]))
+})
