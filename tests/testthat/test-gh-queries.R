@@ -373,3 +373,30 @@ test_that("the account document asks one newest-first count per tool with accoun
   expect_false(grepl("authors(", q, fixed = TRUE))
   expect_false(grepl("reviews(", q, fixed = TRUE))
 })
+
+test_that("the activity document asks for the newest 50 pull requests and a commit window", {
+  repos <- data.frame(owner = c("o", "p"), name = c("n", "m"),
+                      since = c(NA, "2026-09-13T00:00:00Z"), stringsAsFactors = FALSE)
+  q <- build_activity_query(repos)
+  expect_match(q, "pullRequests(first: 50, orderBy: {field: CREATED_AT, direction: DESC})", fixed = TRUE)
+  expect_match(q, "authorAssociation isCrossRepository headRefName body", fixed = TRUE)
+  expect_match(q, "recent: history(first: 100) {", fixed = TRUE)
+  expect_match(q, 'recent: history(first: 100, since: "2026-09-13T00:00:00Z") {', fixed = TRUE)
+  expect_match(q, "author { name email user { login } }", fixed = TRUE)
+  expect_false(grepl("bodyText", q, fixed = TRUE))
+})
+
+test_that("the activity parser returns both frames and says when a page stopped short", {
+  resp <- list(data = list(r0 = list(
+    pullRequests = list(totalCount = 120L, pageInfo = list(endCursor = "P1", hasNextPage = TRUE), nodes = list()),
+    defaultBranchRef = list(target = list(recent = list(pageInfo = list(endCursor = "C1", hasNextPage = TRUE),
+      nodes = list(list(oid = "abc", committedDate = "2026-09-20T00:00:00Z", message = "x",
+                        author = list(name = "p", email = "p@e.org", user = NULL)))))))))
+  got <- parse_activity(resp, data.frame(repo_id = "github.com/o/n", owner = "o", name = "n",
+                                         stringsAsFactors = FALSE))[[1]]
+  expect_equal(got$prs_total, 120L); expect_true(got$prs_has_next); expect_equal(got$prs_end_cursor, "P1")
+  expect_equal(nrow(got$commits), 1L); expect_true(got$commits_has_next); expect_equal(got$commits_end_cursor, "C1")
+  expect_true(is.na(got$commits$author_login))
+  expect_null(parse_activity(list(data = list(r0 = NULL)),
+                             data.frame(repo_id = "g", owner = "o", name = "n", stringsAsFactors = FALSE))[["g"]])
+})

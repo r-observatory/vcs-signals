@@ -41,3 +41,16 @@ msg.opencode.address	1	2026-09-27	<noreply@opencode\.ai>	"noreply@opencode.ai"
 name.aider.suffix	1	2026-09-19	(aider)	author-name:"(aider)"
 review.gemini-code-assist.coauthor	1	2026-09-27	co-authored-by:[^<\n]*<[^>\n]*gemini-code-assist\[bot\]@	"gemini-code-assist"
 review.copilot.suggestion	1	2026-09-27	co-authored-by:(?![ \t]*copilot autofix)[^<\n]*<175728472\+copilot@users\.noreply\.github\.com>	"175728472+Copilot"
+pr.cursor.agent-body	1	2026-09-27	^\s*<!-- CURSOR_AGENT_PR_BODY_BEGIN -->|cursor\.com/(agents/bc-|agents\?id=bc-|background-agent\?bcId=)	NA
+pr.cursor.agent-branch	1	2026-09-27	^cursor/[A-Za-z0-9._-]+-[0-9a-f]{4}$	NA
+pr.cursor.made-with	1	2026-09-27	(?i)made with \[cursor\]\(https://cursor\.com\)	NA
+pr.claude.branch	1	2026-09-27	^claude/	NA
+pr.claude.session	1	2026-09-27	claude\.ai/code/session_	NA
+pr.claude.footer	1	2026-09-27	Generated with \[Claude Code\]	NA
+pr.codex.task	1	2026-09-27	chatgpt\.com/codex/tasks/task_	NA
+pr.codex.footer	1	2026-09-27	Generated with \[Codex\]\(https://openai\.com/codex/?\)	NA
+pr.codex.branch	1	2026-09-27	^codex/	NA
+pr.devin.session	1	2026-09-27	app\.devin\.ai/sessions/	NA
+pr.devin.branch	1	2026-09-27	^devin/[0-9]{10}-	NA
+pr.openhands.branch	1	2026-09-27	^openhands-fix-(issue|pr)-[0-9]+	NA
+pr.amazonq.branch	1	2026-09-27	^Q-DEV-issue-[0-9]+-[0-9]+	NA

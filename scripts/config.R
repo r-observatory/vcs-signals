@@ -505,7 +505,46 @@ AI_PR_AGENT_LOGINS <- c(
   "devin-ai-integration"       = "devin",
   "google-labs-jules"          = "jules",
   "cursor"                     = "cursor",
-  "openhands-agent"            = "openhands"
+  "openhands-agent"            = "openhands",
+  "anthropic-code-agent"       = "claude",
+  "claude"                     = "claude",     # Anthropic's own account, user 81847
+  "amazon-q-developer"         = "amazonq",
+  "openai-code-agent"          = "codex",
+  "kiro-agent"                 = "kiro"
+)
+# Pull requests a tool wrote that a person opened. Matched on the raw branch name or
+# description, case-sensitive unless the pattern says (?i). names = FALSE never names the
+# tool: a codex/ branch only admits the repository to the search pass that week.
+AI_PR_RULES <- list(
+  list(key = "pr.cursor.agent-body", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "cursor",
+       field = "body", names = TRUE, min_created = "2025-05-01",
+       pattern = "^\\s*<!-- CURSOR_AGENT_PR_BODY_BEGIN -->|cursor\\.com/(agents/bc-|agents\\?id=bc-|background-agent\\?bcId=)"),
+  # The hex suffix and date floor keep out older branches about a text cursor.
+  list(key = "pr.cursor.agent-branch", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "cursor",
+       field = "head", names = TRUE, min_created = "2025-05-01",
+       pattern = "^cursor/[A-Za-z0-9._-]+-[0-9a-f]{4}$"),
+  list(key = "pr.cursor.made-with", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "cursor",
+       field = "body", names = TRUE, pattern = "(?i)made with \\[cursor\\]\\(https://cursor\\.com\\)"),
+  list(key = "pr.claude.branch", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "claude",
+       field = "head", names = TRUE, pattern = "^claude/"),
+  list(key = "pr.claude.session", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "claude",
+       field = "body", names = TRUE, pattern = "claude\\.ai/code/session_"),
+  list(key = "pr.claude.footer", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "claude",
+       field = "body", names = TRUE, pattern = "Generated with \\[Claude Code\\]"),
+  list(key = "pr.codex.task", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "codex",
+       field = "body", names = TRUE, pattern = "chatgpt\\.com/codex/tasks/task_"),
+  list(key = "pr.codex.footer", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "codex",
+       field = "body", names = TRUE, pattern = "Generated with \\[Codex\\]\\(https://openai\\.com/codex/?\\)"),
+  list(key = "pr.codex.branch", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "codex",
+       field = "head", names = FALSE, pattern = "^codex/"),
+  list(key = "pr.devin.session", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "devin",
+       field = "body", names = TRUE, pattern = "app\\.devin\\.ai/sessions/"),
+  list(key = "pr.devin.branch", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "devin",
+       field = "head", names = TRUE, pattern = "^devin/[0-9]{10}-"),
+  list(key = "pr.openhands.branch", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "openhands",
+       field = "head", names = TRUE, pattern = "^openhands-fix-(issue|pr)-[0-9]+"),
+  list(key = "pr.amazonq.branch", rev = 1L, since_ruleset = AI_RULESET_UNGATED, tool = "amazonq",
+       field = "head", names = TRUE, pattern = "^Q-DEV-issue-[0-9]+-[0-9]+")
 )
 # Tier B commit-message trailers. Anchored to the canonical bot identity so a
 # human named Claude is rejected. Matched case-insensitively.
@@ -778,7 +817,7 @@ D,amazonq,genuine,"No repository has an .amazonq folder, checked across 15,875. 
 D,grok,genuine,"No GROK.md, .grok or .xai in any repository, checked across 15,875. xAI's Grok Build reads AGENTS.md, CLAUDE.md and .grok/rules rather than GROK.md, so a repository using it may show only as AGENTS.md or CLAUDE.md.",2026-09-25
 D,junie,genuine,"No .junie folder in any repository, no commit by Junie's account (junie@jetbrains.com) on any default branch, and no pull request by it among each repository's newest 50, checked across 15,875. Junie now reads AGENTS.md first, so a repository using it may show only as AGENTS.md.",2026-09-25
 D,roo,genuine,"No .roo, .roomodes, .roorules or .rooignore in any repository, checked across 15,875, and none of the 218 public commits by Roo's cloud agent account (roomote[bot]) is in a repository we scan. The Roo Code extension was shut down on 2026-05-15, so this will not change.",2026-09-25
-PR,cursor,open,"No pull request among each repository's newest 50 was opened by Cursor's app account, checked across 161,444 pull requests. Cursor's cloud agent opens them under the maintainer's own account instead, with a note at the top of the description and a branch named cursor/ plus the task and four hexadecimal characters. 18 repositories have one among their newest 50 pull requests, 2 of them from an outside contributor. Separately, 44 repositories have a commit crediting Cursor among their newest 50 commits since May 2025, but commit messages are searched only where a file, a line in an ignore file or a pull request by a tool's account was already found, so 27 of them show no Cursor use here. This is settled once pull request descriptions and every repository's recent commits are read.",2026-09-25
+PR,cursor,genuine,"No pull request among each repository's newest 50 was opened by Cursor's app account, checked across 161,444 pull requests. Cursor's cloud agent opens pull requests under the maintainer's own account, and this page finds them by the note Cursor writes at the top of the description or the branch name it gives them.",2026-09-25
 PR,openhands,genuine,"No pull request among each repository's newest 50 was opened by OpenHands's account (openhands-agent), checked across 161,444 pull requests.",2026-09-25
 D,trae,genuine,"No .trae folder in any repository, checked across 15,875 on 2026-09-25. The files at the top of every repository are read each week.",2026-09-25
 D,augment,genuine,"No .augment folder in any repository, checked across 15,875 on 2026-09-25. The files at the top of every repository are read each week.",2026-09-25
@@ -800,6 +839,9 @@ B,kimi,genuine,"No commit crediting Kimi (a co-author line at noreply@moonshot.a
 B,continue,genuine,"No commit crediting Continue (a co-author line at noreply@continue.dev) among 373,252 recent commits from 9,193 repositories, checked 2026-09-25. Every repository's new commits are read each week.",2026-09-25
 B,augment,genuine,"No commit crediting Augment Code (a co-author line at noreply@augmentcode.com) among 373,252 recent commits from 9,193 repositories, checked 2026-09-25. Every repository's new commits are read each week.",2026-09-25
 B,opencode,genuine,"No commit crediting OpenCode (a co-author line at noreply@opencode.ai) among 373,252 recent commits from 9,193 repositories, checked 2026-09-25. Every repository's new commits are read each week.",2026-09-25
+PR,codex,genuine,"No pull request among each repository's newest 50 was opened by Codex's account (openai-code-agent), checked across 161,444 pull requests on 2026-09-25. Codex's cloud tasks reach a repository as a pull request a maintainer opens, which this page finds by the task link or the Generated with Codex line in its description.",2026-09-25
+PR,kiro,genuine,"No pull request among each repository's newest 50 was opened by Kiro's account (kiro-agent), checked across 161,444 pull requests on 2026-09-25.",2026-09-25
+PB,amazonq,genuine,"No pull request opened by a maintainer from a branch Amazon Q named (Q-DEV-issue-) has been found among the pull requests read in every repository each week. The one such branch found, in ss3sim, was opened by Amazon Q's own account.",2026-09-27
 )"), stringsAsFactors = FALSE)
 
 # Tables the summary shard carries beyond the five it takes as named arguments.

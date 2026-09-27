@@ -825,6 +825,67 @@ parse_account_counts <- function(resp, repos) {
              stringsAsFactors = FALSE)
 }
 
+.AI_PR_NODE_FIELDS <- "number createdAt author { login __typename } authorAssociation isCrossRepository headRefName body"
+.AI_COMMIT_NODE_FIELDS <- "oid committedDate message author { name email user { login } }"
+
+#' One aliased query per batch: the newest 50 pull requests with their description and
+#' branch, and the default branch's commits since `since` (NA asks for the newest 100).
+#' No authors() or reviews() connections: either multiplies the point cost.
+build_activity_query <- function(repos) {
+  since <- if ("since" %in% names(repos)) repos$since else rep(NA_character_, nrow(repos))
+  parts <- vapply(seq_len(nrow(repos)), function(j) sprintf(
+    'r%d: repository(owner: "%s", name: "%s") {
+      pullRequests(first: 50, orderBy: {field: CREATED_AT, direction: DESC}) {
+        totalCount pageInfo { endCursor hasNextPage } nodes { %s }
+      }
+      defaultBranchRef { target { ... on Commit {
+        recent: history(first: 100%s) { pageInfo { endCursor hasNextPage } nodes { %s } }
+      } } }
+    }', j - 1L, repos$owner[j], repos$name[j], .AI_PR_NODE_FIELDS,
+    if (is.na(since[j])) "" else sprintf(', since: "%s"', since[j]), .AI_COMMIT_NODE_FIELDS), character(1))
+  sprintf("query { %s }", paste(parts, collapse = "\n"))
+}
+
+#' Pull request nodes as a frame with one logical per AI_PR_RULES key. The description is
+#' read here and dropped, so nothing downstream can store it.
+.ai_pr_nodes_frame <- function(nodes) {
+  nodes <- if (is.null(nodes)) list() else nodes
+  chr <- function(f) vapply(nodes, function(n) { v <- f(n); if (is.null(v)) NA_character_ else as.character(v) },
+                            character(1))
+  df <- data.frame(number = vapply(nodes, function(n) as.integer(.nn(n$number, NA_integer_)), integer(1)),
+                   created_at = chr(function(n) n$createdAt), login = chr(function(n) n$author$login),
+                   typename = chr(function(n) n$author[["__typename"]]),
+                   association = chr(function(n) n$authorAssociation),
+                   cross_repo = vapply(nodes, function(n) isTRUE(n$isCrossRepository), logical(1)),
+                   head_ref = chr(function(n) n$headRefName), stringsAsFactors = FALSE)
+  body <- chr(function(n) n$body)
+  for (r in AI_PR_RULES) {
+    txt <- if (identical(r$field, "head")) df$head_ref else body
+    df[[r$key]] <- !is.na(txt) & grepl(r$pattern, txt, perl = TRUE)
+  }
+  df
+}
+
+#' Demux a build_activity_query response per repo_id. A null alias gives NULL. Pure.
+parse_activity <- function(resp, repos) {
+  out <- vector("list", nrow(repos)); names(out) <- repos$repo_id
+  for (j in seq_len(nrow(repos))) {
+    r <- resp$data[[sprintf("r%d", j - 1L)]]
+    if (is.null(r)) { out[j] <- list(NULL); next }
+    pr <- r$pullRequests
+    h <- r$defaultBranchRef$target$recent
+    out[[j]] <- list(
+      prs = .ai_pr_nodes_frame(pr$nodes),
+      prs_total = as.integer(.nn(pr$totalCount, 0L)),
+      prs_has_next = isTRUE(pr$pageInfo$hasNextPage),
+      prs_end_cursor = .nn(pr$pageInfo$endCursor, NA_character_),
+      commits = .ai_commit_nodes_frame(h$nodes),
+      commits_has_next = isTRUE(h$pageInfo$hasNextPage),
+      commits_end_cursor = .nn(h$pageInfo$endCursor, NA_character_))
+  }
+  out
+}
+
 #' Pure: the earliest-match commit date from a search/commits JSON body, or NA when
 #' total_count is 0, items is empty, or the body does not parse. The match is FUZZY
 #' (substring-ish), so the caller treats this date as a CANDIDATE onset.

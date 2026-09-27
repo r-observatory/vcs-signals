@@ -399,16 +399,75 @@ repo_has_ai_signal <- function(evidence) {
   !is.null(evidence) && nrow(evidence) > 0
 }
 
-#' PR-channel onset: the earliest createdAt among the repo's post-cutoff agent PRs, or
-#' NA. A PR createdAt is a real dated event, so this is recorded exact by build_onset_map.
+#' The pull request rule keys that never name a tool. Pure.
+ai_non_naming_pr_keys <- function()
+  vapply(Filter(function(r) !isTRUE(r$names), AI_PR_RULES), `[[`, "", "key")
+
+.ai_empty_pr_findings <- function()
+  data.frame(number = integer(), created_at = character(), tool = character(), code = character(),
+             rule_key = character(), role = character(), from_fork = integer(), association = character(),
+             stringsAsFactors = FALSE)
+
+#' Which tool each pull request shows, and whether it is the package's own use. A tool's
+#' account counts for the package unless it came from a fork. A pull request a tool
+#' wrote counts only from a branch in the repository opened by an owner, member or
+#' collaborator; anything else is an outside contributor's tool. A rule that does not
+#' name its tool admits the repository only, and only from those people. Pure.
+classify_prs <- function(prs, cutoff = AI_PR_CUTOFF) {
+  if (is.null(prs) || !nrow(prs)) return(.ai_empty_pr_findings())
+  col <- function(n, d) if (n %in% names(prs)) prs[[n]] else rep(d, nrow(prs))
+  number <- as.integer(col("number", NA_integer_)); created <- col("created_at", NA_character_)
+  login <- tolower(col("login", NA_character_)); assoc <- col("association", NA_character_)
+  cross <- as.logical(col("cross_repo", FALSE)); cross[is.na(cross)] <- FALSE
+  insider <- !is.na(assoc) & assoc %in% c("OWNER", "MEMBER", "COLLABORATOR")
+  agents <- stats::setNames(unname(AI_PR_AGENT_LOGINS), tolower(names(AI_PR_AGENT_LOGINS)))
+  rows <- list()
+  put <- function(i, tool, code, key, role) rows[[length(rows) + 1L]] <<- data.frame(
+    number = number[i], created_at = created[i], tool = tool, code = code, rule_key = key, role = role,
+    from_fork = as.integer(cross[i]), association = if (is.na(assoc[i])) "NONE" else assoc[i],
+    stringsAsFactors = FALSE)
+  for (i in seq_len(nrow(prs))) {
+    if (is.na(created[i]) || created[i] < cutoff) next
+    if (!is.na(login[i]) && login[i] %in% names(agents)) {
+      put(i, agents[[login[i]]], "PR", "PR", if (cross[i]) "outside" else "authoring")
+      next
+    }
+    matched <- Filter(function(r) isTRUE(prs[[r$key]][i]) &&
+                        (is.null(r$min_created) || created[i] >= r$min_created), AI_PR_RULES)
+    for (tl in unique(vapply(matched, `[[`, "", "tool"))) {
+      mine <- Filter(function(r) identical(r$tool, tl), matched)
+      naming <- vapply(Filter(function(r) isTRUE(r$names), mine), `[[`, "", "key")
+      if (length(naming)) {
+        put(i, tl, "PB", paste(naming, collapse = ","),
+            if (!cross[i] && insider[i]) "authoring" else "outside")
+      } else if (!cross[i] && insider[i]) {
+        put(i, tl, "PB", paste(vapply(mine, `[[`, "", "key"), collapse = ","), "authoring")
+      }
+    }
+  }
+  if (!length(rows)) return(.ai_empty_pr_findings())
+  do.call(rbind, rows)
+}
+
+#' Outside contributors' pull requests in the vcs_ai_outside_prs shape. Pure.
+outside_pr_rows <- function(cls, repo_id, today) {
+  o <- cls[cls$role == "outside", , drop = FALSE]
+  if (!nrow(o)) return(data.frame(repo_id = character(), pr_number = integer(), tool = character(),
+    found_via = character(), created_at = character(), from_fork = integer(),
+    author_association = character(), last_confirmed_date = character(), stringsAsFactors = FALSE))
+  out <- data.frame(repo_id = repo_id, pr_number = o$number, tool = o$tool,
+                    found_via = ifelse(o$code == "PR", "pr-author", o$rule_key), created_at = o$created_at,
+                    from_fork = o$from_fork, author_association = o$association,
+                    last_confirmed_date = today, stringsAsFactors = FALSE)
+  out[!duplicated(paste(out$pr_number, out$tool)), , drop = FALSE]
+}
+
+#' The earliest pull request that names a tool for the package, or NA. Exact.
 earliest_agent_pr_date <- function(pr, cutoff = AI_PR_CUTOFF) {
-  prs <- if (is.null(pr) || is.null(pr$prs)) NULL else pr$prs
-  if (is.null(prs) || nrow(prs) == 0) return(NA_character_)
-  intra <- !is.na(prs$created_at) & prs$created_at >= cutoff
-  agent <- intra & tolower(prs$login) %in% tolower(names(AI_PR_AGENT_LOGINS))
-  d <- prs$created_at[agent]
-  if (!length(d)) return(NA_character_)
-  min(d)
+  cls <- classify_prs(if (is.null(pr)) NULL else pr$prs, cutoff)
+  own <- cls$created_at[cls$role == "authoring" & !(cls$rule_key %in% ai_non_naming_pr_keys())]
+  if (!length(own)) return(NA_character_)
+  min(own)
 }
 
 .ai_split_tiers <- function(s) {
@@ -547,7 +606,9 @@ ai_rule_inventory <- function() {
                stringsAsFactors = FALSE),
     # Pull requests opened by a tool's account. Without these rows a login that
     # never matches sits at zero where the silent-search check cannot see it.
-    data.frame(tier = "PR", tool = unname(AI_PR_AGENT_LOGINS), stringsAsFactors = FALSE))
+    data.frame(tier = "PR", tool = unname(AI_PR_AGENT_LOGINS), stringsAsFactors = FALSE),
+    data.frame(tier = "PB", tool = vapply(Filter(function(r) isTRUE(r$names), AI_PR_RULES), `[[`, "", "tool"),
+               stringsAsFactors = FALSE))
   inv <- unique(inv)
   inv[order(inv$tier, inv$tool), , drop = FALSE]
 }

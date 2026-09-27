@@ -123,11 +123,12 @@ test_that("pull requests opened by a tool's account are in the rule inventory", 
   inv <- ai_rule_inventory()
   expect_setequal(inv$tool[inv$tier == "PR"], unique(unname(AI_PR_AGENT_LOGINS)))
   # Copilot, Devin and Jules accounts have opened pull requests in scanned
-  # repositories. Cursor and OpenHands have not, and both zeros must reach the check.
-  rows <- data.frame(repo_id = c("a", "b", "c"), tool = c("copilot", "devin", "jules"),
-                     evidence_tiers = c("PR", "D,PR", "A,PR"), stringsAsFactors = FALSE)
+  # repositories, and so have Claude's and Amazon Q's. The other four zeros must reach the check.
+  rows <- data.frame(repo_id = c("a", "b", "c", "d", "e"),
+                     tool = c("copilot", "devin", "jules", "claude", "amazonq"),
+                     evidence_tiers = c("PR", "D,PR", "A,PR", "PR", "PR"), stringsAsFactors = FALSE)
   measured <- ai_silent_channels(rows, known = NULL)
-  expect_setequal(measured$tool[measured$tier == "PR"], c("cursor", "openhands"))
+  expect_setequal(measured$tool[measured$tier == "PR"], c("cursor", "openhands", "codex", "kiro"))
   # With the recorded list, ai_silent_channels() returns only the unexplained rows.
   out <- ai_silent_channels(rows)
   expect_false(any(out$tier == "PR"), info = paste(out$tool[out$tier == "PR"], collapse = ", "))
