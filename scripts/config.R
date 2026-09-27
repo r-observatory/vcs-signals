@@ -899,3 +899,7 @@ LINKS_BACKFILL_PATH <- file.path(getwd(), "data", "repo-package-links-backfill.c
 # that overruns discards every repo it scanned; stopping short leaves a partial
 # shard that is uploaded and folded, and the tail rides the next dispatch.
 AI_DEEP_BUDGET_S <- 3.25 * 3600
+
+# The order the search pass works through each week, most urgent first.
+AI_WORK_PRIORITY <- c(onset = 1L, `account-count` = 2L, `window-hit` = 3L, `count-refresh` = 4L,
+                      `re-ask` = 5L, campaign = 6L, `rule-new` = 7L, `never-asked` = 8L)

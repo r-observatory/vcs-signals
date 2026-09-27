@@ -1369,6 +1369,158 @@ ai_reclassify_rows <- function(prior, cheap, log, reads, outside) {
   list(signals = out, review = .ai_bind_like(.ai_empty_review(), review), moved = moved)
 }
 
+.ai_empty_work <- function()
+  data.frame(repo_id = character(), tool = character(), rule_key = character(), reason = character(),
+             priority = integer(), stringsAsFactors = FALSE)
+
+#' Every rule the search pass can ask. Pure.
+.ai_search_rules <- function()
+  do.call(rbind, lapply(c(AI_TRAILER_PATTERNS, AI_AUTHOR_SUFFIXES, AI_REVIEW_RULES), function(r)
+    data.frame(key = r$key, tool = r$tool, rev = as.integer(r$rev), search = r$search,
+               since_ruleset = r$since_ruleset, stringsAsFactors = FALSE)))
+
+#' The log keys of a tool's first-date author searches. Pure.
+.ai_author_keys <- function(tool) {
+  a <- Find(function(x) identical(x$tool, tool), AI_ACCOUNTS)
+  if (is.null(a)) character(0) else paste0("author.", c(a$graphql, a$linked))
+}
+
+#' The week's searches, most urgent first: dating, REST-only counts, matched and refused rules, a full-gate
+#' campaign, then rules not asked at their revision. No message or name search in a history read whole. Pure.
+select_deep_work <- function(flagged, found, published, log, reads, counts,
+                             campaign_since = NA_character_, today = format(Sys.Date()), full = FALSE) {
+  flag_ids <- unique(flagged$repo_id)
+  if (!length(flag_ids)) return(.ai_empty_work())
+  found <- .ai_bind_like(cbind(repo_id = character(0), .ai_empty_found()), list(found))
+  found$role[is.na(found$role)] <- "authoring"
+  found <- found[found$repo_id %in% flag_ids, , drop = FALSE]
+  published <- .ai_align_signals(published)
+  pub_f <- published[published$repo_id %in% flag_ids, , drop = FALSE]
+  log <- .ai_bind_like(.ai_empty_log(), list(log))
+  reads <- .ai_bind_like(.ai_empty_reads(), list(reads))
+  counts <- .ai_bind_like(.ai_empty_counts(), list(counts))
+  rules <- .ai_search_rules()
+  whole <- reads$repo_id[reads$commits_history_complete %in% 1L & reads$commits_ruleset %in% AI_RULESET_VERSION]
+  day <- function(x) substr(x, 1, 10)
+  work <- list()
+  add <- function(repo, tool, key, reason) if (length(repo)) work[[length(work) + 1L]] <<- data.frame(
+    repo_id = repo, tool = tool, rule_key = key, reason = reason,
+    priority = unname(AI_WORK_PRIORITY[reason]), stringsAsFactors = FALSE)
+  pair <- function(d) paste(d$repo_id, d$tool, sep = "\r")
+  auth <- found[found$role == "authoring" & !(found$marker %in% ai_non_naming_pr_keys()), , drop = FALSE]
+
+  # Dating: a tool new here, a row that lost its date, a scan-day floor this week can
+  # date, and a row dated only by its account's newest commit with no author search yet.
+  new <- unique(auth[!(pair(auth) %in% pair(published)), c("repo_id", "tool")])
+  add(new$repo_id, new$tool, NA_character_, "onset")
+  undated <- pub_f[is.na(pub_f$first_seen_date), , drop = FALSE]
+  add(undated$repo_id, undated$tool, NA_character_, "onset")
+  forks <- if ("is_fork" %in% names(flagged)) flagged$repo_id[flagged$is_fork %in% 1L] else character(0)
+  datable <- auth[(auth$tier == "D" & !ai_is_ignore_marker(auth$marker) & !(auth$repo_id %in% forks)) |
+                  auth$tier == "A", , drop = FALSE]
+  floors <- pub_f[pub_f$first_seen_censored %in% 1L & grepl("T23:59:59Z$", pub_f$first_seen_date) &
+                  pair(pub_f) %in% pair(datable), , drop = FALSE]
+  add(floors$repo_id, floors$tool, NA_character_, "onset")
+  a_rows <- pub_f[pub_f$first_seen_censored %in% 1L & grepl("(^|,)A(,|$)", pub_f$evidence_tiers), ,
+                  drop = FALSE]
+  if (nrow(a_rows)) {
+    asked <- vapply(seq_len(nrow(a_rows)), function(i) any(log$repo_id == a_rows$repo_id[i] &
+      log$rule_key %in% .ai_author_keys(a_rows$tool[i]) & log$outcome %in% c("hit", "none")), logical(1))
+    add(a_rows$repo_id[!asked], a_rows$tool[!asked], NA_character_, "onset")
+  }
+
+  # A REST-only address seen in the read with no count, or a commit newer than its count.
+  ac <- auth[!is.na(auth$rule_key) & startsWith(auth$rule_key, "account."), , drop = FALSE]
+  if (nrow(ac)) {
+    addr <- sub("^account\\.", "", ac$rule_key)
+    m <- match(paste(ac$repo_id, ac$tool, addr), paste(counts$repo_id, counts$tool, counts$identity_set))
+    due <- is.na(m) | day(ac$newest_at) > counts$measured_on[m]
+    due <- !is.na(due) & due
+    add(ac$repo_id[due], ac$tool[due], ac$rule_key[due], "account-count")
+  }
+
+  # Rules the read matched: watched rules are asked where they matched, others refreshed
+  # when the read found a commit newer than their last answer.
+  latest <- function(repo, key) match(paste(repo, key), paste(log$repo_id, log$rule_key))
+  cur_rev <- function(key) rules$rev[match(key, rules$key)]
+  matched <- found[!is.na(found$rule_key) & found$rule_key %in% rules$key & !(found$repo_id %in% whole), ,
+                   drop = FALSE]
+  if (nrow(matched)) {
+    k <- latest(matched$repo_id, matched$rule_key)
+    stale <- is.na(k) | log$rule_rev[k] != cur_rev(matched$rule_key) | day(matched$newest_at) > log$asked_on[k]
+    stale <- !is.na(stale) & stale
+    mode <- rules$search[match(matched$rule_key, rules$key)]
+    win <- mode == "on_window_hit" & stale
+    add(matched$repo_id[win], rules$tool[match(matched$rule_key[win], rules$key)], matched$rule_key[win],
+        "window-hit")
+    ref <- mode == "always" & !is.na(k) & !win & stale & log$outcome[k] %in% "hit"
+    add(matched$repo_id[ref], rules$tool[match(matched$rule_key[ref], rules$key)], matched$rule_key[ref],
+        "count-refresh")
+  }
+
+  # Refused searches, and both Gemini searches for a published Gemini credit.
+  refused <- log[log$outcome == "refused" & log$repo_id %in% setdiff(flag_ids, whole) &
+                 (log$rule_key %in% rules$key | startsWith(log$rule_key, "account.")), , drop = FALSE]
+  idx <- .ai_account_index()
+  owner_of <- idx$tool[match(tolower(sub("^account\\.", "", refused$rule_key)), idx$value)]
+  add(refused$repo_id, ifelse(refused$rule_key %in% rules$key, rules$tool[match(refused$rule_key, rules$key)],
+      owner_of), refused$rule_key, "re-ask")
+  gem <- pub_f[pub_f$tool == "gemini" & grepl("(^|,)B(,|$)", pub_f$evidence_tiers) &
+               !(pub_f$repo_id %in% whole), , drop = FALSE]
+  for (key in c("msg.gemini.coauthor", "msg.gemini.bot")) {
+    k <- latest(gem$repo_id, rep(key, nrow(gem)))
+    due <- is.na(k) | log$rule_rev[k] != cur_rev(key)
+    add(gem$repo_id[due], "gemini", key, "re-ask")
+  }
+
+  # Every always rule of every flagged repository not read whole: a campaign asks what it
+  # has not asked since it began, otherwise a rule is asked once at its current revision.
+  always <- rules[rules$search == "always", , drop = FALSE]
+  open_ids <- setdiff(flag_ids, whole)
+  if (length(open_ids)) {
+    cand <- expand.grid(repo_id = open_ids, key = always$key, stringsAsFactors = FALSE)
+    k <- latest(cand$repo_id, cand$key)
+    missing_rev <- is.na(k) | log$rule_rev[k] != cur_rev(cand$key)
+    tool <- always$tool[match(cand$key, always$key)]
+    if (isTRUE(full) && !is.na(campaign_since)) {
+      due <- missing_rev | log$asked_on[k] < campaign_since
+      add(cand$repo_id[due], tool[due], cand$key[due], "campaign")
+    } else {
+      fresh <- always$since_ruleset[match(cand$key, always$key)] >= AI_RULESET_UNGATED
+      add(cand$repo_id[missing_rev & fresh], tool[missing_rev & fresh], cand$key[missing_rev & fresh],
+          "rule-new")
+      add(cand$repo_id[missing_rev & !fresh], tool[missing_rev & !fresh], cand$key[missing_rev & !fresh],
+          "never-asked")
+    }
+  }
+
+  if (!length(work)) return(.ai_empty_work())
+  w <- do.call(rbind, work)
+  w <- w[order(w$priority, w$repo_id), , drop = FALSE]
+  w <- w[!duplicated(paste(w$repo_id, w$tool, w$rule_key, sep = "\r")), , drop = FALSE]
+  rownames(w) <- NULL
+  w
+}
+
+#' The date of the campaign a full gate works on: the stored one, or a new one today.
+campaign_start <- function(full, stored, today)
+  if (!isTRUE(full)) NA_character_ else if (!is.na(stored)) stored else today
+
+#' TRUE once every always rule of every flagged repository not read whole has been asked
+#' on or after the campaign date. Pure.
+campaign_finished <- function(flag_ids, log, reads, since) {
+  if (is.na(since)) return(FALSE)
+  log <- .ai_bind_like(.ai_empty_log(), list(log))
+  reads <- .ai_bind_like(.ai_empty_reads(), list(reads))
+  whole <- reads$repo_id[reads$commits_history_complete %in% 1L & reads$commits_ruleset %in% AI_RULESET_VERSION]
+  always <- .ai_search_rules(); always <- always[always$search == "always", , drop = FALSE]
+  open_ids <- setdiff(flag_ids, whole)
+  if (!length(open_ids)) return(TRUE)
+  cand <- expand.grid(repo_id = open_ids, key = always$key, stringsAsFactors = FALSE)
+  k <- match(paste(cand$repo_id, cand$key), paste(log$repo_id, log$rule_key))
+  !any(is.na(k) | log$asked_on[k] < since)
+}
+
 #' New-tool gate for the weekly incremental. Returns the subset of flagged repo_ids that
 #' carry at least one (repo_id, tool) pair in THIS week's cheap-pass evidence that is NOT
 #' already present in the published vcs_ai_signals detail for that repo. A repo whose current
