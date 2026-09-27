@@ -203,6 +203,28 @@ test_that("a value dated exactly after its own floor still warns", {
   expect_equal(o$first_seen_date, "2026-03-17T07:23:36Z"); expect_equal(o$first_seen_censored, 1L)
 })
 
+test_that("a joined value is never matched rule by rule against a joined floor", {
+  # admixr2's read on 2026-09-27: searches date the commit credits, and the shared ignore lines stay floors.
+  rid <- "github.com/leidenpharmacology/admixr2"
+  keys <- c("gitignore:.claude", "gitignore:CLAUDE.md", "rbuildignore:CLAUDE.md", "msg.claude.address",
+            "msg.claude.coauthor", "pr.claude.footer", "pr.claude.session")
+  ev <- data.frame(tool = "claude", tier = c("D", "D", "D", "B", "B", "PB", "PB"), marker = keys, agnostic = 0L,
+                   stringsAsFactors = FALSE)
+  on <- data.frame(tool = "claude", marker = keys,
+                   first_seen_date = c(rep("2026-09-27T23:59:59Z", 3), rep("2026-07-16T23:15:41Z", 2),
+                                       "2026-09-10T07:52:38Z", "2026-09-12T07:39:57Z"),
+                   first_seen_censored = c(1L, 1L, 1L, 0L, 0L, 0L, 0L), stringsAsFactors = FALSE)
+  read <- build_ai_detail(rid, ev, on, "2026-09-27")
+  expect_equal(read$first_seen_date, "2026-07-16T23:15:41Z"); expect_equal(read$first_seen_censored, 0L)
+  prior <- data.frame(repo_id = rid, tool = "claude", first_seen_date = "2026-05-29T12:05:12Z",
+                      first_seen_censored = 1L, evidence_tiers = "B,D",
+                      markers = paste0("B,gitignore:.claude,gitignore:CLAUDE.md,",
+                                       "rbuildignore:.claude,rbuildignore:CLAUDE.md"),
+                      authored = 0L, last_confirmed_date = "2026-09-20", stringsAsFactors = FALSE)
+  expect_no_warning(o <- ai_onset_reducer(prior, read))
+  expect_equal(o$first_seen_date, "2026-05-29T12:05:12Z"); expect_equal(o$first_seen_censored, 1L)
+})
+
 test_that("reducer keeps distinct tools as distinct rows", {
   o <- ai_onset_reducer(row("claude","2024-01-01",0L,"A",0L,"2024-01-01"),
                         row("cursor","2024-02-01",0L,"D",0L,"2024-02-01"))
