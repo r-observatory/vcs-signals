@@ -883,6 +883,18 @@ parse_pr_walk <- function(resp, repos) {
   out
 }
 
+#' Named pull requests and commits in one query, aliased p<k> and c<k>.
+build_fixed_object_query <- function(prs, commits) {
+  split_slug <- function(s) strsplit(s, "/", fixed = TRUE)[[1]]
+  p <- vapply(seq_along(prs), function(k) { s <- split_slug(prs[[k]][1]); sprintf(
+    'p%d: repository(owner: "%s", name: "%s") { pullRequest(number: %s) { %s } }',
+    k - 1L, s[1], s[2], prs[[k]][2], .AI_PR_NODE_FIELDS) }, character(1))
+  c_ <- vapply(seq_along(commits), function(k) { s <- split_slug(commits[[k]][1]); sprintf(
+    'c%d: repository(owner: "%s", name: "%s") { object(oid: "%s") { ... on Commit { %s } } }',
+    k - 1L, s[1], s[2], commits[[k]][2], .AI_COMMIT_NODE_FIELDS) }, character(1))
+  sprintf("query { %s }", paste(c(p, c_), collapse = "\n"))
+}
+
 #' The activity and account-count documents over a slice of the roster, through the
 #' shared helper that reports every repository it could not read.
 fetch_activity <- function(io, repos, breaker = NULL, batch_size = TIER_D_BATCH)

@@ -771,6 +771,15 @@ AI_PR_WALK_POINTS <- 300L
 # run_cheap and run_deep both check graphql_rate_remaining(io) against this reserve
 # before spending down the shared token, pausing rather than faulting when it is low.
 AI_POINT_RESERVE <- 1500L
+# Repositories whose answers the weekly documents must reproduce before a run reads
+# anything. Floors only, since counts only grow.
+AI_QUERY_CANARY <- list(
+  accounts = c("ss3sim/ss3sim", "johnpaulgosling/addivortes"),
+  activity = c("ericrayanderson/shinyglass", "ss3sim/ss3sim"),
+  prs = list(c("ericrayanderson/shinyglass", "49"), c("apache/arrow-nanoarrow", "927")),
+  commits = list(c("xrobin/pROC", "fe5c63c197db1fe8ce70eb740bb5ffe4af0f4e99"),
+                 c("alyssafrazee/ballgown", "ab1da7b7b32be605c5f291a7ace100a0e65e08f6")),
+  addivortes_cursor_floor = 19L)
 # A repository that still fails alone after halving is read once more after this wait.
 AI_BATCH_RETRY_WAIT_S <- 30
 # Consecutive identical single-repository failures that end one document's reads in a shard.

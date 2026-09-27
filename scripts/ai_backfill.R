@@ -140,6 +140,104 @@ tree_query_canary <- function(io) {
   invisible(TRUE)
 }
 
+# ---- weekly document canary and read state ----------------------------------
+.ai_canary_repos <- function(slugs)
+  data.frame(repo_id = paste0("github.com/", slugs), owner = sub("/.*$", "", slugs),
+             name = sub("^[^/]*/", "", slugs), stringsAsFactors = FALSE)
+
+#' Send the weekly documents for repositories whose answers are known, and stop the run
+#' when GitHub no longer returns them. The contents check comes first.
+ai_query_canary <- function(io) {
+  tree_query_canary(io)
+  cfg <- AI_QUERY_CANARY
+  fail <- function(fmt, ...) stop(sprintf(paste0("AI query canary: ", fmt), ...), call. = FALSE)
+  ask <- function(q, label) {
+    res <- tryCatch(io$graphql(q), error = function(e) fail("the %s document failed: %s", label, conditionMessage(e)))
+    if (is.null(res$data)) fail("the %s document returned no data: %s", label, .fetch_first_error(res))
+    if (!is.null(res$errors) && !errors_are_alias_not_found(res$errors))
+      fail("the %s document returned an error: %s", label, .fetch_first_error(res))
+    res
+  }
+  acc_repos <- .ai_canary_repos(cfg$accounts)
+  counts <- parse_account_counts(ask(build_account_count_query(acc_repos), "account-count"), acc_repos)
+  for (rid in acc_repos$repo_id)
+    if (is.null(counts[[rid]])) fail("%s came back empty in the account-count document", rid)
+  n <- function(slug, tool) {
+    d <- counts[[paste0("github.com/", slug)]]; v <- d$commits[d$tool == tool]
+    if (length(v)) v else 0L
+  }
+  if (n("ss3sim/ss3sim", "claude") != 0L)
+    fail("ss3sim reads %d commits by Claude's accounts where 0 is right: a github-actions address reached the filter",
+         n("ss3sim/ss3sim", "claude"))
+  if (n("ss3sim/ss3sim", "amazonq") < 2L)
+    fail("ss3sim reads %d commits by Amazon Q's account, at least 2 expected", n("ss3sim/ss3sim", "amazonq"))
+  if (n("johnpaulgosling/addivortes", "cursor") < cfg$addivortes_cursor_floor)
+    fail(paste0("addivortes reads %d commits by Cursor's accounts, at least %d expected: ",
+                "the account filter may no longer count cursoragent@cursor.com's commits"),
+         n("johnpaulgosling/addivortes", "cursor"), cfg$addivortes_cursor_floor)
+  act_repos <- .ai_canary_repos(cfg$activity)
+  act <- parse_activity(ask(build_activity_query(act_repos), "activity"), act_repos)
+  for (rid in act_repos$repo_id) {
+    a <- act[[rid]]
+    if (is.null(a)) fail("%s came back empty in the activity document", rid)
+    if (!all(c("number", "created_at", "login", "association", "cross_repo", "head_ref") %in% names(a$prs)) ||
+        !all(c("oid", "committed_at", "message", "author_name", "author_email") %in% names(a$commits)))
+      fail("%s: the activity document's pull request or commit frame lacks a column", rid)
+  }
+  fixed <- ask(build_fixed_object_query(cfg$prs, cfg$commits), "fixed-object")$data
+  pr <- function(k) fixed[[sprintf("p%d", k)]]$pullRequest
+  cm <- function(k) fixed[[sprintf("c%d", k)]]$object
+  for (k in seq_along(cfg$prs)) if (is.null(pr(k - 1L)))
+    fail("%s#%s came back empty in the fixed-object document", cfg$prs[[k]][1], cfg$prs[[k]][2])
+  for (k in seq_along(cfg$commits)) if (is.null(cm(k - 1L)))
+    fail("%s@%s came back empty in the fixed-object document", cfg$commits[[k]][1], substr(cfg$commits[[k]][2], 1, 7))
+  sg <- classify_prs(.ai_pr_nodes_frame(list(pr(0L))))
+  if (!(nrow(sg) == 1L && sg$tool == "cursor" && sg$code == "PB" && sg$role == "authoring"))
+    fail("ericrayanderson/shinyglass #49 no longer reads as a pull request Cursor wrote for its maintainer")
+  na <- assemble_repo_evidence(list(), list(prs = .ai_pr_nodes_frame(list(pr(1L)))))
+  if (nrow(build_cheap_rows(cbind(repo_id = "github.com/apache/arrow-nanoarrow", na), "canary")) > 0L ||
+      !any(na$role == "outside" & na$tool == "cursor"))
+    fail("apache/arrow-nanoarrow #927 would count as the package's own Cursor use")
+  if (!("msg.cursor.made-with" %in% match_commit_findings(.ai_commit_nodes_frame(list(cm(0L))))$rule_key))
+    fail("xrobin/pROC fe5c63c no longer matches its Made-with: Cursor line")
+  bg <- unique(match_commit_findings(.ai_commit_nodes_frame(list(cm(1L))))$tool)
+  if (!identical(bg, "antigravity"))
+    fail("alyssafrazee/ballgown ab1da7b names %s, where Antigravity alone is right", paste(bg, collapse = ", "))
+  message("AI query canary: passed")
+  invisible(TRUE)
+}
+
+#' pipeline_state, which lives in the recent shard. An empty vector when there is no
+#' release yet; a stop when there is one and its shard cannot be read.
+.ai_read_pipeline_state <- function(io, dir) {
+  dir.create(dir, showWarnings = FALSE, recursive = TRUE)
+  if (!isTRUE(io$download("vcs-signals-recent.db", dir))) {
+    if (isTRUE(io$release_exists()))
+      stop("could not download vcs-signals-recent.db to read the pipeline state; stopping rather than ",
+           "taking lost state for a first run", call. = FALSE)
+    return(character(0))
+  }
+  con <- DBI::dbConnect(RSQLite::SQLite(), file.path(dir, "vcs-signals-recent.db"))
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  if (!DBI::dbExistsTable(con, "pipeline_state")) return(character(0))
+  st <- DBI::dbReadTable(con, "pipeline_state")
+  stats::setNames(st$value, st$key)
+}
+
+#' Once the state tables have been published, a summary without them is a lost table,
+#' never a first run: a reset would re-read everything and lose the REST-only counts.
+.ai_state_guard <- function(con, state) {
+  since <- unname(state["ai_state_tables_since"])
+  if (!length(since) || is.na(since)) return(invisible(TRUE))
+  for (t in c("vcs_ai_repo_reads", "vcs_ai_search_log", "vcs_ai_account_counts")) {
+    n <- if (DBI::dbExistsTable(con, t)) DBI::dbGetQuery(con, sprintf('SELECT COUNT(*) AS n FROM "%s"', t))$n else 0L
+    if (n == 0L)
+      stop(sprintf(paste0("the published summary has no %s rows although the weekly AI read has kept them ",
+                          "since %s; stopping so a lost table is never read as a first run"), t, since), call. = FALSE)
+  }
+  invisible(TRUE)
+}
+
 # ---- enumerate --------------------------------------------------------------
 #' Build the FULL active github roster from the published summary's embedded repos
 #' table (NOT the star-filtered vcs_signals_summary that run_enumerate uses): the
@@ -155,14 +253,15 @@ tree_query_canary <- function(io) {
 #' so the squatter is never scanned under this row's repo_id. Same download as
 #' backfill.R's enumerate.
 run_enumerate_ai <- function(io, out_dir) {
-  # Before any read: a broken contents query stops the pass here, not twelve shards later.
-  tree_query_canary(io)
+  # Before any read: a broken weekly document stops the pass here, not twelve shards later.
+  ai_query_canary(io)
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   if (!isTRUE(io$download("vcs-signals-summary.db", out_dir)))
     stop("could not download vcs-signals-summary.db from the published release; nothing to enumerate")
   summary_path <- file.path(out_dir, "vcs-signals-summary.db")
   con <- DBI::dbConnect(RSQLite::SQLite(), summary_path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
+  .ai_state_guard(con, .ai_read_pipeline_state(io, file.path(out_dir, "_state")))
   rows <- DBI::dbGetQuery(con,
     "SELECT repo_id, owner, name, node_id FROM repos WHERE host = 'github' AND status = 'active'")
   roster <- data.frame(repo_id = rows$repo_id, owner = rows$owner, name = rows$name,
@@ -205,6 +304,12 @@ run_enumerate_ai <- function(io, out_dir) {
   }
   if (length(drop_idx) > 0) roster <- roster[-drop_idx, , drop = FALSE]
 
+  # Last week's read watermarks, so each repository's read can be planned.
+  if (DBI::dbExistsTable(con, "vcs_ai_repo_reads")) {
+    rd <- DBI::dbReadTable(con, "vcs_ai_repo_reads")
+    m <- match(roster$repo_id, rd$repo_id)
+    for (cn in .AI_ROSTER_READ_COLS) roster[[cn]] <- rd[[cn]][m]
+  }
   rp <- DBI::dbGetQuery(con, "SELECT repo_id, package FROM repo_packages WHERE origin = 'cran'")
   roster_cran <- build_roster_cran(io, rp, roster$repo_id)
   message(sprintf("ai enumerate: %d active github repos, %d CRAN package versions to compare",
@@ -1106,7 +1211,7 @@ main <- function(mode, out_dir, io = NULL) {
   if (mode == "enumerate") {
     run_enumerate_ai(io, out_dir)
   } else if (mode == "canary") {
-    tree_query_canary(io)
+    ai_query_canary(io)
   } else if (mode == "cheap") {
     i <- suppressWarnings(as.integer(Sys.getenv("VCS_SHARD_I", "0")))
     N <- suppressWarnings(as.integer(Sys.getenv("VCS_SHARD_N", "1")))

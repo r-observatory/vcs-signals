@@ -4,6 +4,15 @@
 source(file.path(.repo_root, "scripts", "ai_backfill.R"))
 setwd(.aibf_wd)
 
+# Enumerate runs the document checks first; the enumerate tests below are about the roster.
+.no_query_canary <- function() { orig <- ai_query_canary; ai_query_canary <<- function(io) invisible(TRUE); orig }
+.fake_recent <- function(rel, state = NULL) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel, "vcs-signals-recent.db")); on.exit(DBI::dbDisconnect(con))
+  ensure_series_schema(con)
+  if (length(state)) DBI::dbWriteTable(con, "pipeline_state",
+    data.frame(key = names(state), value = unname(state), stringsAsFactors = FALSE), append = TRUE)
+}
+
 test_that("write_ai_roster / load_ai_roster round-trip a node_id-carrying, stars-free roster", {
   p <- tempfile(fileext = ".db")
   r <- data.frame(repo_id = "github.com/o/r", owner = "o", name = "r",
@@ -16,6 +25,7 @@ test_that("write_ai_roster / load_ai_roster round-trip a node_id-carrying, stars
 })
 
 test_that("run_enumerate_ai builds the FULL active github roster from the repos table", {
+  orig_c <- .no_query_canary(); on.exit(ai_query_canary <<- orig_c, add = TRUE)
   # A fake summary DB with a repos table: one active github repo, one gone, one gitlab.
   rel <- tempfile("rel_"); dir.create(rel)
   scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel, "vcs-signals-summary.db"))
@@ -25,7 +35,9 @@ test_that("run_enumerate_ai builds the FULL active github roster from the repos 
     ('github.com/b/gone','R_b','github','github.com','b','gone','b/gone',1,1,'2024-01-01','2026-07-01','gone'),
     ('gitlab.com/c/skip','R_c','gitlab','gitlab.com','c','skip','c/skip',0,1,'2024-01-01','2026-07-01','active')")
   DBI::dbDisconnect(scon)
+  .fake_recent(rel)
   io <- list(
+    release_exists = function() TRUE,
     download = function(pattern, dir) {
       f <- list.files(rel, pattern = utils::glob2rx(pattern), full.names = TRUE)
       if (!length(f)) return(FALSE)
@@ -41,6 +53,7 @@ test_that("run_enumerate_ai builds the FULL active github roster from the repos 
 })
 
 test_that("run_enumerate_ai re-resolves owner/name from node_id for rows that already have one", {
+  orig_c <- .no_query_canary(); on.exit(ai_query_canary <<- orig_c, add = TRUE)
   # A fake summary DB with one repo whose owner/name is stale (renamed since the last
   # resolve) but whose node_id is still current.
   rel <- tempfile("rel_"); dir.create(rel)
@@ -49,7 +62,9 @@ test_that("run_enumerate_ai re-resolves owner/name from node_id for rows that al
   DBI::dbExecute(scon, "INSERT INTO repos (repo_id,node_id,host,host_domain,owner,name,name_with_owner,supported,n_packages,first_seen,last_seen,status) VALUES
     ('github.com/old/name','R_x','github','github.com','old','name','old/name',1,1,'2024-01-01','2026-07-01','active')")
   DBI::dbDisconnect(scon)
+  .fake_recent(rel)
   io <- list(
+    release_exists = function() TRUE,
     download = function(pattern, dir) {
       f <- list.files(rel, pattern = utils::glob2rx(pattern), full.names = TRUE)
       if (!length(f)) return(FALSE)
@@ -68,6 +83,7 @@ test_that("run_enumerate_ai re-resolves owner/name from node_id for rows that al
 })
 
 test_that("run_enumerate_ai drops a roster row whose re-resolve returns a different node_id (squatted slug)", {
+  orig_c <- .no_query_canary(); on.exit(ai_query_canary <<- orig_c, add = TRUE)
   # A fake summary DB with two repos that already carry a node_id: one genuinely renamed
   # (old/name -> R_x, still resolves to R_x at the new slug) and one whose old slug has
   # since been squatted by an unrelated repo (stale/squatted -> R_y, but the slug
@@ -79,7 +95,9 @@ test_that("run_enumerate_ai drops a roster row whose re-resolve returns a differ
     ('github.com/old/name','R_x','github','github.com','old','name','old/name',1,1,'2024-01-01','2026-07-01','active'),
     ('github.com/stale/squatted','R_y','github','github.com','stale','squatted','stale/squatted',1,1,'2024-01-01','2026-07-01','active')")
   DBI::dbDisconnect(scon)
+  .fake_recent(rel)
   io <- list(
+    release_exists = function() TRUE,
     download = function(pattern, dir) {
       f <- list.files(rel, pattern = utils::glob2rx(pattern), full.names = TRUE)
       if (!length(f)) return(FALSE)
@@ -1267,6 +1285,7 @@ test_that("the retry merges and does not scan", {
 })
 
 test_that("enumerate records each roster repository's CRAN versions, and a failed CRAN read records none", {
+  orig_c <- .no_query_canary(); on.exit(ai_query_canary <<- orig_c, add = TRUE)
   rel <- tempfile("rel_"); dir.create(rel)
   scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel, "vcs-signals-summary.db"))
   ensure_repo_schema(scon)
@@ -1275,19 +1294,20 @@ test_that("enumerate records each roster repository's CRAN versions, and a faile
   DBI::dbExecute(scon, "INSERT INTO repo_packages (repo_id, package, origin, resolved_from) VALUES
     ('github.com/a/prova','prova','cran','url'), ('github.com/a/prova','provaBioc','bioc','url')")
   DBI::dbDisconnect(scon)
+  .fake_recent(rel)
   dl <- function(pattern, dir) {
     f <- list.files(rel, pattern = utils::glob2rx(pattern), full.names = TRUE)
     if (!length(f)) return(FALSE)
     file.copy(f, file.path(dir, basename(f)), overwrite = TRUE); TRUE }
   gq <- with_contents_canary(function(query) list(data = list()))
   out <- tempfile("out_"); dir.create(out)
-  run_enumerate_ai(list(download = dl, graphql = gq,
+  run_enumerate_ai(list(download = dl, graphql = gq, release_exists = function() TRUE,
                         cran_packages = function() data.frame(Package = "prova", Version = "0.4.5")), out)
   got <- load_roster_cran(file.path(out, "vcs-ai-roster.db"))
   expect_equal(got$package, "prova"); expect_equal(got$cran_version, "0.4.5")
 
   out2 <- tempfile("out_"); dir.create(out2)
-  expect_message(run_enumerate_ai(list(download = dl, graphql = gq,
+  expect_message(run_enumerate_ai(list(download = dl, graphql = gq, release_exists = function() TRUE,
                                        cran_packages = function() stop("503")), out2),
                  "could not be read")
   expect_equal(nrow(load_roster_cran(file.path(out2, "vcs-ai-roster.db"))), 0L)
@@ -1508,4 +1528,57 @@ test_that("a catch-up whose page ends on the stored newest pull request is caugh
   suppressMessages(run_cheap(io, out, ro, 0, 1))
   expect_equal(sum(io$kinds() == "walk"), 1L)
   expect_equal(.hit_read(out)$prs_newest_created_at, "2026-09-01T00:00:00Z")
+})
+
+test_that("the roster carries each repository's read watermarks", {
+  orig_c <- .no_query_canary(); on.exit(ai_query_canary <<- orig_c, add = TRUE)
+  rel <- tempfile("rel_"); dir.create(rel)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel, "vcs-signals-summary.db"))
+  ensure_repo_schema(scon); ensure_series_schema(scon)
+  DBI::dbExecute(scon, "INSERT INTO repos (repo_id,node_id,host,host_domain,owner,name,name_with_owner,supported,n_packages,first_seen,last_seen,status) VALUES
+    ('github.com/a/keep',NULL,'github','github.com','a','keep','a/keep',1,1,'2024-01-01','2026-07-01','active')")
+  DBI::dbExecute(scon, "INSERT INTO vcs_ai_repo_reads (repo_id, commits_read_on, commits_ruleset, prs_walk_cursor)
+    VALUES ('github.com/a/keep', '2026-10-04', '2026-10-04', 'P9')")
+  DBI::dbExecute(scon, "INSERT INTO vcs_ai_search_log VALUES ('github.com/a/keep','msg.x',1,'v','2026-10-05','none',0,NULL,0,NULL,'search')")
+  DBI::dbExecute(scon, "INSERT INTO vcs_ai_account_counts VALUES ('github.com/a/keep','claude','graphql',1,NULL,'2026-10-04')")
+  DBI::dbDisconnect(scon)
+  .fake_recent(rel, c(ai_state_tables_since = "2026-10-06"))
+  io <- local_release_io(rel, graphql = function(q) list(data = list()))
+  out <- tempfile("out_"); dir.create(out)
+  suppressMessages(run_enumerate_ai(io, out))
+  roster <- load_ai_roster(file.path(out, "vcs-ai-roster.db"))
+  expect_equal(roster$commits_read_on, "2026-10-04"); expect_equal(roster$prs_walk_cursor, "P9")
+})
+
+test_that("a lost state table stops the week instead of being read as a first run", {
+  orig_c <- .no_query_canary(); on.exit(ai_query_canary <<- orig_c, add = TRUE)
+  rel <- tempfile("rel_"); dir.create(rel)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel, "vcs-signals-summary.db"))
+  ensure_repo_schema(scon); ensure_series_schema(scon); DBI::dbDisconnect(scon)
+  .fake_recent(rel, c(ai_state_tables_since = "2026-10-06"))
+  io <- local_release_io(rel, graphql = function(q) list(data = list()))
+  expect_error(suppressMessages(run_enumerate_ai(io, tempfile("out_"))), "vcs_ai_repo_reads")
+})
+
+test_that("a summary from before the weekly read is a first run, not a lost one", {
+  orig_c <- .no_query_canary(); on.exit(ai_query_canary <<- orig_c, add = TRUE)
+  rel <- tempfile("rel_"); dir.create(rel)
+  scon <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel, "vcs-signals-summary.db"))
+  ensure_repo_schema(scon)
+  DBI::dbExecute(scon, "INSERT INTO repos (repo_id,node_id,host,host_domain,owner,name,name_with_owner,supported,n_packages,first_seen,last_seen,status) VALUES
+    ('github.com/a/keep',NULL,'github','github.com','a','keep','a/keep',1,1,'2024-01-01','2026-07-01','active')")
+  DBI::dbDisconnect(scon)
+  .fake_recent(rel)
+  io <- local_release_io(rel, graphql = function(q) list(data = list()))
+  out <- tempfile("out_"); dir.create(out)
+  expect_no_error(suppressMessages(run_enumerate_ai(io, out)))
+  expect_true(is.na(load_ai_roster(file.path(out, "vcs-ai-roster.db"))$commits_read_on))
+})
+
+test_that("a release whose recent shard cannot be read stops the week", {
+  rel <- tempfile("rel_"); dir.create(rel)
+  io <- list(download = function(pattern, dir) FALSE, release_exists = function() TRUE)
+  expect_error(.ai_read_pipeline_state(io, tempfile("st_")), "vcs-signals-recent.db")
+  none <- list(download = function(pattern, dir) FALSE, release_exists = function() FALSE)
+  expect_equal(.ai_read_pipeline_state(none, tempfile("st_")), character(0))
 })
