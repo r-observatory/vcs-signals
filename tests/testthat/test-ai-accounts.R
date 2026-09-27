@@ -36,9 +36,9 @@ test_that("commits by a tool's accounts are a search for every tool that has acc
   expect_setequal(inv$tool[inv$tier == "A"], unique(vapply(AI_ACCOUNTS, `[[`, "", "tool")))
 })
 
-.sig <- function(repo, tool, tiers = "A", markers = "A", authored_commits = NA_integer_)
+.sig <- function(repo, tool, codes = "A", markers = "A", authored_commits = NA_integer_)
   .ai_align_signals(data.frame(repo_id = repo, tool = tool, first_seen_date = "2026-01-01",
-    first_seen_censored = 1L, evidence_tiers = tiers, markers = markers, authored = 1L,
+    first_seen_censored = 1L, evidence_tiers = codes, markers = markers, authored = 1L,
     authored_commits = authored_commits, last_confirmed_date = "2026-10-04", stringsAsFactors = FALSE))
 .cnt <- function(repo, tool, set, n, on)
   data.frame(repo_id = repo, tool = tool, identity_set = set, commits = as.integer(n),
@@ -68,8 +68,8 @@ test_that("a Sunday count and a Tuesday count both survive the fold, in either o
   r <- "github.com/o/r"
   sun <- .cnt(r, "claude", "graphql", 7, "2026-10-04")
   tue <- .cnt(r, "claude", "41898282+claude[bot]@users.noreply.github.com", 2, "2026-10-06")
-  a <- fold_account_counts(.ai_empty_counts(), rbind(sun, tue), counted_repos = r)
-  b <- fold_account_counts(.ai_empty_counts(), rbind(tue, sun), counted_repos = r)
+  a <- fold_account_counts(.ai_empty_counts(), rbind(sun, tue), counted_repos = setNames("2026-10-04", r))
+  b <- fold_account_counts(.ai_empty_counts(), rbind(tue, sun), counted_repos = setNames("2026-10-04", r))
   expect_equal(nrow(a), 2L); expect_equal(nrow(b), 2L)
   expect_setequal(a$identity_set, b$identity_set)
 })
@@ -78,8 +78,19 @@ test_that("a repository counted again with no commits by a tool loses that count
   r <- "github.com/o/r"
   prior <- rbind(.cnt(r, "claude", "graphql", 7, "2026-09-27"),
                  .cnt(r, "claude", "41898282+claude[bot]@users.noreply.github.com", 2, "2026-09-29"))
-  got <- fold_account_counts(prior, .ai_empty_counts(), counted_repos = r)
+  got <- fold_account_counts(prior, .ai_empty_counts(), counted_repos = setNames("2026-10-04", r))
   expect_equal(got$identity_set, "41898282+claude[bot]@users.noreply.github.com")
+})
+
+test_that("a count survives an older zero merged after it", {
+  r <- "github.com/o/r"
+  sun <- fold_account_counts(.ai_empty_counts(), .cnt(r, "cursor", "graphql", 1, "2026-10-11"),
+                             counted_repos = setNames("2026-10-11", r))
+  sat_zero <- fold_account_counts(sun, .ai_empty_counts(), counted_repos = setNames("2026-10-10", r))
+  expect_equal(sat_zero$commits, 1L); expect_equal(sat_zero$measured_on, "2026-10-11")
+  later_zero <- fold_account_counts(sun, .ai_empty_counts(), counted_repos = setNames("2026-10-18", r))
+  expect_equal(nrow(later_zero), 0L)
+  expect_error(fold_account_counts(sun, .ai_empty_counts(), counted_repos = r), "counted_repos must name")
 })
 
 test_that("a repository whose count failed keeps its rows and its counted date", {

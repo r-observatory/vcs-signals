@@ -87,10 +87,20 @@ test_that("a failed asset upload stops the run rather than publishing green", {
 }
 .log <- function(repo, key, outcome, n, src = "search", on = "2026-10-05", first = "2025-01-02", rev = 1L)
   data.frame(repo_id = repo, rule_key = key, rule_rev = rev, ruleset_version = AI_RULESET_VERSION,
-             asked_on = on, outcome = outcome, total_count = if (outcome == "refused") NA_integer_ else as.integer(n),
+             asked_on = on, outcome = outcome,
+             total_count = if (outcome == "refused") NA_integer_ else as.integer(n),
              verified = if (outcome == "hit") 1L else NA_integer_, incomplete = 0L,
-             first_hit_on = if (outcome == "hit") first else NA_character_, source = src, stringsAsFactors = FALSE)
-.key_rev <- function(key) Find(function(r) r$key == key, c(AI_TRAILER_PATTERNS, AI_AUTHOR_SUFFIXES))$rev
+             first_hit_on = if (outcome == "hit") first else NA_character_, source = src,
+             stringsAsFactors = FALSE)
+.read_state <- function(on, through, repo = "github.com/o/r")
+  .ai_bind_like(.ai_empty_reads(), list(data.frame(repo_id = repo, commits_read_on = on,
+    commits_read_through = through, commits_ruleset = AI_RULESET_VERSION, commits_history_complete = 1L,
+    accounts_counted_on = on, stringsAsFactors = FALSE)))
+.add <- function(n, on, after, first = "2026-10-08", key = "msg.claude.coauthor") {
+  a <- .log("github.com/o/r", key, "hit", n, src = "read", on = on, first = first)
+  a$mode <- "add"; a$read_after <- after
+  a
+}
 
 test_that("the latest measured count wins over a larger older one", {
   out <- ai_onset_reducer(.row(57, "2026-09-27"), .row(40, "2026-10-04"))
@@ -112,7 +122,7 @@ test_that("a credit count is the largest usable rule count, and zero only when e
   got <- derive_assisted_counts(sig, hit, .ai_empty_reads())
   expect_equal(got$assisted_commits, 37L); expect_equal(got$assisted_measured_on, "2026-10-05")
   claude_always <- Filter(function(x) identical(x$tool, "claude") && identical(x$search, "always"),
-                          c(AI_TRAILER_PATTERNS, AI_AUTHOR_SUFFIXES))
+                          AI_TRAILER_PATTERNS)
   none <- do.call(rbind, lapply(claude_always, function(x) .log(r, x$key, "none", 0, rev = x$rev)))
   expect_equal(derive_assisted_counts(sig, none, .ai_empty_reads())$assisted_commits, 0L)
   some_refused <- none; some_refused$outcome[1] <- "refused"; some_refused$total_count[1] <- NA_integer_
@@ -151,19 +161,70 @@ test_that("a whole-history read that matched no credit rule is a measured zero",
 })
 
 test_that("the search log keeps the latest answer, and a weekly read adds to a whole-history count", {
-  r <- "github.com/o/r"
+  r <- "github.com/o/r"; t0 <- "2026-10-03T12:00:00Z"
   prior <- rbind(.log(r, "msg.claude.coauthor", "hit", 10, src = "read", on = "2026-10-04"),
                  .log(r, "msg.cursor.made-with", "refused", NA, on = "2026-10-04"))
-  add <- .log(r, "msg.claude.coauthor", "hit", 3, src = "read", on = "2026-10-11", first = "2026-10-08")
-  add$mode <- "add"
-  ask <- .log(r, "msg.cursor.made-with", "none", 0, on = "2026-10-12"); ask$mode <- NA_character_
-  got <- fold_search_log(prior, rbind(add, ask), rebuilt_repos = character(0))
+  add <- .add(3, "2026-10-11", t0)
+  new_key <- .add(1, "2026-10-11", t0, key = "msg.aider.coauthor")
+  ask <- .log(r, "msg.cursor.made-with", "none", 0, on = "2026-10-12")
+  ask$mode <- NA_character_; ask$read_after <- NA_character_
+  got <- fold_search_log(prior, rbind(add, new_key, ask), rebuilt_repos = character(0),
+                         reads = .read_state("2026-10-04", t0))
   expect_equal(got$total_count[got$rule_key == "msg.claude.coauthor"], 13L)
   expect_equal(got$first_hit_on[got$rule_key == "msg.claude.coauthor"], "2025-01-02")
   expect_equal(got$outcome[got$rule_key == "msg.cursor.made-with"], "none")
+  expect_equal(got$total_count[got$rule_key == "msg.aider.coauthor"], 1L)
   rebuilt <- fold_search_log(prior, .ai_empty_log(), rebuilt_repos = r)
   expect_equal(nrow(rebuilt), 0L)
-  expect_false("mode" %in% names(got))
+  expect_false(any(c("mode", "read_after") %in% names(got)))
+})
+
+test_that(
+  "a weekly read folded twice, or two weekly reads from one watermark, never count their overlap twice", {
+  t0 <- "2026-10-03T12:00:00Z"
+  pub <- .log("github.com/o/r", "msg.claude.coauthor", "hit", 10, src = "read", on = "2026-10-04")
+  pub_reads <- .read_state("2026-10-04", t0)
+  sun <- .add(3, "2026-10-11", t0)
+  once <- fold_search_log(pub, sun, reads = pub_reads)
+  expect_equal(once$total_count, 13L)
+  moved <- fold_repo_reads(pub_reads, .read_state("2026-10-11", "2026-10-10T20:00:00Z"))
+  expect_equal(fold_search_log(once, sun, reads = moved)$total_count, 13L)
+  sat <- .add(2, "2026-10-10", t0, first = "2026-10-06")
+  sat_first <- fold_search_log(pub, sat, reads = pub_reads)
+  sat_reads <- fold_repo_reads(pub_reads, .read_state("2026-10-10", "2026-10-09T08:00:00Z"))
+  expect_equal(fold_search_log(sat_first, sun, reads = sat_reads)$total_count, 12L)
+})
+
+test_that("an add that meets a newer search row, or has no stored read row, is dropped", {
+  r <- "github.com/o/r"; t0 <- "2026-10-03T12:00:00Z"
+  pub <- .log(r, "msg.claude.coauthor", "hit", 10, src = "read", on = "2026-10-04")
+  asked <- .log(r, "msg.claude.coauthor", "hit", 12, on = "2026-10-11")
+  asked$mode <- NA_character_; asked$read_after <- NA_character_
+  got <- fold_search_log(pub, rbind(asked, .add(3, "2026-10-11", t0)), reads = .read_state("2026-10-04", t0))
+  expect_equal(nrow(got), 1L); expect_equal(got$source, "search"); expect_equal(got$total_count, 12L)
+  elsewhere <- .read_state("2026-10-04", t0, repo = "github.com/o/other")
+  expect_equal(fold_search_log(pub, .add(3, "2026-10-11", t0), reads = elsewhere)$total_count, 10L)
+  expect_error(fold_search_log(pub, .add(3, "2026-10-11", t0)), "stored read state")
+})
+
+test_that("an older read merged after a newer one moves no watermark back", {
+  sun <- .read_state("2026-10-11", "2026-10-10T20:00:00Z")
+  got <- fold_repo_reads(sun, .read_state("2026-10-10", "2026-10-09T08:00:00Z"))
+  expect_equal(got$commits_read_on, "2026-10-11")
+  expect_equal(got$commits_read_through, "2026-10-10T20:00:00Z")
+  expect_equal(got$accounts_counted_on, "2026-10-11")
+  same_day <- fold_repo_reads(sun, .read_state("2026-10-11", "2026-10-10T22:00:00Z"))
+  expect_equal(same_day$commits_read_through, "2026-10-10T22:00:00Z")
+})
+
+test_that("an author-name suffix count is not a count of commits crediting aider", {
+  r <- "github.com/o/r"
+  aid <- .row(NA, NA, "assisted"); aid$tool <- "aider"; aid$evidence_tiers <- "C"
+  hit <- .log(r, "name.aider.suffix", "hit", 5)
+  expect_true(is.na(derive_assisted_counts(aid, hit, .ai_empty_reads())$assisted_commits))
+  read_hit <- .log(r, "name.aider.suffix", "hit", 5, src = "read")
+  got <- derive_assisted_counts(aid, read_hit, .read_state("2026-10-04", "2026-10-03T12:00:00Z"))
+  expect_equal(got$assisted_commits, 0L); expect_equal(got$assisted_measured_on, "2026-10-04")
 })
 
 test_that("review rows fold to one per tool and take their count and first date from the log", {
