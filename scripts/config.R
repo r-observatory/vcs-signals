@@ -747,10 +747,8 @@ TREE_SUBTREES <- c(workflowsTree = ".github/workflows", claudeTree = ".claude", 
 TREE_QUERY_CANARY <- list(
   own_community = c("tidyverse/forcats", "tidyverse/dplyr", "r-lib/usethis", "easystats/insight"),
   inherited_pr_template = c("epiverse-trace/linelist", "epiverse-trace/epiparameter", "ecmwf/eccodes"))
-# Repos per aliased tree-marker / PR-login query in the cheap pass. Both queries are
-# execution-heavy server-side (a tree fetch plus 50 PR nodes per alias), so this is
-# kept small like COMMIT_HISTORY_BATCH rather than the 20-40 a cheap connection page
-# can batch. A whole-batch fault halves and retries (fetch_tree_markers / fetch_pr_agents).
+# Repositories per contents and activity document in the cheap pass, kept small because both are
+# heavy server-side (a tree fetch, or 50 pull requests and 100 commits per repository).
 TIER_D_BATCH <- 10L
 # Agent-era boundary. AI coding agents did not open PRs before this date, so an
 # allowlisted agent login on an earlier PR is a login collision, not adoption: it

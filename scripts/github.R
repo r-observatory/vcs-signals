@@ -719,56 +719,6 @@ tree_subtree_prefixes <- function(subtrees = TREE_SUBTREES) {
   list(root = unname(subtrees[!gh]), github = sub("^\\.github/", "", unname(subtrees[gh])))
 }
 
-#' One aliased multi-repo query for the newest 50 PRs per repo (CREATED_AT DESC),
-#' each with author { login __typename } and createdAt, plus pageInfo so the
-#' orchestrator can decide which repos need further paging toward the agent era.
-#' Always page 1: a single shared `after` cursor across aliases is meaningless,
-#' so per-repo follow-up paging is the orchestrator's job (Plan B2).
-#'
-#' NEWEST first. It used to ask for the fifty OLDEST while AI_PR_CUTOFF discards
-#' everything before 2023, so any repository with more than fifty lifetime pull
-#' requests was structurally unable to produce PR evidence: its whole page
-#' predated the agent era. cynkra/dm has 1,819 PRs, and page one under ASC spans
-#' July to October 2019. The same request under DESC spans 2026. Ordering costs
-#' nothing either way, and hasNextPage below now says when even fifty was not
-#' enough rather than leaving a truncated window looking like a complete one.
-build_pr_agent_query <- function(repos) {
-  parts <- vapply(seq_len(nrow(repos)), function(j) {
-    sprintf('r%d: repository(owner: "%s", name: "%s") {
-      pullRequests(first: 50, orderBy: {field: CREATED_AT, direction: DESC}) {
-        pageInfo { endCursor hasNextPage }
-        nodes { author { login __typename } createdAt }
-      }
-    }', j - 1L, repos$owner[j], repos$name[j])
-  }, character(1))
-  sprintf('query { %s }', paste(parts, collapse = "\n"))
-}
-
-#' Demux a build_pr_agent_query response into a named list keyed by repo_id, each
-#' value list(prs = data.frame(login, typename, created_at), has_next). A null
-#' author (deleted account) yields login = NA. __typename is surfaced for
-#' provenance only and never trusted alone - detection is detect_pr_agents(login)
-#' against the allowlist, so Dependabot/renovate/github-actions never flag.
-parse_pr_agents <- function(resp, repos) {
-  empty <- data.frame(login = character(0), typename = character(0),
-                      created_at = character(0), stringsAsFactors = FALSE)
-  out <- vector("list", nrow(repos))
-  names(out) <- repos$repo_id
-  for (j in seq_len(nrow(repos))) {
-    r <- resp$data[[sprintf("r%d", j - 1L)]]
-    if (is.null(r) || is.null(r$pullRequests)) { out[[j]] <- list(prs = empty, has_next = FALSE); next }
-    nodes <- .nn(r$pullRequests$nodes, list())
-    out[[j]] <- list(
-      prs = data.frame(
-        login      = vapply(nodes, function(n) .nn(n$author$login, NA_character_), character(1)),
-        typename   = vapply(nodes, function(n) .nn(n$author[["__typename"]], NA_character_), character(1)),
-        created_at = vapply(nodes, function(n) .nn(n$createdAt, NA_character_), character(1)),
-        stringsAsFactors = FALSE),
-      has_next = isTRUE(r$pullRequests$pageInfo$hasNextPage))
-  }
-  out
-}
-
 #' The alias a tool's count takes inside a repository block.
 .ai_account_alias <- function(tool) paste0("a_", gsub("-", "_", tool, fixed = TRUE))
 
@@ -932,6 +882,13 @@ parse_pr_walk <- function(resp, repos) {
   }
   out
 }
+
+#' The activity and account-count documents over a slice of the roster, through the
+#' shared helper that reports every repository it could not read.
+fetch_activity <- function(io, repos, breaker = NULL, batch_size = TIER_D_BATCH)
+  fetch_aliased(io, repos, batch_size, build_activity_query, parse_activity, "activity", breaker)
+fetch_account_counts <- function(io, repos, breaker = NULL, batch_size = AI_ACCOUNT_BATCH)
+  fetch_aliased(io, repos, batch_size, build_account_count_query, parse_account_counts, "accounts", breaker)
 
 #' Pure: the earliest-match commit date from a search/commits JSON body, or NA when
 #' total_count is 0, items is empty, or the body does not parse. The match is FUZZY
@@ -1226,32 +1183,6 @@ fetch_aliased <- function(io, repos, batch_size, build, parse, label, breaker = 
 #' The weekly repository contents read (build_tree_query), with failures reported.
 fetch_tree_markers <- function(io, repos, batch_size = TIER_D_BATCH, breaker = NULL)
   fetch_aliased(io, repos, batch_size, build_tree_query, parse_tree_markers, "contents", breaker)
-
-#' Cheap PR-agent pass over a chunk of repos, batched TIER_D_BATCH at a time. Same
-#' halve-and-retry contract as fetch_tree_markers, over build_pr_agent_query /
-#' parse_pr_agents. Page 1 only (newest 50 PRs, CREATED_AT DESC): a young repo's whole
-#' agent PR is on page 1 and is the exact onset; per-repo follow-up paging toward the
-#' agent era for large old repos is deferred (Plan C). Returns a named list keyed by
-#' repo_id, each value list(prs, has_next); a deferred repo is absent.
-fetch_pr_agents <- function(io, repos, batch_size = TIER_D_BATCH) {
-  out <- list()
-  queue <- unname(chunk(seq_len(nrow(repos)), batch_size))
-  while (length(queue) > 0) {
-    idx <- queue[[1]]; queue <- queue[-1]
-    sub <- repos[idx, , drop = FALSE]
-    res <- tryCatch(io$graphql(build_pr_agent_query(sub)), error = function(e) list(.err = TRUE))
-    Sys.sleep(BATCH_DELAY_S)
-    ok <- is.list(res) && is.null(res$.err) && !is.null(res$data) &&
-      (is.null(res$errors) || errors_are_alias_not_found(res$errors))
-    if (ok) {
-      parsed <- parse_pr_agents(res, sub)
-      out[names(parsed)] <- parsed
-    } else if (length(idx) > 1) {
-      queue <- c(unname(chunk(idx, ceiling(length(idx) / 2))), queue)
-    }
-  }
-  out
-}
 
 # --- Ignore-file onset bisect --------------------------------------------------
 # An ignore-file marker names an entry inside .gitignore or .Rbuildignore, not a

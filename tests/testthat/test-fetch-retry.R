@@ -246,7 +246,7 @@ test_that("the breaker trips at the twentieth identical failure, across two chun
   expect_match(q[length(q)], 'name: "p20"', fixed = TRUE)
   expect_false(any(grepl('name: "p(2[1-9]|[3-6][0-9])"', q)))
   f <- read_scan_failures(file.path(sh$out, "vcs-dev-tooling-0.db"))
-  expect_equal(nrow(f), 60L)
+  expect_equal(sum(f$query == "contents"), 60L)
   expect_true(all(f$error == "Something went wrong while executing your query."))
 })
 
@@ -261,7 +261,7 @@ test_that("five failures under five percent, or four failures, do not stop the s
   io <- fake_contents_io(fail = sprintf("p%03d", c(3, 23, 43, 63, 83)))
   sh <- cheap_over(io, 101, prefix = "p0")
   expect_no_error(sh$run())
-  expect_equal(nrow(read_scan_failures(file.path(sh$out, "vcs-dev-tooling-0.db"))), 5L)
+  expect_equal(sum(read_scan_failures(file.path(sh$out, "vcs-dev-tooling-0.db"))$query == "contents"), 5L)
   io4 <- fake_contents_io(fail = sprintf("p%02d", 1:4))
   expect_no_error(cheap_over(io4, 20)$run())
 })
@@ -357,4 +357,41 @@ test_that("a merge rerun over partials written before the failures table existed
   got <- published_dev(rel_io)
   expect_equal(got$has_lintr[got$repo_id == "github.com/o/p01"], 1L)
   expect_equal(got$last_scanned[got$repo_id == "github.com/o/p01"], "2026-09-20")
+})
+
+test_that("the activity document's breaker trips on its own, though each reply names a new time and request id, and never ends the contents reads", {
+  .aibf <- setwd(.repo_root); source(file.path(.repo_root, "scripts", "ai_backfill.R")); setwd(.aibf)
+  out <- tempfile("brk_"); dir.create(out)
+  n <- 30L
+  k <- 0L
+  github_says <- function() {
+    k <<- k + 1L
+    sprintf(paste0("Something went wrong while executing your query on 2026-10-04T08:%02d:%02dZ. ",
+                   "Please include `C80C:1D44DB:%06X:1F5EA85:6AB68AE2` when reporting this issue."),
+            k %/% 60L, k %% 60L, k)
+  }
+  roster <- data.frame(repo_id = sprintf("github.com/o/r%02d", seq_len(n)), owner = "o",
+                       name = sprintf("r%02d", seq_len(n)), node_id = NA_character_, done = 0L, stringsAsFactors = FALSE)
+  write_ai_roster(file.path(out, "roster.db"), roster)
+  alias <- function(q) regmatches(q, gregexpr("r[0-9]+(?=: repository)", q, perl = TRUE))[[1]]
+  io <- list(sleep = function(s) invisible(NULL), graphql = function(q) {
+    if (grepl("rateLimit", q, fixed = TRUE)) return(list(data = list(rateLimit = list(remaining = 5000L))))
+    if (grepl("pullRequests(first: 50", q, fixed = TRUE))
+      return(list(data = NULL, errors = list(list(message = github_says()))))
+    a <- alias(q)
+    if (grepl("rootTree", q, fixed = TRUE))
+      return(list(data = stats::setNames(lapply(a, function(x) list(isFork = FALSE,
+        rootTree = list(entries = list(list(name = "DESCRIPTION", type = "blob"))))), a)))
+    list(data = stats::setNames(lapply(a, function(x) list(defaultBranchRef = list(target = list()))), a))
+  })
+  suppressMessages(run_cheap(io, out, file.path(out, "roster.db"), 0, 1))
+  f <- read_scan_failures(file.path(out, "vcs-dev-tooling-0.db"))
+  con <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-cheap-0.db")); on.exit(DBI::dbDisconnect(con))
+  expect_equal(sort(unique(f$query)), "activity")
+  expect_equal(length(unique(f$repo_id)), n)
+  expect_gt(length(unique(f$error)), 1L)
+  rr <- DBI::dbReadTable(con, "repo_reads")
+  expect_true(all(is.na(rr$commits_read_on)))
+  expect_true(all(rr$accounts_counted_on == format(Sys.Date())))
+  expect_equal(nrow(DBI::dbReadTable(con, "flagged")), 0L)
 })

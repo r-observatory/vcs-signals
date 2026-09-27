@@ -1309,3 +1309,120 @@ test_that("the cheap pass compares the default branch's version with CRAN", {
   expect_equal(dev$cran_version_at_scan, "0.4.5")
   expect_equal(dev$repo_version_vs_cran, "behind")
 })
+
+# A fake GraphQL endpoint that answers each document the cheap pass sends.
+.cheap_io <- function(resp, fail = character(0)) {
+  seen <- new.env(); seen$kinds <- character(0)
+  list(
+    graphql = function(q) {
+      kind <- if (grepl("rateLimit", q, fixed = TRUE)) "rate"
+              else if (grepl("rootTree", q, fixed = TRUE)) "contents"
+              else if (grepl("a_claude:", q, fixed = TRUE)) "accounts"
+              else if (grepl("pullRequests(first: 100, after:", q, fixed = TRUE)) "walk"
+              else if (grepl("recent: history(first: 100, after:", q, fixed = TRUE)) "pages"
+              else "activity"
+      seen$kinds <- c(seen$kinds, kind)
+      if (kind == "rate") return(list(data = list(rateLimit = list(remaining = 5000L))))
+      if (kind %in% fail)
+        return(list(data = NULL, errors = list(list(message = "Something went wrong while executing your query"))))
+      resp[[kind]]
+    },
+    sleep = function(s) invisible(NULL),
+    kinds = function() seen$kinds)
+}
+.pr_node <- function(n, head, at, body = "x", assoc = "OWNER", cross = FALSE, login = "maintainer")
+  list(number = n, createdAt = at, author = list(login = login, `__typename` = "User"),
+       authorAssociation = assoc, isCrossRepository = cross, headRefName = head, body = body)
+.cm_node <- function(oid, at, message)
+  list(oid = oid, committedDate = at, message = message, author = list(name = "p", email = "p@e.org", user = NULL))
+.act <- function(prs = list(), pr_next = FALSE, commits = list(), cm_next = FALSE)
+  list(pullRequests = list(totalCount = length(prs), pageInfo = list(endCursor = "P1", hasNextPage = pr_next), nodes = prs),
+       defaultBranchRef = list(target = list(recent = list(pageInfo = list(endCursor = "C1", hasNextPage = cm_next),
+                                                           nodes = commits))))
+.two_repo_resp <- function() list(
+  contents = list(data = list(
+    r0 = list(isFork = FALSE, rootTree = list(entries = list(list(name = "CLAUDE.md", type = "blob")))),
+    r1 = list(isFork = FALSE, rootTree = list(entries = list(list(name = "DESCRIPTION", type = "blob")))))),
+  activity = list(data = list(
+    r0 = .act(prs = list(.pr_node(49L, "ci-pin", "2026-09-25T14:53:10Z", body = "<!-- CURSOR_AGENT_PR_BODY_BEGIN -->\nx")),
+              commits = list(.cm_node("fe5c63c", "2026-03-18T09:27:20Z", "Remove AppVeyor\n\nMade-with: Cursor"))),
+    r1 = .act())),
+  accounts = list(data = list(
+    r0 = list(defaultBranchRef = list(target = list(
+      a_cursor = list(totalCount = 3L, nodes = list(list(committedDate = "2026-09-01T00:00:00Z")))))),
+    r1 = list(defaultBranchRef = list(target = list())))))
+.roster2 <- function(out, extra = NULL) {
+  r <- data.frame(repo_id = c("github.com/a/hit", "github.com/b/clean"), owner = c("a", "b"),
+                  name = c("hit", "clean"), node_id = c("R_a", "R_b"), done = 0L, stringsAsFactors = FALSE)
+  if (!is.null(extra)) for (cn in names(extra)) r[[cn]] <- extra[[cn]]
+  p <- file.path(out, "vcs-ai-roster.db"); write_ai_roster(p, r); p
+}
+.partial <- function(out, table) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-cheap-0.db")); on.exit(DBI::dbDisconnect(con))
+  DBI::dbReadTable(con, table)
+}
+
+test_that("the cheap pass reads every repository's commits, pull requests and account counts", {
+  out <- tempfile("cheap_"); dir.create(out)
+  suppressMessages(run_cheap(.cheap_io(.two_repo_resp()), out, .roster2(out), 0, 1))
+  today <- format(Sys.Date())
+  rr <- .partial(out, "repo_reads")
+  expect_setequal(rr$repo_id, c("github.com/a/hit", "github.com/b/clean"))
+  expect_true(all(rr$commits_read_on == today & rr$accounts_counted_on == today))
+  expect_true(all(rr$commits_history_complete == 1L & rr$reached_first == 1L))
+  ac <- .partial(out, "account_counts")
+  expect_equal(ac$tool, "cursor"); expect_equal(ac$commits, 3L); expect_equal(ac$identity_set, "graphql")
+  lg <- .partial(out, "search_log")
+  expect_equal(lg$rule_key, "msg.cursor.made-with"); expect_equal(lg$mode, "replace"); expect_equal(lg$source, "read")
+  ev <- .partial(out, "evidence")
+  expect_true(all(ev$repo_id == "github.com/a/hit"))
+  expect_true(all(c("CLAUDE.md", "pr.cursor.agent-body", "msg.cursor.made-with", "A") %in% ev$marker))
+  expect_equal(.partial(out, "flagged")$repo_id, "github.com/a/hit")
+  expect_equal(nrow(read_scan_failures(file.path(out, "vcs-dev-tooling-0.db"))), 0L)
+})
+
+test_that("a failed account read keeps last week's counts and watermark", {
+  out <- tempfile("cheap_"); dir.create(out)
+  suppressMessages(run_cheap(.cheap_io(.two_repo_resp(), fail = "accounts"), out, .roster2(out), 0, 1))
+  rr <- .partial(out, "repo_reads")
+  expect_true(all(is.na(rr$accounts_counted_on)))
+  expect_true(all(rr$commits_read_on == format(Sys.Date())))
+  expect_true(all(startsWith(rr$last_failure, "accounts: ")))
+  expect_equal(nrow(.partial(out, "account_counts")), 0L)
+  expect_setequal(read_scan_failures(file.path(out, "vcs-dev-tooling-0.db"))$query, "accounts")
+})
+
+test_that("a busy week pages the commit window and the one-off walk stops at the cutoff", {
+  out <- tempfile("cheap_"); dir.create(out)
+  resp <- .two_repo_resp()
+  resp$activity$data$r0 <- .act(prs = list(.pr_node(60L, "fix", "2026-09-01T00:00:00Z")), pr_next = TRUE,
+    commits = list(.cm_node("c1", "2026-10-02T00:00:00Z", "x"), .cm_node("c2", "2026-10-01T00:00:00Z", "x")),
+    cm_next = TRUE)
+  resp$pages <- list(data = list(r0 = list(defaultBranchRef = list(target = list(recent = list(
+    pageInfo = list(endCursor = "C2", hasNextPage = FALSE),
+    nodes = list(.cm_node("c3", "2026-09-25T00:00:00Z", "x"))))))))
+  resp$walk <- list(data = list(r0 = list(pullRequests = list(pageInfo = list(endCursor = "P2", hasNextPage = TRUE),
+    nodes = list(.pr_node(40L, "cursor/port-a1b2", "2025-08-01T00:00:00Z", assoc = "NONE", cross = TRUE),
+                 .pr_node(3L, "old", "2022-06-01T00:00:00Z"))))))
+  ro <- .roster2(out, list(commits_read_on = c("2026-10-01", NA), commits_ruleset = c(AI_RULESET_VERSION, NA),
+                          commits_read_through = c("2026-09-30T00:00:00Z", NA)))
+  io <- .cheap_io(resp)
+  suppressMessages(run_cheap(io, out, ro, 0, 1))
+  expect_true(all(c("pages", "walk") %in% io$kinds()))
+  rr <- .partial(out, "repo_reads"); hit <- rr[rr$repo_id == "github.com/a/hit", ]
+  expect_equal(hit$commits_read, 3L); expect_equal(hit$commits_window_complete, 1L)
+  expect_equal(hit$prs_walk_complete, 1L); expect_true(is.na(hit$prs_walk_cursor))
+  out_prs <- .partial(out, "outside_prs")
+  expect_equal(out_prs$pr_number, 40L); expect_equal(out_prs$from_fork, 1L)
+})
+
+test_that("a response the activity parser cannot read fails that slice's activity read, not the shard", {
+  out <- tempfile("cheap_"); dir.create(out)
+  resp <- .two_repo_resp()
+  resp$activity <- list(data = list(r0 = list(pullRequests = "not a connection"), r1 = .act()))
+  suppressMessages(run_cheap(.cheap_io(resp), out, .roster2(out), 0, 1))
+  expect_setequal(read_scan_failures(file.path(out, "vcs-dev-tooling-0.db"))$query, "activity")
+  rr <- .partial(out, "repo_reads")
+  expect_equal(nrow(rr), 2L)
+  expect_true(all(is.na(rr$commits_read_on) & rr$accounts_counted_on == format(Sys.Date())))
+})

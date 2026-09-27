@@ -5,8 +5,8 @@
 # onset scan, and .github/workflows/ai-weekly.yml, the weekly incremental that swaps gate for
 # gate-incremental):
 #   enumerate -> full active github roster from the published summary's repos table (one job)
-#   cheap     -> Tier-D marker + PR-agent pass over one mod-N shard, write a flagged partial
-#                (matrix job)
+#   cheap     -> every repository's contents, recent pull requests and commits, and account
+#                counts over one mod-N shard, written to the cheap partial (matrix job)
 #   gate      -> union every cheap shard's flagged partials into one flagged-roster (one job)
 #   gate-incremental -> like gate, but narrow the flagged roster to repos carrying a tool not
 #                yet in the published vcs_ai_signals detail (the weekly incremental gate used
@@ -27,6 +27,11 @@ suppressPackageStartupMessages({ library(DBI); library(RSQLite) })
 AI_ROSTER_TABLE <- "roster"
 
 # ---- roster IO --------------------------------------------------------------
+# Read watermarks the cheap pass plans each repository's read from.
+.AI_ROSTER_READ_COLS <- c("commits_read_on", "commits_read_through", "commits_ruleset",
+                          "commits_history_complete", "prs_newest_created_at", "prs_walk_complete",
+                          "prs_walk_started_on", "prs_walk_cursor")
+
 write_ai_roster <- function(path, roster_df, roster_cran = NULL) {
   if (file.exists(path)) unlink(path)
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
@@ -34,10 +39,12 @@ write_ai_roster <- function(path, roster_df, roster_cran = NULL) {
   DBI::dbExecute(con, "PRAGMA journal_mode=DELETE")
   DBI::dbExecute(con, sprintf("CREATE TABLE %s (
     repo_id TEXT PRIMARY KEY, owner TEXT NOT NULL, name TEXT NOT NULL,
-    node_id TEXT, done INTEGER NOT NULL DEFAULT 0)", AI_ROSTER_TABLE))
-  if (nrow(roster_df) > 0)
-    DBI::dbWriteTable(con, AI_ROSTER_TABLE,
-                      roster_df[c("repo_id", "owner", "name", "node_id", "done")], append = TRUE)
+    node_id TEXT, done INTEGER NOT NULL DEFAULT 0,
+    commits_read_on TEXT, commits_read_through TEXT, commits_ruleset TEXT,
+    commits_history_complete INTEGER, prs_newest_created_at TEXT, prs_walk_complete INTEGER,
+    prs_walk_started_on TEXT, prs_walk_cursor TEXT)", AI_ROSTER_TABLE))
+  cols <- intersect(c("repo_id", "owner", "name", "node_id", "done", .AI_ROSTER_READ_COLS), names(roster_df))
+  if (nrow(roster_df) > 0) DBI::dbWriteTable(con, AI_ROSTER_TABLE, roster_df[cols], append = TRUE)
   # Rebuilt every week from one CRAN read, so no week depends on an earlier copy.
   DBI::dbExecute(con, "CREATE TABLE roster_cran (repo_id TEXT NOT NULL, package TEXT NOT NULL,
     cran_version TEXT NOT NULL, PRIMARY KEY (repo_id, package))")
@@ -232,9 +239,12 @@ write_flagged_partial <- function(path, flagged_df, evidence_df) {
 read_flagged <- function(path) {
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
-  list(
-    flagged  = if (DBI::dbExistsTable(con, "flagged")) DBI::dbReadTable(con, "flagged") else .ai_empty_flagged(),
-    evidence = if (DBI::dbExistsTable(con, "evidence")) DBI::dbReadTable(con, "evidence") else .ai_empty_ev())
+  get <- function(t, empty) if (DBI::dbExistsTable(con, t)) DBI::dbReadTable(con, t) else empty
+  # NULL work means a roster written before the list existed, not an empty week.
+  list(flagged  = get("flagged", .ai_empty_flagged()),
+       evidence = get("evidence", .ai_empty_ev()),
+       work     = get("work", NULL),
+       campaign = get("campaign", data.frame(since = character(), stringsAsFactors = FALSE)))
 }
 
 # ---- dev-tooling partial IO -------------------------------------------------
@@ -343,84 +353,209 @@ contents_shard_stops <- function(n_failed, attempted)
                first$error[1]), call. = FALSE)
 }
 
-#' Cheap Tier-D marker + PR-agent pass over one even mod-N shard of the roster. Batches
-#' TIER_D_BATCH repos through fetch_tree_markers + fetch_pr_agents, assembles evidence,
-#' and writes only the flagged repos (repo_has_ai_signal) to a two-table partial. A repo
-#' whose contents read fails is listed in the dev-tooling partial's failures table, gets
-#' no dev-tooling row, and enough of them stop the shard. Before each batch, a
-#' graphql_rate_remaining(io) preflight (mirrors update.R:130-137) pauses the shard when
-#' the budget is below AI_POINT_RESERVE, so an exhausted token stops the pass cleanly
-#' instead of reporting the rest of the shard as failed; the unscanned tail of this
-#' shard is picked up by the next workflow_dispatch (enumerate + cheap re-run
-#' deterministically over the same shard). fetch_tree_markers/fetch_pr_agents already
-#' pace themselves with BATCH_DELAY_S, so this loop does not sleep again per batch.
+# Every table the cheap partial carries, empty, in the shape the merge reads.
+.ai_cheap_tables <- function() list(
+  flagged = .ai_empty_flagged(),
+  evidence = cbind(repo_id = character(0), .ai_empty_found()),
+  repo_reads = cbind(.ai_empty_reads(), reached_first = integer()),
+  account_counts = .ai_empty_counts(), review = .ai_empty_review(), outside_prs = .ai_empty_outside(),
+  models = cbind(.ai_empty_models(), mode = character(), read_after = character()),
+  search_log = cbind(.ai_empty_log(), mode = character(), read_after = character()))
+
+write_cheap_partial <- function(path, tables) {
+  if (file.exists(path)) unlink(path)
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  DBI::dbExecute(con, "PRAGMA journal_mode=DELETE")
+  proto <- .ai_cheap_tables()
+  for (nm in names(proto))
+    DBI::dbWriteTable(con, nm, .ai_bind_like(proto[[nm]], list(tables[[nm]])), overwrite = TRUE)
+  DBI::dbExecute(con, "VACUUM")
+  invisible(path)
+}
+
+# One document over a slice of the roster; every failure lands in sink$failures. A
+# response the parser cannot read fails the slice for this document only.
+.ai_fetch_doc <- function(io, repos, label, fetch, breaker, sink) {
+  if (!nrow(repos)) return(list())
+  got <- tryCatch(fetch(io, repos, breaker), error = function(e) list(results = list(),
+    failed = .fetch_failed_frame(repos$repo_id, label, substr(conditionMessage(e), 1L, 200L), .utc_now())))
+  if (!is.null(got$failed) && nrow(got$failed)) sink$failures[[length(sink$failures) + 1L]] <- got$failed
+  got$results %||% list()
+}
+
+# Follow-up commit pages for the repositories whose read needs them. A repository whose
+# page fails drops its whole activity read, so its watermark stays where it was.
+.ai_follow_commits <- function(io, repos, plans, act, breaker, sink) {
+  st <- list()
+  for (r in seq_len(nrow(repos))) {
+    a <- act[[repos$repo_id[r]]]
+    if (is.null(a)) next
+    st[[repos$repo_id[r]]] <- list(commits = a$commits, has_next = a$commits_has_next,
+                                   cursor = a$commits_end_cursor, pages = 0L, plan = plans[[r]])
+  }
+  repeat {
+    due <- names(st)[vapply(st, function(s)
+      more_commit_pages(s$plan, .ai_earliest_chr(s$commits$committed_at), s$has_next, s$pages), logical(1))]
+    if (!length(due)) break
+    sub <- repos[match(due, repos$repo_id), c("repo_id", "owner", "name"), drop = FALSE]
+    sub$after <- vapply(due, function(k) as.character(st[[k]]$cursor), character(1))
+    sub$since <- vapply(due, function(k) as.character(st[[k]]$plan$since), character(1))
+    got <- .ai_fetch_doc(io, sub, "activity", function(io, rp, b)
+      fetch_aliased(io, rp, AI_COMMIT_PAGE_BATCH, build_commit_page_query, parse_commit_pages, "activity", b),
+      breaker, sink)
+    for (k in due) {
+      pg <- got[[k]]
+      if (is.null(pg)) { st[[k]] <- NULL; next }
+      st[[k]]$commits <- rbind(st[[k]]$commits, pg$commits)
+      st[[k]]$has_next <- pg$has_next; st[[k]]$cursor <- pg$end_cursor; st[[k]]$pages <- st[[k]]$pages + 1L
+    }
+  }
+  st
+}
+
+# The one-off walk through older pull requests, and weekly catch-up pages, within the
+# shard's point budget. A failed page keeps its cursor for next week.
+.ai_walk_prs <- function(io, repos, pr_plans, breaker, sink, budget) {
+  w <- list()
+  for (k in names(pr_plans)) if (isTRUE(pr_plans[[k]]$walk))
+    w[[k]] <- list(prs = .ai_pr_nodes_frame(list()), has_next = TRUE, cursor = pr_plans[[k]]$after,
+                   reached_stop = FALSE, plan = pr_plans[[k]])
+  repeat {
+    due <- names(w)[vapply(w, function(x) !x$reached_stop && !isTRUE(x$failed) &&
+                             more_pr_pages(x$plan, .ai_earliest_chr(x$prs$created_at), x$has_next, budget$points),
+                           logical(1))]
+    if (!length(due)) break
+    for (grp in unname(chunk(due, AI_PR_WALK_BATCH))) {
+      if (budget$points <= 0) break
+      sub <- repos[match(grp, repos$repo_id), c("repo_id", "owner", "name"), drop = FALSE]
+      sub$after <- vapply(grp, function(k) as.character(w[[k]]$cursor), character(1))
+      got <- .ai_fetch_doc(io, sub, "walk", function(io, rp, b)
+        fetch_aliased(io, rp, AI_PR_WALK_BATCH, build_pr_walk_query, parse_pr_walk, "walk", b), breaker, sink)
+      budget$points <- budget$points - 1L
+      for (k in grp) {
+        pg <- got[[k]]
+        if (is.null(pg)) { w[[k]]$failed <- TRUE; next }
+        w[[k]]$prs <- rbind(w[[k]]$prs, pg$prs)
+        w[[k]]$has_next <- pg$has_next; w[[k]]$cursor <- pg$end_cursor
+        # The same stop more_pr_pages reads, so a catch-up ending on the stored pull request is done.
+        w[[k]]$reached_stop <- any(pg$prs$created_at <= w[[k]]$plan$stop_before, na.rm = TRUE)
+      }
+    }
+  }
+  w
+}
+
+#' The weekly read of one mod-N shard: every repository's contents, newest pull requests
+#' and commits, and its tools' account counts, matched locally, with follow-up pages and
+#' the pull request walk. Everything the next run and the merge need is written to the
+#' cheap partial; a repository whose read failed keeps last week's state.
 run_cheap <- function(io, out_dir, roster_path, i, N, batch_size = TIER_D_BATCH) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   roster <- load_ai_roster(roster_path)
   cran_links <- load_roster_cran(roster_path)
   mine <- roster[shard_rows(nrow(roster), i, N), , drop = FALSE]
   message(sprintf("ai cheap shard %d/%d: %d of %d repos", i, N, nrow(mine), nrow(roster)))
-
-  flagged <- list(); evrows <- list(); dev_rows <- list(); scanned <- 0L
-  failed <- list(); bad_rbi_lines <- 0L
-  # One breaker for the whole shard, so a fault repeated across chunks still trips it.
-  contents_breaker <- new_fetch_breaker()
   today <- format(Sys.Date())
+  # One breaker per document for the whole shard, so a fault repeated across chunks trips it.
+  brk <- list(contents = new_fetch_breaker(limit = AI_BREAKER_LIMIT),
+              activity = new_fetch_breaker(limit = AI_BREAKER_LIMIT),
+              accounts = new_fetch_breaker(limit = AI_BREAKER_LIMIT),
+              walk = new_fetch_breaker(limit = AI_BREAKER_LIMIT))
+  proto <- .ai_cheap_tables()
+  sink <- new.env()
+  for (nm in c(names(proto), "dev", "failures")) sink[[nm]] <- list()
+  budget <- new.env(); budget$points <- AI_PR_WALK_POINTS
+  scanned <- 0L; bad_rbi_lines <- 0L; capped <- 0L
+  put <- function(nm, df) if (!is.null(df) && nrow(df)) sink[[nm]][[length(sink[[nm]]) + 1L]] <- df
   for (idx in unname(chunk(seq_len(nrow(mine)), batch_size))) {
     rl <- graphql_rate_remaining(io)
     if (rl < AI_POINT_RESERVE) {
-      message(sprintf(
-        "ai cheap shard %d/%d: graphql rate remaining (%s) below reserve (%d); pausing after %d of %d repos",
-        i, N, rl, AI_POINT_RESERVE, scanned, nrow(mine)))
+      message(sprintf("ai cheap shard %d/%d: graphql rate remaining (%s) below reserve (%d); pausing after %d of %d repos",
+                      i, N, rl, AI_POINT_RESERVE, scanned, nrow(mine)))
       break
     }
     repos <- mine[idx, , drop = FALSE]
-    fetched <- tryCatch(fetch_tree_markers(io, repos, batch_size, breaker = contents_breaker),
-      error = function(e) list(results = list(), failed = .fetch_failed_frame(
-        repos$repo_id, "contents", substr(conditionMessage(e), 1L, 200L), .utc_now())))
-    failed[[length(failed) + 1L]] <- fetched$failed
-    trees <- fetched$results
-    prs   <- tryCatch(fetch_pr_agents(io, repos, batch_size), error = function(e) NULL)
+    plans <- lapply(seq_len(nrow(repos)), function(r) plan_commit_read(repos[r, , drop = FALSE]))
+    repos$since <- vapply(plans, function(p) as.character(p$since), character(1))
+    n_failed_before <- length(sink$failures)
+    trees <- .ai_fetch_doc(io, repos, "contents", function(io, rp, b) fetch_tree_markers(io, rp, batch_size, b),
+                           brk$contents, sink)
+    act <- .ai_fetch_doc(io, repos, "activity", fetch_activity, brk$activity, sink)
+    accts <- .ai_fetch_doc(io, repos, "accounts", fetch_account_counts, brk$accounts, sink)
+    cm <- .ai_follow_commits(io, repos, plans, act, brk$activity, sink)
+    pr_plans <- stats::setNames(lapply(repos$repo_id, function(rid)
+      if (rid %in% names(cm)) plan_pr_pages(repos[repos$repo_id == rid, , drop = FALSE], act[[rid]]) else list(walk = FALSE)),
+      repos$repo_id)
+    walks <- .ai_walk_prs(io, repos, pr_plans, brk$walk, sink, budget)
+    # Only this chunk's repositories can have failed in this chunk.
+    failed_now <- .ai_bind_like(.fetch_failed_frame(),
+                                utils::tail(sink$failures, length(sink$failures) - n_failed_before))
     for (r in seq_len(nrow(repos))) {
-      rid <- repos$repo_id[r]
-      tree <- trees[[rid]]
-      pr   <- if (is.null(prs)) NULL else prs[[rid]]
-      # A failed or gone repository gets no row, so its prior row and last_scanned stand.
+      rid <- repos$repo_id[r]; prev <- repos[r, , drop = FALSE]
+      tree <- trees[[rid]]; cnt <- if (rid %in% names(accts)) accts[[rid]] else NULL
       dv <- .ai_dev_tooling_row(tree, rid, today, cran_links)
-      if (!is.null(dv)) {
-        bad_rbi_lines <- bad_rbi_lines + attr(dv, "rbuildignore_bad_lines")
-        dev_rows[[length(dev_rows) + 1L]] <- dv
+      if (!is.null(dv)) { bad_rbi_lines <- bad_rbi_lines + attr(dv, "rbuildignore_bad_lines"); put("dev", dv) }
+      read_row <- data.frame(repo_id = rid, stringsAsFactors = FALSE)
+      activity <- NULL; whole <- FALSE
+      if (rid %in% names(cm)) {
+        a <- act[[rid]]; c_st <- cm[[rid]]; w <- walks[[rid]]
+        st <- next_commit_read_state(prev, plans[[r]], c_st$commits, c_st$has_next, today)
+        capped <- capped + as.integer(st$commits_window_complete == 0L)
+        walked <- if (is.null(w)) NULL else list(has_next = w$has_next, end_cursor = w$cursor, reached_stop = w$reached_stop)
+        ps <- next_pr_read_state(prev, a, if (is.null(w)) list(walk = FALSE) else w$plan, walked, today)
+        read_row <- cbind(read_row, as.data.frame(c(st, ps), stringsAsFactors = FALSE))
+        prs <- if (is.null(w)) a$prs else rbind(a$prs, w$prs)
+        activity <- list(prs = prs, commits = c_st$commits)
+        whole <- isTRUE(st$commits_history_complete == 1L)
+        mode <- read_count_mode(plans[[r]], st)
+        after <- if (identical(mode, "add")) as.character(.ai_col1(prev, "commits_read_through")) else NA_character_
+        hits <- match_commit_findings(c_st$commits)
+        put("search_log", read_log_rows(hits, rid, today, mode, after))
+        mr <- read_model_rows(rid, c_st$commits, hits, mode, after)
+        if (nrow(mr)) { mr$repo_id <- rid; put("models", mr) }
+        put("outside_prs", outside_pr_rows(classify_prs(prs), rid, today))
       }
-      if (is.null(tree) && is.null(pr)) next            # both channels errored -> deferred
-      ev <- assemble_repo_evidence(tree, pr)
-      if (!repo_has_ai_signal(ev)) next
-      flagged[[length(flagged) + 1L]] <- data.frame(
-        repo_id = rid, owner = repos$owner[r], name = repos$name[r], node_id = repos$node_id[r],
-        is_fork = as.integer(isTRUE(tree$is_fork)),
+      if (!is.null(cnt)) {
+        read_row$accounts_counted_on <- today
+        if (nrow(cnt)) put("account_counts", data.frame(repo_id = rid, tool = cnt$tool, identity_set = "graphql",
+          commits = cnt$commits, newest_commit_date = cnt$newest_commit_date, measured_on = today,
+          stringsAsFactors = FALSE))
+      }
+      mine_failed <- failed_now[failed_now$repo_id == rid, , drop = FALSE]
+      if (nrow(mine_failed)) {
+        read_row$last_failed_on <- today
+        read_row$last_failure <- substr(paste0(mine_failed$query[1], ": ", mine_failed$error[1]), 1, 200)
+      }
+      put("repo_reads", read_row)
+      if (is.null(tree) && is.null(activity) && is.null(cnt)) next
+      found <- assemble_repo_evidence(tree, activity, cnt, scanned_on = today, whole_history = whole)
+      put("review", review_rows(found, rid, today))
+      if (!repo_has_ai_signal(found)) next
+      put("flagged", data.frame(repo_id = rid, owner = repos$owner[r], name = repos$name[r],
+        node_id = repos$node_id[r], is_fork = as.integer(isTRUE(tree$is_fork)),
         parent = if (is.null(tree)) NA_character_ else (tree$parent %||% NA_character_),
-        pr_onset_date = earliest_agent_pr_date(pr),
-        stringsAsFactors = FALSE)
-      ev$repo_id <- rid
-      ev$agnostic <- as.integer(ev$agnostic)
-      evrows[[length(evrows) + 1L]] <- ev[c("repo_id", "tool", "tier", "marker", "agnostic")]
+        pr_onset_date = earliest_agent_pr_date(activity), stringsAsFactors = FALSE))
+      put("evidence", cbind(repo_id = rid, found))
     }
     scanned <- scanned + nrow(repos)
   }
-  failed_df <- if (length(failed)) do.call(rbind, failed) else .fetch_failed_frame()
-  flagged_df <- if (length(flagged)) do.call(rbind, flagged) else .ai_empty_flagged()
-  ev_df <- if (length(evrows)) do.call(rbind, evrows) else .ai_empty_ev()
-  write_flagged_partial(file.path(out_dir, sprintf("vcs-ai-cheap-%d.db", i)), flagged_df, ev_df)
-  dev_df <- if (length(dev_rows)) do.call(rbind, dev_rows) else .devtool_empty_shard()
-  write_dev_tooling_partial(file.path(out_dir, sprintf("vcs-dev-tooling-%d.db", i)), dev_df, failed_df)
-  message(sprintf("ai cheap shard %d/%d: %d flagged repos, %d evidence rows, %d dev-tooling rows",
-                  i, N, nrow(flagged_df), nrow(ev_df), nrow(dev_df)))
-  message(sprintf("ai cheap shard %d/%d: %d repositories failed (contents %d), %d not read this week",
-                  i, N, length(unique(failed_df$repo_id)), sum(failed_df$query == "contents"),
-                  nrow(mine) - scanned))
+  tables <- lapply(stats::setNames(names(proto), names(proto)), function(nm) .ai_bind_like(proto[[nm]], sink[[nm]]))
+  write_cheap_partial(file.path(out_dir, sprintf("vcs-ai-cheap-%d.db", i)), tables)
+  dev_df <- if (length(sink$dev)) do.call(rbind, sink$dev) else .devtool_empty_shard()
+  # The failure frame rides the dev-tooling partial, which every merge job downloads.
+  f <- .ai_bind_like(.fetch_failed_frame(), sink$failures)
+  write_dev_tooling_partial(file.path(out_dir, sprintf("vcs-dev-tooling-%d.db", i)), dev_df, f)
+  message(sprintf("ai cheap shard %d/%d: %d flagged repos, %d dev-tooling rows, %d walk queries left",
+                  i, N, nrow(tables$flagged), nrow(dev_df), budget$points))
+  message(sprintf(paste0("ai cheap shard %d/%d: %d repositories failed (contents %d, activity %d, accounts %d, ",
+                         "walk %d), %d not read this week, %d commit window(s) stopped at the page cap"),
+                  i, N, length(unique(f$repo_id)), sum(f$query == "contents"), sum(f$query == "activity"),
+                  sum(f$query == "accounts"), sum(f$query == "walk"), nrow(mine) - scanned, capped))
   if (bad_rbi_lines > 0L)
     message(sprintf("ai cheap shard %d/%d: %d .Rbuildignore line(s) did not compile and were skipped",
                     i, N, bad_rbi_lines))
-  .ai_shard_stop(failed_df, scanned, i, N)
+  .ai_shard_stop(f, scanned, i, N)
 }
 
 # ---- gate -------------------------------------------------------------------
