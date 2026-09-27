@@ -35,12 +35,22 @@ test_that("the github-actions account reaching the Claude count stops the run", 
   expect_error(ai_query_canary(ai_canary_io(accounts = acc)), "ss3sim")
 })
 
-test_that("a fork's Cursor branch that would count as the package's use stops the run", {
+test_that("a fork's Cursor branch that reads as the owner's own stops the run at the outside check", {
   calls <- new.env(); orig <- .stub_tree_canary(calls); on.exit(tree_query_canary <<- orig, add = TRUE)
   fx <- ai_canary_io()$graphql("pullRequest(number:")
   fx$data$p1$pullRequest$isCrossRepository <- FALSE
   fx$data$p1$pullRequest$authorAssociation <- "OWNER"
-  expect_error(ai_query_canary(ai_canary_io(fixed = fx)), "arrow-nanoarrow")
+  expect_error(ai_query_canary(ai_canary_io(fixed = fx)),
+               "apache/arrow-nanoarrow #927 no longer reads as a Cursor pull request from outside the project")
+})
+
+test_that("cheap rows that count #927's outside Cursor row stop the run", {
+  calls <- new.env(); orig <- .stub_tree_canary(calls); on.exit(tree_query_canary <<- orig, add = TRUE)
+  orig_b <- build_cheap_rows; on.exit(build_cheap_rows <<- orig_b, add = TRUE)
+  # build_cheap_rows without its role filter: an outside row counts as the package's own.
+  build_cheap_rows <<- function(found, today) { found$role <- "authoring"; orig_b(found, today) }
+  expect_error(ai_query_canary(ai_canary_io()),
+               "apache/arrow-nanoarrow #927 would count as the package's own Cursor use")
 })
 
 test_that("a request that throws is sent once more after the wait, and a second throw stops the run", {
