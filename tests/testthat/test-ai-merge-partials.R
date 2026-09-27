@@ -90,7 +90,9 @@ test_that("the merge takes every table the weekly reads and searches wrote", {
   cov <- .tbl(s, "vcs_ai_search_coverage")
   expect_setequal(cov$rule_key, .ai_coverage_rules()$rule_key)
   expect_true(all(cov$repos_read_whole == 1L))                      # .A read to its first commit this run
-  expect_equal(.tbl(s, "vcs_ai_ruleset_history")$ruleset_version, AI_RULESET_VERSION)
+  rh <- .tbl(s, "vcs_ai_ruleset_history")
+  expect_equal(rh$ruleset_version, AI_RULESET_VERSION); expect_equal(rh$first_published_on, format(Sys.Date()))
+  expect_equal(rh$change_key, unname(AI_RULESET_CHANGE_KEYS[AI_RULESET_VERSION]))   # its page note, if any
   st <- .tbl(.pub(r$io, "vcs-signals-recent.db"), "pipeline_state")
   expect_equal(st$value[st$key == "ai_state_tables_since"], format(Sys.Date()))
 })

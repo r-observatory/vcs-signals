@@ -1389,7 +1389,7 @@ build_search_coverage <- function(log, reads, ruleset = AI_RULESET_VERSION) {
     asked <- g[g$source %in% "search" & g$rule_rev %in% r$rule_rev & g$outcome %in% c("hit", "none") &
                !(g$repo_id %in% whole), , drop = FALSE]
     refused <- g[g$outcome %in% "refused", , drop = FALSE]
-    # A whole read checks every commit's message, author address and review credit, so it answers every rule.
+    # A whole read checks every commit's message, author name and author address, so it answers every rule.
     data.frame(rule_key = r$rule_key, tool = r$tool, channel = r$channel, rule_rev = r$rule_rev,
                repos_asked = length(unique(asked$repo_id)),
                repos_hit = length(unique(asked$repo_id[asked$outcome == "hit"])),
