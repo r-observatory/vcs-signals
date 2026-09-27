@@ -31,7 +31,8 @@ test_that("a same-tool collision folds through the reducer, never violating the 
   seed_pair(con)
   ai_ins(con, "github.com/old/name", "claude", "2024-01-01", 0L, "D", 0L, "2024-01-01") # exact, earlier
   ai_ins(con, "github.com/new/name", "claude", "2024-06-01", 1L, "B", 0L, "2024-06-01") # floor, later
-  expect_silent(reconcile_ai_identity(con))
+  expect_no_warning(expect_message(reconcile_ai_identity(con),
+    "ai identity: vcs_ai_signals, 1 row(s) moved from an old name, 1 of them folded", fixed = TRUE))
   got <- DBI::dbReadTable(con, "vcs_ai_signals")
   expect_equal(nrow(got), 1)                          # one (canonical, claude) row, no PK error
   expect_equal(got$repo_id, "github.com/new/name")

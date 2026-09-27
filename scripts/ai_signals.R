@@ -1201,11 +1201,8 @@ fold_models <- function(prior, deep, cheap, rebuilt_repos = NULL, reads = NULL) 
   out
 }
 
-#' A renamed repository's rows in the weekly read's tables and in vcs_ai_models, carried
-#' from its old repo_ids to the current one `map` names (old to current, from
-#' ai_canonical_repo_map) and folded by each table's rule, with none left under an old name.
-#' `state` holds any of those tables by name. A table with no old-name row comes back as it
-#' came. Pure.
+#' A renamed repository's rows in the weekly read's tables and vcs_ai_models, moved from the old repo_ids `map`
+#' names to the current one, folded by each table's rule; a table with no old-name row comes back as is. Pure.
 carry_renamed_state <- function(state, map) {
   if (!length(map)) return(state)
   old <- function(df) df$repo_id %in% names(map)

@@ -485,11 +485,8 @@ update_repo_node_ids <- function(con, resolved) {
   invisible(TRUE)
 }
 
-#' Old repo_id to current repo_id for every node_id two or more repos rows hold (a rename or
-#' transfer that a DESCRIPTION followed minted a second repo_id). The current name is the
-#' active member with the newest last_seen, ties to the smallest repo_id. It takes every
-#' member that is not active, or every other member when none is active, so a second active
-#' member maps nowhere. A node's old names come newest last_seen first. Pure.
+#' Old repo_id to current repo_id per shared node_id: the current name is the active member with the newest
+#' last_seen, then the smallest repo_id; a second active member maps nowhere. Old names come newest first. Pure.
 ai_canonical_repo_map <- function(repos) {
   none <- stats::setNames(character(0), character(0))
   need <- c("repo_id", "node_id", "status", "last_seen")
@@ -508,11 +505,8 @@ ai_canonical_repo_map <- function(repos) {
   unlist(unname(out))
 }
 
-#' Carry every AI table's rows from a renamed repository's old repo_ids to its current one,
-#' in one transaction, before the merge folds any partial. vcs_ai_signals folds through
-#' ai_onset_reducer and heal_hollow_siblings as it always has; the weekly read's tables and
-#' the model tallies follow carry_renamed_state. A table the database lacks is skipped on
-#' its own. Structural: runs on every merge, and does nothing when no node_id is shared.
+#' Carry every AI table's rows from a renamed repository's old repo_ids to its current one, in one transaction
+#' before any partial is folded, so the new name never starts from a first read. A missing table is skipped.
 reconcile_ai_identity <- function(con) {
   if (!DBI::dbExistsTable(con, "repos")) return(invisible(FALSE))
   repos <- DBI::dbGetQuery(con, "SELECT repo_id, node_id, status, last_seen FROM repos")
@@ -530,7 +524,7 @@ reconcile_ai_identity <- function(con) {
 # The signals fold, one shared node_id at a time: the old names' rows reduced onto the
 # current name, then any empty row filled from an active sibling.
 .reconcile_ai_signals <- function(con, shared, map) {
-  healed <- 0L
+  healed <- 0L; moved <- 0L; merged <- 0L
   # Every column, derived from the table's own shape. This named seven of ten
   # and then deleted the rows and wrote the seven back, so markers and both
   # commit counts were destroyed on every merge that folded a renamed repo.
@@ -562,6 +556,8 @@ reconcile_ai_identity <- function(con) {
       folded$repo_id <- rep(canonical, nrow(folded))
       rows <- rbind(involved[!onto, , drop = FALSE],
                     ai_onset_reducer(.ai_empty_signals(), folded))
+      moved <- moved + sum(involved$repo_id %in% stale)
+      merged <- merged + (nrow(involved) - nrow(rows))
     }
     was_hollow <- sum(.ai_is_hollow(rows))
     rows <- heal_hollow_siblings(rows)
@@ -570,6 +566,9 @@ reconcile_ai_identity <- function(con) {
                    params = as.list(ids))
     DBI::dbWriteTable(con, "vcs_ai_signals", rows, append = TRUE)
   }
+  if (moved > 0L)
+    message(sprintf("ai identity: vcs_ai_signals, %d row(s) moved from an old name, %d of them folded into the current name's rows",
+                    moved, merged))
   if (healed > 0L)
     message(sprintf("ai identity: filled %d empty row(s) from an active sibling slug", healed))
 }
