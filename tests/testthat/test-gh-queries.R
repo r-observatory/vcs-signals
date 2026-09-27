@@ -433,7 +433,7 @@ test_that("no query the weekly read sends nests authors or reviews", {
   }
 })
 
-test_that("follow-up pages parse per repository, and a repository GitHub did not answer gives NULL", {
+test_that("follow-up pages parse per repository, and a repository GitHub did not answer, or whose default branch is gone, gives NULL", {
   repos <- data.frame(repo_id = c("g/o/n", "g/p/m"), owner = c("o", "p"), name = c("n", "m"),
                       stringsAsFactors = FALSE)
   resp <- list(data = list(r0 = list(defaultBranchRef = list(target = list(recent = list(
@@ -444,6 +444,8 @@ test_that("follow-up pages parse per repository, and a repository GitHub did not
   expect_equal(names(got), repos$repo_id)
   expect_equal(nrow(got[["g/o/n"]]$commits), 1L); expect_true(got[["g/o/n"]]$has_next)
   expect_equal(got[["g/o/n"]]$end_cursor, "C2"); expect_null(got[["g/p/m"]])
+  gone <- parse_commit_pages(list(data = list(r0 = list(defaultBranchRef = NULL))), repos[1, ])
+  expect_equal(names(gone), "g/o/n"); expect_null(gone[["g/o/n"]])
   pr <- list(data = list(r0 = list(pullRequests = list(pageInfo = list(endCursor = NULL, hasNextPage = FALSE),
     nodes = list(list(number = 7L, createdAt = "2022-11-01T00:00:00Z", author = NULL, authorAssociation = "NONE",
                       isCrossRepository = TRUE, headRefName = "x", body = "y"))))))

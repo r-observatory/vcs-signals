@@ -846,12 +846,12 @@ build_commit_page_query <- function(repos) {
   sprintf("query { %s }", paste(parts, collapse = "\n"))
 }
 
-#' One page of commits per repository. A null alias gives NULL. Pure.
+#' One page of commits per repository. A null alias, or a default branch gone since page one, gives NULL. Pure.
 parse_commit_pages <- function(resp, repos) {
   out <- vector("list", nrow(repos)); names(out) <- repos$repo_id
   for (j in seq_len(nrow(repos))) {
     r <- resp$data[[sprintf("r%d", j - 1L)]]
-    if (is.null(r)) { out[j] <- list(NULL); next }
+    if (is.null(r) || is.null(r$defaultBranchRef)) { out[j] <- list(NULL); next }
     h <- r$defaultBranchRef$target$recent
     out[[j]] <- list(commits = .ai_commit_nodes_frame(h$nodes), has_next = isTRUE(h$pageInfo$hasNextPage),
                      end_cursor = .nn(h$pageInfo$endCursor, NA_character_))

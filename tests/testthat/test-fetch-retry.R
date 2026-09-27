@@ -390,6 +390,9 @@ test_that("the activity document's breaker trips on its own, though each reply n
   expect_equal(sort(unique(f$query)), "activity")
   expect_equal(length(unique(f$repo_id)), n)
   expect_gt(length(unique(f$error)), 1L)
+  # It trips at the twentieth repository and reports that reply for the ten it never asks about.
+  expect_equal(length(unique(f$error)), AI_BREAKER_LIMIT)
+  expect_length(unique(f$error[f$repo_id %in% sprintf("github.com/o/r%02d", 21:30)]), 1L)
   rr <- DBI::dbReadTable(con, "repo_reads")
   expect_true(all(is.na(rr$commits_read_on)))
   expect_true(all(rr$accounts_counted_on == format(Sys.Date())))

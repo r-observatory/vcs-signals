@@ -1426,3 +1426,86 @@ test_that("a response the activity parser cannot read fails that slice's activit
   expect_equal(nrow(rr), 2L)
   expect_true(all(is.na(rr$commits_read_on) & rr$accounts_counted_on == format(Sys.Date())))
 })
+
+# A repository with more pull requests and commits than page one holds, read weekly.
+.busy_resp <- function() {
+  resp <- .two_repo_resp()
+  resp$activity$data$r0 <- .act(prs = list(.pr_node(60L, "fix", "2026-09-01T00:00:00Z")), pr_next = TRUE,
+    commits = list(.cm_node("c1", "2026-10-02T00:00:00Z", "x")), cm_next = TRUE)
+  resp$pages <- list(data = list(r0 = list(defaultBranchRef = list(target = list(recent = list(
+    pageInfo = list(endCursor = "C2", hasNextPage = FALSE), nodes = list(.cm_node("c3", "2026-09-25T00:00:00Z", "x"))))))))
+  resp$walk <- list(data = list(r0 = list(pullRequests = list(pageInfo = list(endCursor = "P2", hasNextPage = TRUE),
+    nodes = list(.pr_node(40L, "x", "2025-08-01T00:00:00Z"))))))
+  resp
+}
+.weekly_roster <- function(out) .roster2(out, list(commits_read_on = c("2026-10-01", NA),
+  commits_ruleset = c(AI_RULESET_VERSION, NA), commits_read_through = c("2026-09-30T00:00:00Z", NA)))
+.hit_read <- function(out) { rr <- .partial(out, "repo_reads"); rr[rr$repo_id == "github.com/a/hit", ] }
+
+test_that("a failed walk page keeps the commit read and page one, and the walk resumes from its cursor", {
+  out <- tempfile("cheap_"); dir.create(out)
+  suppressMessages(run_cheap(.cheap_io(.busy_resp(), fail = "walk"), out, .weekly_roster(out), 0, 1))
+  hit <- .hit_read(out)
+  today <- format(Sys.Date())
+  expect_equal(hit$commits_read_on, today); expect_equal(hit$commits_read, 2L)
+  expect_equal(hit$prs_read_on, today)
+  expect_equal(hit$prs_walk_complete, 0L); expect_equal(hit$prs_walk_cursor, "P1")
+  expect_true(startsWith(hit$last_failure, "walk: "))
+  expect_setequal(read_scan_failures(file.path(out, "vcs-dev-tooling-0.db"))$query, "walk")
+})
+
+test_that("a failed follow-up commit page drops that repository's whole activity read", {
+  out <- tempfile("cheap_"); dir.create(out)
+  suppressMessages(run_cheap(.cheap_io(.busy_resp(), fail = "pages"), out, .weekly_roster(out), 0, 1))
+  hit <- .hit_read(out)
+  expect_true(is.na(hit$commits_read_on)); expect_true(is.na(hit$prs_read_on))
+  expect_equal(hit$accounts_counted_on, format(Sys.Date()))
+  expect_true(startsWith(hit$last_failure, "activity: "))
+  expect_setequal(read_scan_failures(file.path(out, "vcs-dev-tooling-0.db"))$query, "activity")
+  expect_equal(nrow(.partial(out, "search_log")), 0L)
+})
+
+test_that("a follow-up page that finds the default branch gone reads as unread, never as a whole history", {
+  resp <- .busy_resp(); resp$pages <- list(data = list(r0 = list(defaultBranchRef = NULL)))
+  resp$activity$data$r0$defaultBranchRef$target$recent$nodes <-
+    list(.cm_node("c1", "2026-10-02T00:00:00Z", "Remove AppVeyor\n\nMade-with: Cursor"))
+  # A whole history read under an older ruleset pages to the first commit; one under this ruleset reads the week.
+  for (ruleset in c("2020-01-01", AI_RULESET_VERSION)) {
+    out <- tempfile("cheap_"); dir.create(out)
+    ro <- .roster2(out, list(commits_read_on = c("2026-10-01", NA), commits_ruleset = c(ruleset, NA),
+      commits_read_through = c("2026-09-30T00:00:00Z", NA), commits_history_complete = c(1L, NA)))
+    io <- .cheap_io(resp)
+    suppressMessages(run_cheap(io, out, ro, 0, 1))
+    expect_true("pages" %in% io$kinds())
+    hit <- .hit_read(out)
+    expect_true(is.na(hit$commits_read_on)); expect_true(is.na(hit$reached_first))
+    expect_true(is.na(hit$commits_history_complete)); expect_true(is.na(hit$prs_read_on))
+    expect_equal(nrow(.partial(out, "search_log")), 0L)
+  }
+})
+
+test_that("with no walk points left the walk sends nothing and stays open at page one's cursor", {
+  old <- AI_PR_WALK_POINTS
+  assign("AI_PR_WALK_POINTS", 0L, envir = globalenv())
+  withr::defer(assign("AI_PR_WALK_POINTS", old, envir = globalenv()))
+  out <- tempfile("cheap_"); dir.create(out)
+  io <- .cheap_io(.busy_resp())
+  suppressMessages(run_cheap(io, out, .weekly_roster(out), 0, 1))
+  expect_false("walk" %in% io$kinds())
+  hit <- .hit_read(out)
+  expect_equal(hit$prs_walk_complete, 0L); expect_equal(hit$prs_walk_cursor, "P1")
+  expect_true(is.na(hit$last_failure))
+})
+
+test_that("a catch-up whose page ends on the stored newest pull request is caught up", {
+  out <- tempfile("cheap_"); dir.create(out)
+  resp <- .two_repo_resp()
+  resp$activity$data$r0 <- .act(prs = list(.pr_node(60L, "fix", "2026-09-01T00:00:00Z")), pr_next = TRUE)
+  resp$walk <- list(data = list(r0 = list(pullRequests = list(pageInfo = list(endCursor = "P2", hasNextPage = TRUE),
+    nodes = list(.pr_node(50L, "x", "2026-08-15T00:00:00Z"), .pr_node(45L, "x", "2026-08-01T00:00:00Z"))))))
+  ro <- .roster2(out, list(prs_walk_complete = c(1L, NA), prs_newest_created_at = c("2026-08-01T00:00:00Z", NA)))
+  io <- .cheap_io(resp)
+  suppressMessages(run_cheap(io, out, ro, 0, 1))
+  expect_equal(sum(io$kinds() == "walk"), 1L)
+  expect_equal(.hit_read(out)$prs_newest_created_at, "2026-09-01T00:00:00Z")
+})

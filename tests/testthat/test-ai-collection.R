@@ -137,5 +137,4 @@ test_that("fetch_marker_onset fails closed function-wide when a sibling predeces
 
 # fetch_tree_markers, fetch_activity and fetch_account_counts (github.R) are impure batched
 # transports below the fence - no dedicated unit test here, same convention as fetch_contributor_count /
-# search_earliest_commit. Covered by run_cheap's fake-io test (Task 7) and the live
-# smoke documented in task-3-brief.md.
+# search_earliest_commit. Covered by the run_cheap tests in test-ai-backfill.R and test-fetch-retry.R.
