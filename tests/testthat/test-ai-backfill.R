@@ -701,12 +701,6 @@ test_that("ai-weekly.yml is the 5-job incremental pipeline (Sunday cron, increme
   # The deep matrix stays serialized on the shared GraphQL token.
   expect_match(txt, "max-parallel: 1", fixed = TRUE)
 
-  # The gate's confirmation-row partial is uploaded from the gate job and downloaded into the
-  # merge job's parts directory, so run_merge's unchanged vcs-ai-shard-*.db glob picks it up
-  # and last_confirmed_date keeps advancing for already-published repos skipped from deep.
-  expect_match(txt, "vcs-ai-shard-confirm.db", fixed = TRUE)
-  expect_match(txt, "ai-confirm-shard", fixed = TRUE)
-
   # AI onsets have no year component, so the year-tag mirror must NOT be present.
   expect_false(grepl("mirror-year-tags", txt, fixed = TRUE))
 })
@@ -1137,26 +1131,6 @@ test_that("a deep shard stops inside its budget and keeps what it scanned", {
     expect_match(paste(msgs, collapse = "\n"), "PARTIAL")
   })
   expect_true(file.exists(file.path(out, "vcs-ai-shard-0.db")))
-})
-
-test_that("the merge does not require an artifact a full gate never writes", {
-  # run_gate_incremental writes the confirmation partial, for repos it skipped.
-  # run_gate skips nobody and writes none. The merge downloaded it
-  # unconditionally, so a full-gate run failed at the last step after every one
-  # of its twelve deep shards had succeeded.
-  path <- ".github/workflows/ai-weekly.yml"
-  for (up in c("", "../", "../../")) {
-    if (file.exists(paste0(up, path))) { path <- paste0(up, path); break }
-  }
-  if (!file.exists(path)) skip("workflow not reachable from the test directory")
-  wf <- readLines(path, warn = FALSE)
-
-  at <- grep("name: ai-confirm-shard", wf)
-  expect_true(length(at) >= 1)
-  # The download in the merge job is the last one. It must tolerate absence.
-  block <- paste(wf[max(1, tail(at, 1) - 6):tail(at, 1)], collapse = "\n")
-  expect_true(grepl("continue-on-error: true", block, fixed = TRUE),
-              info = "the merge tolerates a missing confirmation partial")
 })
 
 .rerun_workflow <- function() {

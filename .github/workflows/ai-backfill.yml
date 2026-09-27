@@ -48,15 +48,8 @@ jobs:
   cheap:
     needs: enumerate
     runs-on: ubuntu-latest
-    # The tree query is ~1 GraphQL point per aliased batch, but build_pr_agent_query's
-    # pullRequests(first: 50) makes a TIER_D_BATCH=10 batch cost ~6-7 points, so the full
-    # ~15k-repo roster is ~10k+ points against the 5000/hr budget - more than double it,
-    # not "~1 point per batch". A single token caps throughput near that budget, so the
-    # shards run one at a time (max-parallel 1), same as backfill.yml (lines 60-67);
-    # run_cheap's graphql_rate_remaining/AI_POINT_RESERVE preflight pauses a shard when
-    # the budget runs low rather than tripping the secondary rate limit, so this may take
-    # more than one workflow_dispatch to finish (mod-N sharding re-attempts the same
-    # shard on a re-dispatch).
+    # Every repository on the roster is read through three documents (contents, activity,
+    # account counts) on one GraphQL token, so shards run one at a time and pause at AI_POINT_RESERVE.
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -125,6 +118,7 @@ jobs:
       - name: Union flagged repos
         env:
           VCS_OUT: out
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VCS_PARTS: parts
         run: Rscript scripts/ai_backfill.R gate
       - uses: actions/upload-artifact@v7
@@ -214,6 +208,11 @@ jobs:
         with:
           path: parts
           pattern: shard-*
+          merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          path: parts
+          pattern: cheap-*
           merge-multiple: true
       - uses: actions/download-artifact@v8
         with:

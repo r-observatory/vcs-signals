@@ -598,3 +598,38 @@ test_that("a called workflow is audited in its own file, not at the call", {
   expect_match(audit$problems, "job remote writes release current but is not in", fixed = TRUE, all = FALSE)
   expect_match(audit$problems, "job local_locked calls a workflow from this directory", fixed = TRUE, all = FALSE)
 })
+
+# The step (a "- " item and the lines under it) that holds line `at` of a job body.
+.step_around <- function(body, at) {
+  starts <- grep("^\\s*-\\s", body)
+  s <- max(starts[starts <= at]); e <- min(c(starts[starts > at] - 1L, length(body)))
+  body[s:e]
+}
+
+test_that("every merge job downloads the partials run_merge reads", {
+  wf_dir <- file.path(.repo_root, ".github", "workflows")
+  skip_if_not(dir.exists(wf_dir), "workflows not in this checkout")
+  for (wf in c("ai-weekly.yml", "ai-backfill.yml", "ai-merge-rerun.yml")) {
+    jobs <- .workflow_jobs(readLines(file.path(wf_dir, wf), warn = FALSE))
+    merge <- Filter(function(j) any(grepl("ai_backfill\\.R merge", j)), jobs)
+    expect_equal(length(merge), 1L, info = wf)
+    body <- merge[[1]]
+    for (pat in c("shard-*", "cheap-*", "dev-tooling-*"))
+      expect_true(any(grepl(sprintf("pattern: %s", pat), body, fixed = TRUE)), info = paste(wf, pat))
+    cheap_at <- grep("pattern: cheap-*", body, fixed = TRUE)
+    if (length(cheap_at))
+      expect_false(any(grepl("continue-on-error", .step_around(body, cheap_at[1]), fixed = TRUE)), info = wf)
+    expect_false(any(grepl("ai-confirm-shard", unlist(jobs), fixed = TRUE)), info = wf)
+    for (j in Filter(function(j) any(grepl("ai_backfill\\.R gate", j)), jobs))
+      expect_true(any(grepl("GH_TOKEN:", .step_around(j, grep("ai_backfill\\.R gate", j)[1]), fixed = TRUE)),
+                  info = paste(wf, "gate step"))
+    for (j in Filter(function(j) any(grepl("ai_backfill\\.R cheap", j)), jobs)) {
+      up <- grep("path: out/vcs-ai-cheap-*.db", j, fixed = TRUE)
+      expect_equal(length(up), 1L, info = wf)
+      expect_true(any(grepl("name: cheap-${{ matrix.shard }}", .step_around(j, up[1]), fixed = TRUE)), info = wf)
+    }
+  }
+  rerun <- readLines(file.path(wf_dir, "ai-merge-rerun.yml"), warn = FALSE)
+  guard <- grep("Refuse an empty parts directory", rerun)
+  expect_true(any(grepl("vcs-ai-cheap-*.db", rerun[guard:min(length(rerun), guard + 14L)], fixed = TRUE)))
+})
