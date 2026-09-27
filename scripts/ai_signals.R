@@ -1027,6 +1027,12 @@ ai_onset_reducer <- function(prior_rows, incoming_rows) {
 .ai_date_cmp <- function(a, b)
   if (is.na(a) || is.na(b)) (!is.na(a)) - (!is.na(b)) else (a > b) - (a < b)
 
+# The same for a commit read against the stored one: its watermark first, then the day it was read.
+.ai_commit_read_cmp <- function(through, on, stored_through, stored_on) {
+  by <- .ai_date_cmp(through, stored_through)
+  if (by == 0L) .ai_date_cmp(on, stored_on) else by
+}
+
 #' Fold this run's read state over the stored state, one column group at a time: a group moves
 #' only when this run read it and is not behind, the commit group judged by its watermark first. Pure.
 fold_repo_reads <- function(prior, incoming) {
@@ -1045,13 +1051,27 @@ fold_repo_reads <- function(prior, incoming) {
     for (g in names(groups)) {
       if (is.na(incoming[[g]][i])) next
       # The commit group goes by its watermark first: moved back, it would let a later read count a match twice.
-      w <- if (g == "commits_read_on") "commits_read_through" else g
-      by <- .ai_date_cmp(incoming[[w]][i], prior[[w]][k])
-      if (by == 0L) by <- .ai_date_cmp(incoming[[g]][i], prior[[g]][k])
+      by <- if (g == "commits_read_on")
+              .ai_commit_read_cmp(incoming$commits_read_through[i], incoming[[g]][i],
+                                  prior$commits_read_through[k], prior[[g]][k])
+            else .ai_date_cmp(incoming[[g]][i], prior[[g]][k])
       if (by >= 0L) prior[k, groups[[g]]] <- incoming[i, groups[[g]]]
     }
   }
   prior
+}
+
+#' The repositories whose read to the first commit this run is the read the fold kept (`reads`, after the fold).
+#' A read behind it rebuilds nothing, since the log already counts the commits past its watermark. Pure.
+rebuilt_log_repos <- function(reads, incoming) {
+  inc <- .ai_bind_like(cbind(.ai_empty_reads(), reached_first = integer()), list(incoming))
+  inc <- inc[inc$reached_first %in% 1L & !is.na(inc$commits_read_on), , drop = FALSE]
+  rd <- .ai_bind_like(.ai_empty_reads(), list(reads))
+  k <- match(inc$repo_id, rd$repo_id)
+  kept <- vapply(seq_len(nrow(inc)), function(i) is.na(k[i]) ||
+    .ai_commit_read_cmp(inc$commits_read_through[i], inc$commits_read_on[i],
+                        rd$commits_read_through[k[i]], rd$commits_read_on[k[i]]) >= 0L, logical(1))
+  unique(inc$repo_id[kept])
 }
 
 #' Keep the newest count per repository, tool and address set. A repository counted on day d (counted_repos,
@@ -1071,9 +1091,9 @@ fold_account_counts <- function(prior, incoming, counted_repos) {
   all[!duplicated(paste(all$repo_id, all$tool, all$identity_set, sep = "\r")), , drop = FALSE]
 }
 
-#' Fold this run's searches and reads into the log. A weekly add counts only from the stored watermark,
-#' and a read to the first commit first drops the repository's older msg., name. and review. rows. Pure.
-fold_search_log <- function(prior, incoming, rebuilt_repos = character(0), reads = NULL) {
+#' Fold this run's searches and reads into the log. A weekly add counts only from the stored watermark, and only
+#' a read to the first commit in rebuilt_repos replaces the repository's msg., name. and review. rows. Pure.
+fold_search_log <- function(prior, incoming, rebuilt_repos = NULL, reads = NULL) {
   empty <- .ai_empty_log()
   pri <- .ai_bind_like(empty, list(prior))
   local_key <- grepl("^(msg|name|review)\\.", pri$rule_key)
@@ -1082,12 +1102,16 @@ fold_search_log <- function(prior, incoming, rebuilt_repos = character(0), reads
   col <- function(cn)
     if (cn %in% names(incoming)) as.character(incoming[[cn]]) else rep(NA_character_, nrow(incoming))
   is_add <- col("mode") %in% "add"
+  is_replace <- col("mode") %in% "replace"
   after <- col("read_after")[is_add]
   if (any(is_add) && is.null(reads))
     stop("fold_search_log: a weekly read's counts need the stored read state, and reads is NULL")
+  if (any(is_replace) && is.null(rebuilt_repos))
+    stop("fold_search_log: a read to the first commit needs rebuilt_repos, and it is NULL")
   inc <- .ai_bind_like(empty, list(incoming))
   add <- inc[is_add, , drop = FALSE]
-  all <- rbind(inc[!is_add, , drop = FALSE], pri)
+  # A read to the first commit that the read state did not keep saw less than the log already counts.
+  all <- rbind(inc[!is_add & !(is_replace & !(inc$repo_id %in% rebuilt_repos)), , drop = FALSE], pri)
   all <- all[order(all$asked_on, decreasing = TRUE), , drop = FALSE]
   all <- all[!duplicated(paste(all$repo_id, all$rule_key, sep = "\r")), , drop = FALSE]
   rd <- .ai_bind_like(.ai_empty_reads(), list(reads))
