@@ -106,3 +106,26 @@ test_that("rotate_by_day starts at a different tenth each day and keeps every id
   for (k in 0:9) expect_setequal(rotate_by_day(ids, d0 + k), ids)
   expect_equal(rotate_by_day("R_1", d0), "R_1")
 })
+
+test_that("more unresolvable ids than the cap are not looked up or changed", {
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+  on.exit(DBI::dbDisconnect(con))
+  ensure_repo_schema(con)
+  calls <- 0L
+  io <- list(graphql = function(query) { calls <<- calls + 1L; stop("should not be called") })
+  ids <- paste0("R_", 1:101)
+  expect_true(repoint_dead_node_ids(con, io, ids, 100000)$skipped)
+  expect_true(repoint_dead_node_ids(con, io, ids[1:3], 200)$skipped)
+  expect_equal(calls, 0L)
+  expect_false(repoint_dead_node_ids(con, io, character(0), 10)$skipped)
+})
+
+test_that("a deadline cut warns whenever repos are left and fails past the threshold", {
+  expect_length(gauge_cut_verdict(0, 100)$lines, 0L)
+  small <- gauge_cut_verdict(10, 100)
+  expect_false(small$fail)
+  expect_match(small$lines, "^::warning::gauges: 10 of 100 repos \\(10.0%\\)")
+  big <- gauge_cut_verdict(26, 100)
+  expect_true(big$fail)
+  expect_match(big$lines[2], "^::error::")
+})

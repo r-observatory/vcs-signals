@@ -257,9 +257,13 @@ run_update <- function(io, out_dir, opts = list()) {
   snapshot_long <- gauges_to_long(gauges$snapshot, repo_map)
   n_gauges_collected <- if (!is.null(gauges$snapshot)) nrow(gauges$snapshot) else 0L
   cat(sprintf("gauges: collected %d repos, %d deferred\n", n_gauges_collected, length(gauges$deferred)))
-  clear_node_ids(con, gauges$unresolvable)
-  step(sprintf("gauges: %d node ids no longer resolve and were cleared for lookup by name, %d repos not reached by the %s min deadline",
-               length(gauges$unresolvable), length(gauges$unreached), format(deadline_min)))
+  dead <- repoint_dead_node_ids(con, io, gauges$unresolvable, nrow(repo_map))
+  step(sprintf("gauges: %d node ids no longer resolve, %d moved to the new id of a recreated repo%s; %d repos not reached by the %s min deadline",
+               dead$dead, dead$repointed,
+               if (dead$skipped) " (over the cap, none looked up)" else "",
+               length(gauges$unreached), format(deadline_min)))
+  cut <- gauge_cut_verdict(length(gauges$unreached), nrow(repo_map))
+  if (length(cut$lines)) cat(cut$lines, sep = "\n")
 
   # ---- Stage 4: materialize series + summary + go-live watermark --------
   # I4 floor: when this run collected nothing at all (every repo deferred -
@@ -369,6 +373,7 @@ run_update <- function(io, out_dir, opts = list()) {
   res <- publish(io, con, out_dir, tag, source_kind = "live", force_full = force_full,
                  touched_years = touched_years, base_generation = attr(seed, "generation"))
   step("published")
+  res$gauge_cut_fail <- cut$fail
   invisible(res)
 }
 
@@ -511,6 +516,8 @@ main <- function(out_dir, io = NULL) {
                                       gauge_deadline_min = if (is.na(deadline)) NULL else deadline))
   cat("Changed shards:",
       if (length(res$changed_shards)) paste(res$changed_shards, collapse = ", ") else "(none)", "\n")
+  # Published, but too little of the day was collected to count as done.
+  if (isTRUE(res$gauge_cut_fail)) quit(status = 1)
 }
 
 if (sys.nframe() == 0) {

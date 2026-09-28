@@ -467,14 +467,44 @@ write_repo_tables <- function(con, repos_df, repo_packages_df, today, links_back
   invisible(TRUE)
 }
 
-#' Clear node ids GitHub no longer resolves. The repository was deleted, and
-#' sometimes recreated under the same name with a new id; with node_id NULL the
-#' next run resolves it by owner/name, which finds the new id or marks it gone.
-clear_node_ids <- function(con, node_ids) {
-  if (length(node_ids) == 0) return(invisible(0L))
-  invisible(DBI::dbExecute(con,
-    "UPDATE repos SET node_id = NULL WHERE host = 'github' AND node_id = ?",
-    params = list(node_ids)))
+#' Act on node ids the gauge pass could not resolve. Each repo is looked up by
+#' owner/name; only one that now answers with a different id (deleted and
+#' recreated under the same name) is moved to that id. A repo the lookup cannot
+#' find, or finds under the same id, is left as it is, so a transient NOT_FOUND
+#' never starts it on the way to 'gone'. Nothing is looked up when there are more
+#' ids than the cap, since that reads as a GitHub fault. Returns the counts.
+repoint_dead_node_ids <- function(con, io, node_ids, n_gauged) {
+  out <- list(dead = length(node_ids), repointed = 0L, skipped = FALSE)
+  if (length(node_ids) == 0) return(out)
+  cap <- min(UNRESOLVABLE_CAP, max(1L, ceiling(UNRESOLVABLE_CAP_FRAC * n_gauged)))
+  if (length(node_ids) > cap) { out$skipped <- TRUE; return(out) }
+  rows <- DBI::dbGetQuery(con, sprintf(
+    "SELECT repo_id, owner, name, node_id AS old_id FROM repos
+      WHERE host = 'github' AND status = 'active' AND node_id IN (%s)",
+    paste(rep("?", length(node_ids)), collapse = ",")), params = as.list(node_ids))
+  if (nrow(rows) == 0) return(out)
+  found <- resolve_node_ids(io, rows[, c("repo_id", "owner", "name")])
+  found <- merge(found, rows[, c("repo_id", "old_id")], by = "repo_id")
+  moved <- found[found$status == "active" & !is.na(found$node_id) & found$node_id != found$old_id, ,
+                 drop = FALSE]
+  update_repo_node_ids(con, moved[, setdiff(names(moved), "old_id"), drop = FALSE])
+  out$repointed <- nrow(moved)
+  out
+}
+
+#' The log lines and verdict for a gauge pass the deadline cut short: a
+#' GitHub Actions warning whenever any repo was not reached, and fail = TRUE
+#' when more than UNREACHED_FAIL_FRAC of them were not.
+gauge_cut_verdict <- function(n_unreached, n_gauged) {
+  if (n_unreached == 0) return(list(lines = character(0), fail = FALSE))
+  frac <- n_unreached / max(1, n_gauged)
+  fail <- frac > UNREACHED_FAIL_FRAC
+  lines <- sprintf("::warning::gauges: %d of %d repos (%.1f%%) not reached before the deadline; they keep their last values",
+                   n_unreached, n_gauged, 100 * frac)
+  if (fail) lines <- c(lines, sprintf(
+    "::error::gauges: more than %.0f%% of repos not reached; failing after publish so the catch-up runs the day again",
+    100 * UNREACHED_FAIL_FRAC))
+  list(lines = lines, fail = fail)
 }
 
 #' Persist resolve_node_ids' lifecycle frame (repo_id, node_id, owner, name,
