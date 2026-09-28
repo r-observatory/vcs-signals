@@ -81,6 +81,17 @@ RECENT_WINDOW  <- 400L   # days of series kept in the recent shard
 REVISION_WINDOW<- 10L    # trailing days re-materialized each run (must be < RECENT_WINDOW)
 POINT_RESERVE  <- 1500L  # GraphQL points left unspent as headroom
 BATCH_DELAY_S  <- 0.35   # pause between GraphQL batches, to stay well under secondary rate limits
+# Minutes into update.R after which the gauge pass stops and the run publishes
+# what it has. The job is capped at 150; setup and tests take ~4 and the stages
+# after the gauges took up to 28 (2026-09-23..27), so 100 leaves ~18 spare.
+GAUGE_DEADLINE_MIN <- 100
+# More unresolvable ids than this (or than 1% of the gauged repos) in one run
+# reads as a GitHub fault, not deleted repos, so none are acted on.
+UNRESOLVABLE_CAP <- 100L
+UNRESOLVABLE_CAP_FRAC <- 0.01
+# A run that leaves more than this share of repos unreached publishes, then fails,
+# so the catch-up cron runs the day again.
+UNREACHED_FAIL_FRAC <- 0.25
 OWNER_STALE_DAYS <- 14L  # days an owner row outlives the last gauge query that returned it
 
 # ---- historical cumulative-series backfill (stars, forks, releases) ----
