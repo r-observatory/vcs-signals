@@ -467,6 +467,16 @@ write_repo_tables <- function(con, repos_df, repo_packages_df, today, links_back
   invisible(TRUE)
 }
 
+#' Clear node ids GitHub no longer resolves. The repository was deleted, and
+#' sometimes recreated under the same name with a new id; with node_id NULL the
+#' next run resolves it by owner/name, which finds the new id or marks it gone.
+clear_node_ids <- function(con, node_ids) {
+  if (length(node_ids) == 0) return(invisible(0L))
+  invisible(DBI::dbExecute(con,
+    "UPDATE repos SET node_id = NULL WHERE host = 'github' AND node_id = ?",
+    params = list(node_ids)))
+}
+
 #' Persist resolve_node_ids' lifecycle frame (repo_id, node_id, owner, name,
 #' name_with_owner, status) onto the repos dimension: an UPSERT keyed on the
 #' frozen repo_id (never re-derived), covering both a fresh id attachment, a
@@ -2230,6 +2240,9 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
     stop("publish() needs base_generation as one string, the release generation its working ",
          "database was seeded from", call. = FALSE)
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+  t0 <- Sys.time()
+  step <- function(msg) cat(sprintf("publish: %s (%.1f min)\n", msg,
+                                    as.numeric(difftime(Sys.time(), t0, units = "mins"))))
 
   # Pulled on every path, including force_full. The old exemption assumed a full
   # rebuild had nothing to protect, which is true of a fresh release and false of
@@ -2267,6 +2280,7 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
          "the regression gate would have nothing to compare against, so nothing is published",
          call. = FALSE)
 
+  step(sprintf("pulled %d published assets", length(pulled)))
   prev_names <- setdiff(pulled, "manifest.json")
   prev_hashes <- stats::setNames(
     vapply(prev_names, function(nm) shard_hash(file.path(out_dir, nm)), character(1)),
@@ -2308,6 +2322,7 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
         params = list(yrows$repo_id, yrows$date, yrows$metric, yrows$value))
   }
 
+  step("folded the published years into the working database")
   # Recomputed after the fold: a year that exists only in the published history
   # must be re-exported complete rather than dropped.
   all_years <- DBI::dbGetQuery(con, "SELECT DISTINCT substr(date, 1, 4) AS yr FROM signals_series WHERE date IS NOT NULL ORDER BY yr")$yr
@@ -2330,6 +2345,7 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
   .embed_recent_tables(con, recent_path)
   shard_names <- c(shard_names, recent_shard)
 
+  step(sprintf("exported %d series shards", length(shard_names)))
   summary_df <- if (DBI::dbExistsTable(con, "vcs_signals_summary")) DBI::dbReadTable(con, "vcs_signals_summary") else data.frame()
   repos_df   <- if (DBI::dbExistsTable(con, "repos")) DBI::dbReadTable(con, "repos") else data.frame()
   rp_df      <- if (DBI::dbExistsTable(con, "repo_packages")) DBI::dbReadTable(con, "repo_packages") else data.frame()
@@ -2363,6 +2379,7 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
     }
   }
   shard_names <- c(shard_names, summary_shard)
+  step("exported the summary and passed the regression gate")
 
   # Integrity/completeness core for the PRIMARY published db a downstream
   # merge consumes (vcs-signals-summary.db). export_summary_shard() above has
@@ -2418,6 +2435,7 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
   }
 
   for (nm in changed) upload(file.path(out_dir, nm))
+  step(sprintf("uploaded %d changed assets", length(uploaded)))
 
   # I6: the manifest's years list is a UNION of the prior manifest's years
   # (read back here, before it is overwritten below) with the years touched

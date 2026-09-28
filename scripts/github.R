@@ -409,32 +409,86 @@ paginate_stargazers <- function(io, owner, name, delay = BACKFILL_DELAY_S) {
 }
 
 # ---- batched collection with the 502/partial failure contract -------------
-collect_batched <- function(io, ids, batch_size, build_query, parse_nodes) {
-  records <- list(); deferred <- character(0)
+#' The ids in `ids` that a nodes(ids:) response says no longer exist, or NULL when
+#' the response carries any other error. GitHub answers a deleted repository's id
+#' with a NOT_FOUND scoped to nodes[i] and returns the rest of the batch intact.
+unresolvable_node_ids <- function(res, ids) {
+  if (!is.list(res) || is.null(res$data) || !errors_are_alias_not_found(res$errors)) return(NULL)
+  dead <- vapply(res$errors, function(e) {
+    msg <- if (is.character(e$message)) e$message else ""
+    m <- regmatches(msg, regexec("global id of '([^']+)'", msg))[[1]]
+    if (length(m) == 2L && m[2] %in% ids) return(m[2])
+    p <- e$path
+    if (length(p) == 2L && identical(p[[1]], "nodes") && is.numeric(p[[2]])) {
+      i <- as.integer(p[[2]]) + 1L
+      if (i >= 1L && i <= length(ids)) return(ids[i])
+    }
+    NA_character_
+  }, character(1))
+  if (anyNA(dead)) NULL else unique(dead)
+}
+
+#' Batched collection. A failed batch is halved and retried; a single id that still
+#' fails is deferred. An id GitHub reports as unresolvable is returned in
+#' `unresolvable` without retrying the batch. Once `now()` passes `deadline` the
+#' remaining ids are returned in `unreached` rather than queried. `log`, when given,
+#' gets a progress line every `log_every` queries.
+collect_batched <- function(io, ids, batch_size, build_query, parse_nodes,
+                            deadline = Inf, now = function() as.numeric(Sys.time()),
+                            log = NULL, log_every = 50L) {
+  records <- list(); deferred <- character(0); unresolvable <- character(0)
+  unreached <- character(0)
   queue <- unname(chunk(ids, batch_size))
+  started <- now(); queries <- 0L; n_rows <- 0L
   while (length(queue) > 0) {
+    if (now() >= deadline) {
+      unreached <- unlist(queue, use.names = FALSE)
+      break
+    }
     b <- queue[[1]]; queue <- queue[-1]
     res <- tryCatch(io$graphql(build_query(b)), error = function(e) list(.err = TRUE))
     Sys.sleep(BATCH_DELAY_S)
+    queries <- queries + 1L
     ok <- is.list(res) && is.null(res$.err) && is.null(res$errors) && !is.null(res$data)
-    if (ok) {
+    dead <- if (ok || !is.list(res) || !is.null(res$.err)) NULL else unresolvable_node_ids(res, b)
+    if (ok || length(dead)) {
+      unresolvable <- c(unresolvable, dead)
       df <- parse_nodes(res$data$nodes)
-      if (!is.null(df) && nrow(df) > 0) records[[length(records) + 1L]] <- df
+      if (!is.null(df) && nrow(df) > 0) {
+        records[[length(records) + 1L]] <- df
+        n_rows <- n_rows + nrow(df)
+      }
     } else if (length(b) > 1) {
       queue <- c(unname(chunk(b, ceiling(length(b) / 2))), queue)   # halve and retry
     } else {
       deferred <- c(deferred, b)                                     # single repo still failing
     }
+    if (!is.null(log) && queries %% log_every == 0L)
+      log(sprintf("%d queries, %d collected, %d deferred, %d ids left, %.1f min",
+                  queries, n_rows, length(deferred), length(unlist(queue)), (now() - started) / 60))
   }
-  list(records = if (length(records)) do.call(rbind, records) else NULL, deferred = deferred)
+  list(records = if (length(records)) do.call(rbind, records) else NULL, deferred = deferred,
+       unresolvable = unique(unresolvable), unreached = unreached)
 }
 
-collect_gauges <- function(io, node_ids) {
+#' Rotate `ids` to start at a different tenth each day, so a pass cut short by its
+#' deadline leaves a different tail uncollected each time.
+rotate_by_day <- function(ids, day, parts = 10L) {
+  n <- length(ids)
+  if (n < 2L) return(ids)
+  start <- ((as.integer(as.Date(day)) %% parts) * ceiling(n / parts)) %% n
+  if (start == 0L) ids else c(ids[(start + 1L):n], ids[seq_len(start)])
+}
+
+collect_gauges <- function(io, node_ids, deadline = Inf, now = function() as.numeric(Sys.time()),
+                           log = NULL) {
   # Daily forward pass = the fast cheap gauges only. Commit count (history.totalCount)
   # is too slow to fetch for every repo daily, so it is collected on the weekly heavy
   # pass. build_commit_query / parse_commits remain for that pass to use.
-  cheap <- collect_batched(io, node_ids, CHEAP_BATCH, build_gauge_query, parse_gauges)
-  list(snapshot = cheap$records, deferred = cheap$deferred)
+  cheap <- collect_batched(io, node_ids, CHEAP_BATCH, build_gauge_query, parse_gauges,
+                           deadline = deadline, now = now, log = log)
+  list(snapshot = cheap$records, deferred = cheap$deferred,
+       unresolvable = cheap$unresolvable, unreached = cheap$unreached)
 }
 
 # ---- node-id resolution stage ----------------------------------------------

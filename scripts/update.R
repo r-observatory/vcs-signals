@@ -182,8 +182,15 @@ seed_working_db <- function(io, out_dir, working_path) {
 #' LINKS_BACKFILL_PATH, the committed one).
 #' A publish refused because another publisher moved the release in the meantime
 #' is not retried here: see retry_on_publish_conflict for why.
+#' opts$gauge_deadline_min (default GAUGE_DEADLINE_MIN) is how many minutes into
+#' the run the gauge pass stops so the publish still happens; opts$now is the
+#' clock, in seconds, injected for tests.
 run_update <- function(io, out_dir, opts = list()) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+  now <- if (is.function(opts$now)) opts$now else function() as.numeric(Sys.time())
+  started <- now()
+  step <- function(msg) cat(sprintf("%s (%.1f min into the run)\n", msg, (now() - started) / 60))
+  deadline_min <- if (!is.null(opts$gauge_deadline_min)) opts$gauge_deadline_min else GAUGE_DEADLINE_MIN
   today <- Sys.Date()
   today_s <- format(today)
   force_full <- isTRUE(opts$force_full)
@@ -241,11 +248,18 @@ run_update <- function(io, out_dir, opts = list()) {
 
   # ---- Stage 3: forward gauge collection over active github repos -------
   repo_map <- DBI::dbGetQuery(con,
-    "SELECT node_id, repo_id FROM repos WHERE host = 'github' AND status = 'active' AND node_id IS NOT NULL")
-  gauges <- collect_gauges(io, repo_map$node_id)
+    "SELECT node_id, repo_id FROM repos WHERE host = 'github' AND status = 'active' AND node_id IS NOT NULL
+      ORDER BY repo_id")
+  # A repo the deadline leaves out keeps its last values, as a deferred one does.
+  gauges <- collect_gauges(io, rotate_by_day(repo_map$node_id, today),
+                           deadline = started + 60 * deadline_min, now = now,
+                           log = function(m) cat("gauges:", m, "\n"))
   snapshot_long <- gauges_to_long(gauges$snapshot, repo_map)
   n_gauges_collected <- if (!is.null(gauges$snapshot)) nrow(gauges$snapshot) else 0L
   cat(sprintf("gauges: collected %d repos, %d deferred\n", n_gauges_collected, length(gauges$deferred)))
+  clear_node_ids(con, gauges$unresolvable)
+  step(sprintf("gauges: %d node ids no longer resolve and were cleared for lookup by name, %d repos not reached by the %s min deadline",
+               length(gauges$unresolvable), length(gauges$unreached), format(deadline_min)))
 
   # ---- Stage 4: materialize series + summary + go-live watermark --------
   # I4 floor: when this run collected nothing at all (every repo deferred -
@@ -332,6 +346,8 @@ run_update <- function(io, out_dir, opts = list()) {
                                         compute_release_facts = FALSE, ai_signals = ai_all)
     DBI::dbExecute(con, "DELETE FROM vcs_signals_summary")
     if (nrow(summary_df) > 0) DBI::dbWriteTable(con, "vcs_signals_summary", summary_df, append = TRUE)
+    step(sprintf("summary: %d series rows written, %d summary rows rebuilt",
+                 nrow(mat$series_rows), nrow(summary_df)))
 
     go_live <- DBI::dbGetQuery(con, "SELECT value FROM pipeline_state WHERE key = 'go_live'")
     if (nrow(go_live) == 0) {
@@ -350,8 +366,10 @@ run_update <- function(io, out_dir, opts = list()) {
   }
 
   # ---- Stage 5: publish --------------------------------------------------
-  invisible(publish(io, con, out_dir, tag, source_kind = "live", force_full = force_full,
-                     touched_years = touched_years, base_generation = attr(seed, "generation")))
+  res <- publish(io, con, out_dir, tag, source_kind = "live", force_full = force_full,
+                 touched_years = touched_years, base_generation = attr(seed, "generation"))
+  step("published")
+  invisible(res)
 }
 
 # ---- gh-release IO for the real run ----------------------------------------
@@ -488,7 +506,9 @@ main <- function(out_dir, io = NULL) {
   # Not wrapped in retry_on_publish_conflict. A conflict fails the run with that
   # message; update.yml's 11:30 catch-up runs the update again if the day has no
   # successful run by then, and a conflicted catch-up gets no further attempt.
-  res <- run_update(io, out_dir, list(force_full = force_full))
+  deadline <- suppressWarnings(as.numeric(Sys.getenv("VCS_GAUGE_DEADLINE_MIN", "")))
+  res <- run_update(io, out_dir, list(force_full = force_full,
+                                      gauge_deadline_min = if (is.na(deadline)) NULL else deadline))
   cat("Changed shards:",
       if (length(res$changed_shards)) paste(res$changed_shards, collapse = ", ") else "(none)", "\n")
 }

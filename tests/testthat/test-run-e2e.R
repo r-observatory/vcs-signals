@@ -300,3 +300,61 @@ test_that("a repository deleted on GitHub keeps its owner row while the rest of 
     expect_equal(rows$observed_on, c(seen, format(Sys.Date())), info = f)
   }
 })
+
+.recent_repo <- function(path) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con))
+  list(repo = DBI::dbGetQuery(con, "SELECT node_id, status FROM repos"),
+       stars = DBI::dbGetQuery(con, "SELECT value FROM series_latest WHERE metric = 'stars'")$value)
+}
+
+test_that("a node id GitHub no longer resolves is cleared, and the next run finds the repo by name", {
+  out <- tempfile("out_dead"); dir.create(out)
+  rel <- tempfile("rel_dead"); dir.create(rel)
+  suppressMessages(capture.output(
+    run_update(local_release_io(rel, acquire = .e2e_acquire, graphql = .e2e_fixture), out,
+               list(force_full = TRUE))))
+  expect_equal(.recent_repo(file.path(rel, "vcs-signals-recent.db"))$repo$node_id, "R_a")
+
+  gauge_queries <- 0L
+  dead <- function(query) {
+    if (grepl("followRenames|history \\{ totalCount|rateLimit", query)) return(.e2e_fixture(query))
+    gauge_queries <<- gauge_queries + 1L
+    list(data = list(nodes = list(NULL)),
+         errors = list(list(type = "NOT_FOUND", path = list("nodes", 0L),
+                            message = "Could not resolve to a node with the global id of 'R_a'")))
+  }
+  log <- capture.output(suppressMessages(
+    run_update(local_release_io(rel, acquire = .e2e_acquire, graphql = dead), out, list())))
+  expect_equal(gauge_queries, 1L)
+  expect_true(any(grepl("1 node ids no longer resolve", log, fixed = TRUE)))
+  after <- .recent_repo(file.path(rel, "vcs-signals-recent.db"))
+  expect_true(is.na(after$repo$node_id))
+  expect_equal(after$repo$status, "active")
+  expect_equal(after$stars, 6959)
+
+  suppressMessages(capture.output(
+    run_update(local_release_io(rel, acquire = .e2e_acquire, graphql = .e2e_fixture), out, list())))
+  expect_equal(.recent_repo(file.path(rel, "vcs-signals-recent.db"))$repo$node_id, "R_a")
+})
+
+test_that("a run past its gauge deadline still publishes and keeps the last values", {
+  out <- tempfile("out_deadline"); dir.create(out)
+  rel <- tempfile("rel_deadline"); dir.create(rel)
+  suppressMessages(capture.output(
+    run_update(local_release_io(rel, acquire = .e2e_acquire, graphql = .e2e_fixture), out,
+               list(force_full = TRUE))))
+
+  gauge_queries <- 0L
+  counting <- function(query) {
+    if (!grepl("followRenames|history \\{ totalCount|rateLimit", query)) gauge_queries <<- gauge_queries + 1L
+    .e2e_fixture(query)
+  }
+  io <- local_release_io(rel, acquire = .e2e_acquire, graphql = counting)
+  log <- capture.output(suppressMessages(run_update(io, out, list(gauge_deadline_min = 0))))
+  expect_equal(gauge_queries, 0L)
+  expect_true("manifest.json" %in% io$uploaded())
+  expect_true(any(grepl("1 repos not reached by the 0 min deadline", log, fixed = TRUE)))
+  expect_true(any(grepl("^published \\(", log)))
+  expect_equal(.recent_repo(file.path(rel, "vcs-signals-recent.db"))$stars, 6959)
+})
