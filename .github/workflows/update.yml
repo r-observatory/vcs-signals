@@ -89,7 +89,9 @@ jobs:
       group: vcs-signals-publish
       queue: max
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # update.R stops the gauge pass GAUGE_DEADLINE_MIN (100) minutes in and
+    # publishes, so the job ends well inside this cap.
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v7
       - uses: r-lib/actions/setup-r@v2
