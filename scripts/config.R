@@ -64,6 +64,10 @@ PUBLISH_CONFIRM_WAITS_S <- c(5, 15)
 # served 502s here (the update of 2026-08-20), so one bad answer would otherwise
 # throw away a 90-minute update or fail a publish whose data is already out.
 RELEASE_READ_RETRY_WAITS_S <- c(5, 20)
+# Waits, in seconds, before downloading a release asset again after gh fails to.
+# The update of 2026-09-30 did 118 minutes of work and then stopped on one failed
+# download of a shard the release still listed, during a burst of 502s and 504s.
+RELEASE_DOWNLOAD_RETRY_WAITS_S <- c(15, 45, 90)
 # After a publish conflict, a merge waits for the release to read the same
 # PUBLISH_SETTLE_QUIET_READS times in a row, PUBLISH_SETTLE_POLL_S seconds apart,
 # before it seeds again, giving up the wait after PUBLISH_SETTLE_MAX_READS polls.
