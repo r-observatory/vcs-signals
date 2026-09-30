@@ -472,11 +472,34 @@ gh_release_generation <- function(repo, tag = "current", run = system2,
   with_retry(read_once, waits = waits, sleep = sleep)
 }
 
-gh_release_download <- function(repo, pattern, dir, tag = "current") {
-  st <- suppressWarnings(system2("gh", c("release", "download", tag, "--repo", repo,
-    "--pattern", pattern, "--dir", dir, "--clobber"), stdout = TRUE, stderr = TRUE))
-  code <- attr(st, "status")
-  is.null(code) || identical(as.integer(code), 0L)
+#' Download one asset: TRUE once it lands, FALSE when it cannot. A failure is tried
+#' again after each of `waits`, so a burst of 502s no longer costs a whole run.
+#' gh saying the release lists no such asset is FALSE at once, since no retry
+#' changes that. "release not found" is retried: gh 2.96 and later word a failed
+#' lookup that way (see gh_release_generation). run, sleep and rand (via ...) are
+#' injected so the suite needs no network and never waits.
+gh_release_download <- function(repo, pattern, dir, tag = "current", run = system2,
+                                waits = RELEASE_DOWNLOAD_RETRY_WAITS_S, sleep = Sys.sleep, ...) {
+  last <- length(waits) + 1L
+  attempt <- 0L
+  fetch <- function() {
+    attempt <<- attempt + 1L
+    out <- suppressWarnings(run("gh", c("release", "download", tag, "--repo", repo,
+      "--pattern", pattern, "--dir", dir, "--clobber"), stdout = TRUE, stderr = TRUE))
+    status <- attr(out, "status")
+    if (is.null(status) || identical(as.integer(status), 0L)) return(TRUE)
+    said <- paste(out, collapse = "\n")
+    if (grepl("no assets match the file pattern|no assets to download", said)) {
+      message(sprintf("gh release download: release '%s' on %s does not list %s (%s)",
+                      tag, repo, pattern, said))
+      return(FALSE)
+    }
+    message(sprintf("gh release download of %s failed, attempt %d of %d (exit %s): %s",
+                    pattern, attempt, last, status, said))
+    if (attempt == last) return(FALSE)
+    stop(said, call. = FALSE)
+  }
+  with_retry(fetch, waits = waits, sleep = sleep, ...)
 }
 
 #' Upload one asset, failing closed. Every caller treats an upload as must-succeed:
