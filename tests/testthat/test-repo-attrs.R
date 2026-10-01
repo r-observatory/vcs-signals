@@ -82,3 +82,108 @@ test_that("with the reset, a repository not collected loses only its two dates",
   expect_equal(two$median_days_between_releases, 45L)
   expect_equal(got$last_commit_date[got$repo_id == "github.com/a/one"], "2026-04-01T10:00:00Z")
 })
+
+# ---- every summary builder ------------------------------------------------------
+# weekly.R, backfill.R and ai_backfill.R all define run_merge, so each is loaded
+# into its own environment.
+.ra_env <- function(script) {
+  env <- new.env(parent = globalenv())
+  withr::with_dir(.repo_root, sys.source(file.path("scripts", script), envir = env))
+  env
+}
+.ra_weekly <- .ra_env("weekly.R")
+.ra_ai <- .ra_env("ai_backfill.R")
+.ra_rid <- "github.com/a/ok"
+
+# A published release with one repository whose summary row sets every carried
+# column, and a release series whose rises are 45 days apart, so the weekly
+# merge's recomputed cadence is the one the row carries.
+.ra_release <- function() {
+  rel <- tempfile("rel_attrs_"); dir.create(rel)
+  today <- Sys.Date()
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:"); on.exit(DBI::dbDisconnect(con))
+  ensure_repo_schema(con); ensure_series_schema(con)
+  DBI::dbWriteTable(con, "repos", data.frame(repo_id = .ra_rid, node_id = "R_1", host = "github",
+    host_domain = "github.com", owner = "a", name = "ok", name_with_owner = "a/ok", supported = 1L,
+    n_packages = 1L, first_seen = "2026-01-01", last_seen = format(today), status = "active",
+    stringsAsFactors = FALSE), append = TRUE)
+  DBI::dbWriteTable(con, "repo_packages", data.frame(repo_id = .ra_rid, package = "pkgA",
+    origin = "cran", resolved_from = "url", stringsAsFactors = FALSE), append = TRUE)
+  DBI::dbExecute(con, "INSERT INTO signals_series VALUES (?, ?, 'releases_total', 1), (?, ?, 'releases_total', 2)",
+                 params = list(.ra_rid, format(today - 100), .ra_rid, format(today - 55)))
+  DBI::dbExecute(con, "INSERT INTO series_latest VALUES (?, 'releases_total', 2)", params = list(.ra_rid))
+  DBI::dbExecute(con, "INSERT INTO pipeline_state (key, value) VALUES ('go_live', ?)",
+                 params = list(format(today - 1)))
+  DBI::dbWriteTable(con, "vcs_signals_summary", cbind(package = "pkgA", origin = "cran",
+    .attr_row(.ra_rid), first_seen = "2026-01-01", last_seen = format(today),
+    stringsAsFactors = FALSE), append = TRUE)
+  read <- function(nm) DBI::dbReadTable(con, nm)
+  recent <- file.path(rel, "vcs-signals-recent.db")
+  export_series_shard(recent, extract_recent_rows(con, today, RECENT_WINDOW))
+  .embed_recent_tables(con, recent)
+  export_summary_shard(file.path(rel, "vcs-signals-summary.db"), read("vcs_signals_summary"),
+                       read("repos"), read("repo_packages"), read("vcs_ai_signals"),
+                       read("vcs_dev_tooling"),
+                       extra = stats::setNames(lapply(SUMMARY_EXTRA_TABLES, read), SUMMARY_EXTRA_TABLES))
+  write_manifest(file.path(rel, "manifest.json"), character(0), "current",
+                 list(source_kind = "live", years = list()))
+  rel
+}
+
+.ra_published <- function(rel) {
+  s <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel, "vcs-signals-summary.db"))
+  r <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel, "vcs-signals-recent.db"))
+  on.exit({ DBI::dbDisconnect(s); DBI::dbDisconnect(r) })
+  list(summary = DBI::dbGetQuery(s, "SELECT * FROM vcs_signals_summary"),
+       state = DBI::dbReadTable(r, "pipeline_state"))
+}
+
+.ra_weekly_parts <- function() {
+  p <- tempfile("ra_weekly_parts_"); dir.create(p)
+  .ra_weekly$export_snapshot_shard(file.path(p, "vcs-signals-shard-0.db"), data.frame(
+    repo_id = .ra_rid, commits_total = 500L, contributors_total = 10L,
+    median_days_to_close_issue = NA_integer_, median_days_to_close_pr = NA_integer_,
+    median_open_issue_age_days = NA_integer_, stringsAsFactors = FALSE))
+  p
+}
+
+.ra_ai_parts <- function() {
+  p <- tempfile("ra_ai_parts_"); dir.create(p)
+  .ra_ai$export_ai_shard(file.path(p, "vcs-ai-shard-0.db"), data.frame(
+    repo_id = .ra_rid, tool = "copilot", first_seen_date = "2026-02-01", first_seen_censored = 0L,
+    evidence_tiers = "A", authored = 1L, last_confirmed_date = format(Sys.Date()),
+    stringsAsFactors = FALSE))
+  p
+}
+
+.ra_expect_carried <- function(got) {
+  want <- .attr_row(.ra_rid)
+  for (cn in REPO_ATTR_COLS) expect_equal(got[[cn]], want[[cn]], info = cn)
+}
+
+test_that("the weekly merge keeps every carried value and recomputes the cadence from the rises", {
+  rel <- .ra_release()
+  suppressMessages(.ra_weekly$run_merge(local_release_io(rel), tempfile("ra_wk_"), .ra_weekly_parts()))
+  got <- .ra_published(rel)
+  .ra_expect_carried(got$summary)
+  expect_equal(got$summary$commits_total, 500L)   # the merge did run
+})
+
+test_that("the AI merge keeps every carried value", {
+  rel <- .ra_release()
+  suppressMessages(.ra_ai$run_merge(local_release_io(rel), tempfile("ra_ai_"), .ra_ai_parts()))
+  .ra_expect_carried(.ra_published(rel)$summary)
+})
+
+test_that("a merge before the first daily run with the gauge's dates only carries, and writes no key", {
+  for (merge in c("weekly", "ai")) {
+    rel <- .ra_release()
+    if (merge == "weekly")
+      suppressMessages(.ra_weekly$run_merge(local_release_io(rel), tempfile("ra_wk_"), .ra_weekly_parts()))
+    else
+      suppressMessages(.ra_ai$run_merge(local_release_io(rel), tempfile("ra_ai_"), .ra_ai_parts()))
+    got <- .ra_published(rel)
+    expect_equal(got$summary$last_commit_date, "2026-04-01T10:00:00Z", info = merge)
+    expect_false(REPO_DATES_KEY %in% got$state$key, info = merge)
+  }
+})

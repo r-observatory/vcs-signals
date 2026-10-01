@@ -1050,21 +1050,13 @@ run_merge <- function(io, out_dir, parts_dir) {
   DBI::dbWriteTable(con, "vcs_dev_tooling_rules", dev_tooling_rules_table(), append = TRUE)
 
   # Rebuild the summary so ai_* rollups reflect the merged onsets. Non-AI columns come
-  # from the seeded series_latest; descriptive + release facts carry forward from the
-  # prior summary (no fresh gauge collection this run, so compute_release_facts = FALSE).
+  # from the seeded series_latest, and every REPO_ATTR_COLS value carries forward from
+  # the prior summary (no gauge collection this run, so compute_release_facts = FALSE).
   repos_all <- DBI::dbReadTable(con, "repos")
   rp_all <- DBI::dbReadTable(con, "repo_packages")
   series_all <- DBI::dbGetQuery(con, "SELECT repo_id, date, metric, value FROM signals_series")
   latest_all <- DBI::dbGetQuery(con, "SELECT repo_id, metric, value FROM series_latest")
-  prev_attrs <- DBI::dbGetQuery(con,
-    "SELECT repo_id, license, topics, is_archived, last_commit_date,
-            last_release_date, median_days_between_releases
-       FROM vcs_signals_summary WHERE repo_id IS NOT NULL")
-  if (nrow(prev_attrs) > 0) {
-    prev_attrs <- prev_attrs[!duplicated(prev_attrs$repo_id), ]
-    prev_attrs$is_archived <- as.integer(prev_attrs$is_archived)
-  }
-  repo_attrs <- merge(repos_all[, c("repo_id", "first_seen", "last_seen")], prev_attrs,
+  repo_attrs <- merge(repos_all[, c("repo_id", "first_seen", "last_seen")], prior_repo_attrs(con),
                       by = "repo_id", all.x = TRUE)
   summary_df <- build_signals_summary(latest_all, series_all, repo_attrs, rp_all, today,
                                       compute_release_facts = FALSE, ai_signals = reduced)
