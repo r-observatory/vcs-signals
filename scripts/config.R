@@ -97,6 +97,13 @@ UNRESOLVABLE_CAP_FRAC <- 0.01
 # so the catch-up cron runs the day again.
 UNREACHED_FAIL_FRAC <- 0.25
 OWNER_STALE_DAYS <- 14L  # days an owner row outlives the last gauge query that returned it
+# The summary's per-repository values. A repository a run does not collect keeps its
+# prior values, and every summary builder reads and writes this one list.
+REPO_ATTR_COLS <- c("license", "topics", "is_archived", "last_commit_date", "last_release_date",
+                    "last_release_tag", "repo_created_at", "median_days_between_releases")
+# pipeline_state key written with the first summary whose dates come from the gauge itself.
+REPO_DATES_KEY <- "repo_dates_source"
+REPO_DATES_SOURCE <- "head-commit+latest-release"
 
 # ---- historical cumulative-series backfill (stars, forks, releases) ----
 STARGAZER_PAGE   <- 100L  # items per GraphQL connection page (all metrics share one page size)

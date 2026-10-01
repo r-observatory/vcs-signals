@@ -762,7 +762,8 @@ ensure_series_schema <- function(con) {
     median_open_issue_age_days INTEGER, last_release_date TEXT, median_days_between_releases INTEGER,
     ai_markers_detected INTEGER, ai_first_tool TEXT, ai_first_date TEXT,
     ai_tool_count INTEGER, ai_tools TEXT, ai_latest_tool TEXT, ai_latest_date TEXT,
-    first_seen TEXT, last_seen TEXT, PRIMARY KEY (package, origin))")
+    first_seen TEXT, last_seen TEXT, last_release_tag TEXT, repo_created_at TEXT,
+    PRIMARY KEY (package, origin))")
   DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS pipeline_state (key TEXT PRIMARY KEY, value TEXT)")
   # `markers` is the set of markers that fired, comma-joined the way evidence_tiers
   # beside it already is: "CLAUDE.md,gitignore:.claude". It is what lets a reader ask
@@ -958,6 +959,58 @@ write_repo_owner <- function(con, snapshot, repo_map, today) {
                      "%d not collected this run, %d removed\n"),
               counts$written, counts$no_owner, counts$other_type, counts$not_collected, counts$removed))
   invisible(counts)
+}
+
+# Integer columns of REPO_ATTR_COLS; the rest are text.
+.REPO_ATTR_INT <- c("is_archived", "median_days_between_releases")
+
+.repo_attrs_empty <- function() {
+  cols <- lapply(stats::setNames(REPO_ATTR_COLS, REPO_ATTR_COLS),
+                 function(cn) if (cn %in% .REPO_ATTR_INT) integer() else character())
+  as.data.frame(c(list(repo_id = character()), cols), stringsAsFactors = FALSE)
+}
+
+#' `df` on repo_id and REPO_ATTR_COLS, a missing column NA of its type. Pure.
+.repo_attrs_like <- function(df) {
+  empty <- .repo_attrs_empty()
+  if (is.null(df) || !nrow(df)) return(empty)
+  for (cn in setdiff(names(empty), names(df)))
+    df[[cn]] <- if (cn %in% .REPO_ATTR_INT) rep(NA_integer_, nrow(df)) else rep(NA_character_, nrow(df))
+  df <- df[names(empty)]
+  for (cn in .REPO_ATTR_INT) df[[cn]] <- suppressWarnings(as.integer(df[[cn]]))
+  for (cn in setdiff(names(empty), .REPO_ATTR_INT)) df[[cn]] <- as.character(df[[cn]])
+  rownames(df) <- NULL
+  df
+}
+
+#' The prior summary's REPO_ATTR_COLS, one row per repo_id. A column the table lacks, as in a
+#' summary written before that column existed, reads NA.
+prior_repo_attrs <- function(con) {
+  if (!DBI::dbExistsTable(con, "vcs_signals_summary")) return(.repo_attrs_empty())
+  have <- DBI::dbGetQuery(con, "PRAGMA table_info(vcs_signals_summary)")$name
+  cols <- intersect(c("repo_id", REPO_ATTR_COLS), have)
+  df <- DBI::dbGetQuery(con, sprintf("SELECT %s FROM vcs_signals_summary WHERE repo_id IS NOT NULL",
+                                     paste(sprintf('"%s"', cols), collapse = ", ")))
+  .repo_attrs_like(df[!duplicated(df$repo_id), , drop = FALSE])
+}
+
+#' This build's REPO_ATTR_COLS. A collected repository takes `fresh` and keeps its prior
+#' cadence; any other keeps its `prior` row. With `reset`, a repository not collected loses
+#' its two dates, so a date an older build derived another way is never carried. Pure.
+carry_repo_attrs <- function(fresh, prior, reset = FALSE) {
+  fresh <- .repo_attrs_like(fresh)
+  fresh <- fresh[!duplicated(fresh$repo_id), , drop = FALSE]
+  prior <- .repo_attrs_like(prior)
+  fresh$median_days_between_releases <-
+    prior$median_days_between_releases[match(fresh$repo_id, prior$repo_id)]
+  kept <- prior[!(prior$repo_id %in% fresh$repo_id), , drop = FALSE]
+  if (isTRUE(reset) && nrow(kept)) {
+    kept$last_commit_date <- NA_character_
+    kept$last_release_date <- NA_character_
+  }
+  out <- rbind(fresh, kept)
+  rownames(out) <- NULL
+  out
 }
 
 gauges_to_long <- function(snapshot, repo_map) {
