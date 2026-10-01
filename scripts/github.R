@@ -235,6 +235,23 @@ parse_resolve <- function(data, n) {
 #' is the vector of raw header lines from a `gh api ... -i` response (or
 #' character(0)/no matching line), so this is unit-testable without a
 #' network call.
+#' The top contributor in the contributors call's one-item body: its commit count and
+#' account type (User, Bot or Anonymous). NA for an empty body or any other shape. Pure.
+parse_contributor_top <- function(body) {
+  none <- list(top_commits = NA_integer_, top_type = NA_character_)
+  if (!is.list(body) || !length(body) || !is.null(names(body)) || !is.list(body[[1]])) return(none)
+  top <- body[[1]]
+  n <- suppressWarnings(as.integer(top$contributions))
+  list(top_commits = if (length(n) == 1L) n else NA_integer_,
+       top_type = if (is.character(top$type) && length(top$type) == 1L) top$type else NA_character_)
+}
+
+#' 1 for a bot account, 0 for a person, NA for an anonymous identity or anything else. Pure.
+contributor_bot_flag <- function(type) {
+  if (length(type) != 1L || is.na(type)) return(NA_integer_)
+  if (identical(type, "Bot")) 1L else if (identical(type, "User")) 0L else NA_integer_
+}
+
 parse_contributor_link_count <- function(headers, body_len) {
   link_line <- grep("^link:", headers, ignore.case = TRUE, value = TRUE)
   if (length(link_line) == 0) return(as.integer(body_len))
@@ -290,10 +307,12 @@ default_io <- function(token) {
 #' `Link` header's rel="last" page number directly gives the count (see
 #' parse_contributor_link_count). Same transport style as gh_graphql: routed
 #' through `gh` (auth, TLS), the token set via the environment and restored
-#' afterward, response headers captured via `-i`. Returns NA on any
-#' transport error, non-2xx status (e.g. a 404'd/renamed repo), or
+#' afterward, response headers captured via `-i`. Returns list(count,
+#' top_commits, top_type), the last two from the body's top contributor, all NA
+#' on any transport error, non-2xx status (e.g. a 404'd/renamed repo), or
 #' unparseable output, so one bad repo never aborts its caller's chunk.
 fetch_contributor_count <- function(token, owner, name) {
+  none <- list(count = NA_integer_, top_commits = NA_integer_, top_type = NA_character_)
   old <- Sys.getenv("GH_TOKEN", unset = NA)
   Sys.setenv(GH_TOKEN = token)
   on.exit({
@@ -308,16 +327,18 @@ fetch_contributor_count <- function(token, owner, name) {
                                           "-f", "per_page=1", "-f", "anon=true", "-i"),
                                   stdout = TRUE))
   status <- attr(out, "status")
-  if (!is.null(status) && !identical(as.integer(status), 0L)) return(NA_integer_)
+  if (!is.null(status) && !identical(as.integer(status), 0L)) return(none)
 
   blank <- which(!nzchar(trimws(out)))
-  if (length(blank) == 0) return(NA_integer_)
+  if (length(blank) == 0) return(none)
   header_lines <- out[seq_len(blank[1] - 1L)]
   body_txt <- paste(out[(blank[1] + 1L):length(out)], collapse = "\n")
   body <- tryCatch(jsonlite::fromJSON(body_txt, simplifyVector = FALSE), error = function(e) NULL)
-  if (is.null(body)) return(NA_integer_)
+  if (is.null(body)) return(none)
 
-  parse_contributor_link_count(header_lines, length(body))
+  top <- parse_contributor_top(body)
+  list(count = parse_contributor_link_count(header_lines, length(body)),
+       top_commits = top$top_commits, top_type = top$top_type)
 }
 
 #' Run one batched first-page query (build_batched_query) for a chunk of
