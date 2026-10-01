@@ -856,8 +856,9 @@ ensure_series_schema <- function(con) {
   DBI::dbExecute(con, "CREATE INDEX IF NOT EXISTS idx_vro_login ON vcs_repo_owner(owner_login_current COLLATE NOCASE)")
   DBI::dbExecute(con, "CREATE INDEX IF NOT EXISTS idx_vro_owner_node ON vcs_repo_owner(owner_node_id)")
   DBI::dbExecute(con, "CREATE INDEX IF NOT EXISTS idx_vro_node ON vcs_repo_owner(node_id)")
-  # Each repository's name and owner over time, one episode per name, from the same
-  # daily gauge answer. Rows are never deleted; a rename lies in (last_seen, ended_on].
+  # Each repository's name and owner over time, one episode for each period it kept one
+  # name and owner, from the same daily gauge answer. Rows are never deleted; a rename
+  # lies in (last_seen, ended_on].
   DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_repo_name_history (
     node_id          TEXT NOT NULL,
     episode_seq      INTEGER NOT NULL,

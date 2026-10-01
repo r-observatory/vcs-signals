@@ -1,5 +1,6 @@
 # vcs_repo_name_history dates each repository's name and owner from the daily gauge
-# answer: one episode per name and owner, closed the day another is seen.
+# answer: one episode for each period a repository kept one name and owner, closed the
+# day another is seen.
 
 .nh_snap <- function(node_id, nwo, owner_node)
   data.frame(node_id = node_id, name_with_owner = nwo, owner_login = sub("/.*$", "", nwo),
