@@ -1721,6 +1721,10 @@ build_release_notes <- function(summary, changed_shards, tag) {
 # sets. NA is a value here, not a wildcard: three of the model key columns are
 # NA for every tool whose trailer names no model, and a join that dropped them
 # would exempt most of the table from the only rule that reads it.
+# The first three of `x` and how many more, for a gate message.
+.gate_show <- function(x)
+  paste(c(utils::head(x, 3), if (length(x) > 3) sprintf("and %d more", length(x) - 3)), collapse = ", ")
+
 .gate_key <- function(df, cols) {
   if (is.null(df) || nrow(df) == 0) return(character(0))
   parts <- lapply(cols, function(k) {
@@ -2102,6 +2106,36 @@ build_release_notes <- function(summary, changed_shards, tag) {
   out
 }
 
+#' The rule for vcs_repo_name_history, which only grows: every published episode is kept,
+#' its first_seen never moves later nor its last_seen earlier, and a set ended_on never changes.
+.regress_repo_name_history <- function(pc, nc) {
+  t <- "vcs_repo_name_history"
+  key <- c("node_id", "episode_seq")
+  need <- c(key, "first_seen", "last_seen", "ended_on")
+  prev <- .gate_rows(pc, t); nxt <- .gate_rows(nc, t)
+  if (is.null(prev) || nrow(prev) == 0 || !all(need %in% names(prev))) return(character(0))
+  if (is.null(nxt) || !all(need %in% names(nxt)))
+    return(sprintf("%s: published without %s, so the gate cannot tell which episodes were kept",
+                   t, paste(setdiff(need, names(nxt)), collapse = ", ")))
+  name <- function(df) paste(df$node_id, df$episode_seq, sep = "#")
+  m <- match(.gate_key(prev, key), .gate_key(nxt, key))
+  gone <- is.na(m)
+  out <- character(0)
+  if (any(gone))
+    out <- c(out, sprintf("%s: %d episode(s) the published table has are gone: %s",
+                          t, sum(gone), .gate_show(name(prev[gone, , drop = FALSE]))))
+  kept <- prev[!gone, , drop = FALSE]
+  now <- nxt[m[!gone], , drop = FALSE]
+  bad <- list(
+    "had first_seen moved later" = is.na(now$first_seen) | now$first_seen > kept$first_seen,
+    "had last_seen moved earlier" = is.na(now$last_seen) | now$last_seen < kept$last_seen,
+    "had ended_on changed" = !is.na(kept$ended_on) & (is.na(now$ended_on) | now$ended_on != kept$ended_on))
+  for (what in names(bad)) if (any(bad[[what]]))
+    out <- c(out, sprintf("%s: %d episode(s) %s: %s", t, sum(bad[[what]]), what,
+                          .gate_show(name(kept[bad[[what]], , drop = FALSE]))))
+  out
+}
+
 #' Refuse to publish a summary that lost ground against the one already out.
 #'
 #' The published summary is a single asset, uploaded with --clobber, so a bad
@@ -2154,6 +2188,7 @@ summary_regressions <- function(prev_path, next_path, tol = 0.02) {
       # Rebuilt from config each merge: a smaller rule set is a ruleset change, not a loss.
       vcs_dev_tooling_rules  = character(0),
       vcs_repo_owner         = .regress_repo_owner(pc, nc),
+      vcs_repo_name_history  = .regress_repo_name_history(pc, nc),
       .regress_row_count(t, pc, nc, tol)))
   }
 

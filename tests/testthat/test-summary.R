@@ -169,3 +169,57 @@ test_that("the first publish of this ruleset carries the weekly-read note, a lat
   expect_equal(got$change_key[got$ruleset_version == AI_RULESET_VERSION], "ungated-weekly-read")
   expect_true(is.na(got$change_key[got$ruleset_version == "2099-01-01"]))
 })
+
+# ---- vcs_repo_name_history -------------------------------------------------------
+
+.nh_ep <- function(seq, first, last, ended = NA_character_)
+  data.frame(node_id = "R_1", episode_seq = seq, name_with_owner = sprintf("o/n%d", seq),
+             owner_node_id = "O_1", first_seen = first, last_seen = last,
+             first_seen_exact = as.integer(seq > 1L), ended_on = ended, stringsAsFactors = FALSE)
+.nh_summary <- function(rows) {
+  path <- tempfile(fileext = ".db")
+  con <- DBI::dbConnect(RSQLite::SQLite(), path); on.exit(DBI::dbDisconnect(con))
+  ensure_repo_schema(con); ensure_series_schema(con)
+  if (is.null(rows)) DBI::dbExecute(con, "DROP TABLE vcs_repo_name_history")
+  else if (nrow(rows)) DBI::dbWriteTable(con, "vcs_repo_name_history", rows, append = TRUE)
+  path
+}
+test_that("the name history rides every publish, before the owner table", {
+  at <- match("vcs_repo_name_history", SUMMARY_EXTRA_TABLES)
+  expect_false(is.na(at))
+  expect_lt(at, match("vcs_repo_owner", SUMMARY_EXTRA_TABLES))
+})
+
+.nh_prev <- function() .nh_summary(rbind(.nh_ep(1L, "2026-10-01", "2026-10-03", "2026-10-04"),
+                                         .nh_ep(2L, "2026-10-04", "2026-10-05")))
+
+test_that("the gate passes growth and a first publish", {
+  grown <- .nh_summary(rbind(.nh_ep(1L, "2026-10-01", "2026-10-03", "2026-10-04"),
+                             .nh_ep(2L, "2026-10-04", "2026-10-06")))
+  expect_equal(summary_regressions(.nh_prev(), grown), character(0))
+  expect_equal(summary_regressions(.nh_summary(NULL), .nh_prev()), character(0))
+  expect_equal(summary_regressions(.nh_summary(.nh_ep(1L, "x", "x")[0, ]), .nh_prev()), character(0))
+})
+
+test_that("the gate refuses a lost episode and every date that moved the wrong way", {
+  gone <- summary_regressions(.nh_prev(), .nh_summary(.nh_ep(1L, "2026-10-01", "2026-10-03", "2026-10-04")))
+  expect_true(any(grepl("vcs_repo_name_history: 1 episode(s) the published table has are gone: R_1#2",
+                        gone, fixed = TRUE)))
+  later <- summary_regressions(.nh_prev(), .nh_summary(rbind(
+    .nh_ep(1L, "2026-10-02", "2026-10-03", "2026-10-04"), .nh_ep(2L, "2026-10-04", "2026-10-05"))))
+  expect_true(any(grepl("first_seen moved later", later, fixed = TRUE)))
+  earlier <- summary_regressions(.nh_prev(), .nh_summary(rbind(
+    .nh_ep(1L, "2026-10-01", "2026-10-03", "2026-10-04"), .nh_ep(2L, "2026-10-04", "2026-10-04"))))
+  expect_true(any(grepl("last_seen moved earlier", earlier, fixed = TRUE)))
+  moved_end <- summary_regressions(.nh_prev(), .nh_summary(rbind(
+    .nh_ep(1L, "2026-10-01", "2026-10-03", "2026-10-05"), .nh_ep(2L, "2026-10-04", "2026-10-05"))))
+  expect_true(any(grepl("ended_on changed", moved_end, fixed = TRUE)))
+})
+
+test_that("a build that dropped the table's columns is refused", {
+  path <- tempfile(fileext = ".db")
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  DBI::dbExecute(con, "CREATE TABLE vcs_repo_name_history (node_id TEXT, episode_seq INTEGER)")
+  DBI::dbDisconnect(con)
+  expect_true(any(grepl("published without first_seen", summary_regressions(.nh_prev(), path), fixed = TRUE)))
+})
