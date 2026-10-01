@@ -318,6 +318,8 @@ read_links_backfill <- function(path) {
 # links existed after such a publish. Written once, by the first publish that
 # has any.
 LINKS_SINCE_KEY <- "repo_package_links_since"
+# The same for vcs_repo_name_history.
+NAME_HISTORY_SINCE_KEY <- "repo_name_history_since"
 
 .mark_links_published <- function(con, today) {
   if (!DBI::dbExistsTable(con, "repo_package_links") || !DBI::dbExistsTable(con, "pipeline_state"))
@@ -396,6 +398,49 @@ restore_package_links <- function(io, con, dir) {
     return(invisible(character(0)))
   }
   stop(msg, call. = FALSE)
+}
+
+.mark_name_history_published <- function(con, today) {
+  if (!DBI::dbExistsTable(con, "vcs_repo_name_history") || !DBI::dbExistsTable(con, "pipeline_state"))
+    return(invisible(FALSE))
+  DBI::dbExecute(con, "INSERT OR IGNORE INTO pipeline_state (key, value)
+    SELECT ?, ? WHERE EXISTS (SELECT 1 FROM vcs_repo_name_history)",
+    params = list(NAME_HISTORY_SINCE_KEY, today))
+  invisible(TRUE)
+}
+
+#' Put back the name history a publish by older code dropped, from the published summary
+#' or its previous copy, as restore_package_links does for the links, or stop: a table
+#' restarted empty would date no rename before today.
+restore_name_history <- function(io, con, dir) {
+  since <- tryCatch(DBI::dbGetQuery(con, "SELECT value FROM pipeline_state WHERE key = ?",
+                                    params = list(NAME_HISTORY_SINCE_KEY))$value,
+                    error = function(e) character(0))
+  if (length(since) == 0) return(invisible(character(0)))
+  if (DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM vcs_repo_name_history")$n > 0)
+    return(invisible(character(0)))
+  dir.create(dir, showWarnings = FALSE, recursive = TRUE)
+  cols <- c("node_id", "episode_seq", "name_with_owner", "owner_node_id", "first_seen",
+            "last_seen", "first_seen_exact", "ended_on")
+  for (asset in c("vcs-signals-summary.db", "vcs-signals-summary-prev.db")) {
+    path <- file.path(dir, asset)
+    if (!isTRUE(io$download(asset, dir)) || !file.exists(path)) next
+    pc <- DBI::dbConnect(RSQLite::SQLite(), path)
+    rows <- .gate_rows(pc, "vcs_repo_name_history")
+    DBI::dbDisconnect(pc)
+    if (is.null(rows) || nrow(rows) == 0 || !all(cols %in% names(rows))) next
+    DBI::dbWriteTable(con, "vcs_repo_name_history", rows[cols], append = TRUE)
+    message(sprintf(paste0("vcs-signals-recent.db carried no vcs_repo_name_history although the ",
+                           "release has published it since %s; restored %d rows from %s"),
+                    since[1], nrow(rows), asset))
+    return(invisible(asset))
+  }
+  stop(sprintf(paste0(
+    "the release has published vcs_repo_name_history since %s, but vcs-signals-recent.db carries ",
+    "none and neither vcs-signals-summary.db nor vcs-signals-summary-prev.db has a copy to restore ",
+    "it from. Code from before the table publishes without it. Going on would restart the table and ",
+    "lose every rename dated since %s; the summary a weekly AI run started from, in its ",
+    "ai-flagged-roster artifact, still has it."), since[1], since[1]), call. = FALSE)
 }
 
 #' `links_backfill`, when given, is a frame read_links_backfill() has already
@@ -2526,6 +2571,7 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
   export_series_shard(recent_path, recent_rows)
   # Before the embed, so the recent shard the next run seeds from says so.
   .mark_links_published(con, format(today))
+  .mark_name_history_published(con, format(today))
   .embed_recent_tables(con, recent_path)
   shard_names <- c(shard_names, recent_shard)
 

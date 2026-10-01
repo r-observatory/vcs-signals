@@ -164,6 +164,8 @@ seed_working_db <- function(io, out_dir, working_path) {
   # a history with nothing left to restore from.
   .pull_or_conflict(io, generation, "while restoring the link table", function()
     restore_package_links(io, wcon, file.path(out_dir, "_links_restore")))
+  .pull_or_conflict(io, generation, "while restoring the name history", function()
+    restore_name_history(io, wcon, file.path(out_dir, "_names_restore")))
   seeded(TRUE)
 }
 
