@@ -70,14 +70,6 @@
 # handled on its own.
 .PUBLISH_STEP_USES <- "^\\s*(-\\s+)?uses:\\s*['\"]?(\\./|[^\\s#'\"]*(release|github-script))"
 
-# Workflows from other repositories that never write release current. This
-# suite cannot read them, so each one is listed here, ref included, after a
-# check by hand: the CI log archive writes only this repository's ci-logs
-# release. Any other remote workflow, or this one at another ref, still counts
-# as publishing.
-.REMOTE_WORKFLOWS_WRITING_ELSEWHERE <- c(
-  "r-observatory/.github/.github/workflows/archive-ci-logs.yml@main")
-
 .is_code <- function(lines) !grepl("^\\s*(#.*)?$", lines)
 .indent  <- function(lines) nchar(sub("^( *).*$", "\\1", lines))
 
@@ -206,13 +198,12 @@
 
   # A job-level uses: calls a whole workflow. One from this directory is read
   # on its own, and its publishing job takes the lock there; one from anywhere
-  # else cannot be read, so the call itself counts as publishing unless it is
-  # listed in .REMOTE_WORKFLOWS_WRITING_ELSEWHERE.
+  # else cannot be read, so the call itself counts as publishing.
   called <- sub("^\\s*uses:\\s*", "", code[own & grepl("^\\s*uses:", code)])
   called <- gsub("^['\"]|['\"]$", "", trimws(sub("\\s+#.*$", "", called)))
   local <- startsWith(called, "./.github/workflows/") &
     sub("^\\./\\.github/workflows/", "", called) %in% workflows
-  evidence <- c(evidence, called[!local & !called %in% .REMOTE_WORKFLOWS_WRITING_ELSEWHERE])
+  evidence <- c(evidence, called[!local])
 
   step <- grepl("^\\s*-\\s+uses:", code) | (!own & grepl("^\\s*uses:", code))
   evidence <- c(evidence, code[step & grepl(.PUBLISH_STEP_USES, code, perl = TRUE)])
@@ -606,34 +597,6 @@ test_that("a called workflow is audited in its own file, not at the call", {
   expect_match(audit$problems, "job missing writes release current but is not in", fixed = TRUE, all = FALSE)
   expect_match(audit$problems, "job remote writes release current but is not in", fixed = TRUE, all = FALSE)
   expect_match(audit$problems, "job local_locked calls a workflow from this directory", fixed = TRUE, all = FALSE)
-})
-
-test_that("the CI log archive call is not a publisher, at its listed ref only", {
-  wf <- c(
-    "name: caller",
-    "on: workflow_dispatch",
-    "jobs:",
-    "  archive:",
-    "    uses: r-observatory/.github/.github/workflows/archive-ci-logs.yml@main",
-    "  quoted:",
-    "    uses: 'r-observatory/.github/.github/workflows/archive-ci-logs.yml@main'",
-    "  other_ref:",
-    "    uses: r-observatory/.github/.github/workflows/archive-ci-logs.yml@v1",
-    "  other_workflow:",
-    "    uses: r-observatory/.github/.github/workflows/publish.yml@main")
-
-  audit <- .publish_lock_audit(wf, "caller.yml", workflows = "caller.yml")
-  expect_setequal(audit$publishers, paste0("caller.yml:", c("other_ref", "other_workflow")))
-  expect_length(audit$problems, 2L)
-
-  wf_dir <- file.path(.repo_root, ".github", "workflows")
-  skip_if_not(dir.exists(wf_dir), "workflows not in this checkout")
-  caller <- file.path(wf_dir, "archive-ci-logs.yml")
-  expect_true(file.exists(caller))
-  real <- .publish_lock_audit(readLines(caller, warn = FALSE), "archive-ci-logs.yml",
-                              list.files(wf_dir, pattern = "\\.ya?ml$"))
-  expect_length(real$publishers, 0L)
-  expect_length(real$problems, 0L)
 })
 
 # The step (a "- " item and the lines under it) that holds line `at` of a job body,
