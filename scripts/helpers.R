@@ -1762,14 +1762,14 @@ build_release_notes <- function(summary, changed_shards, tag) {
 # Elementwise, and a NULL status is not a claim of anything.
 .gate_status_is <- function(x, want) !is.na(x) & x == want
 
-# One string per row over the named columns, so two frames can be compared as
-# sets. NA is a value here, not a wildcard: three of the model key columns are
-# NA for every tool whose trailer names no model, and a join that dropped them
-# would exempt most of the table from the only rule that reads it.
 # The first three of `x` and how many more, for a gate message.
 .gate_show <- function(x)
   paste(c(utils::head(x, 3), if (length(x) > 3) sprintf("and %d more", length(x) - 3)), collapse = ", ")
 
+# One string per row over the named columns, so two frames can be compared as
+# sets. NA is a value here, not a wildcard: three of the model key columns are
+# NA for every tool whose trailer names no model, and a join that dropped them
+# would exempt most of the table from the only rule that reads it.
 .gate_key <- function(df, cols) {
   if (is.null(df) || nrow(df) == 0) return(character(0))
   parts <- lapply(cols, function(k) {
