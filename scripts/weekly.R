@@ -139,9 +139,7 @@ run_fetch_shard <- function(io, out_dir, roster_path, i, N,
 }
 
 # ---- merge --------------------------------------------------------------------
-#' Fold every shard's snapshot of the five WEEKLY_METRICS
-#' (commits_total, contributors_total, median_days_to_close_issue,
-#' median_days_to_close_pr, median_open_issue_age_days) into the published
+#' Fold every shard's snapshot of every WEEKLY_METRICS value into the published
 #' series as a change-only point dated today, rebuild the summary, and
 #' republish. Mirrors backfill.R::run_merge's seed + complete-history-load
 #' pattern (seed_working_db for the recent window, then protect_history_pull

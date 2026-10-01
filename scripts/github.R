@@ -225,16 +225,6 @@ parse_resolve <- function(data, n) {
   }))
 }
 
-#' Parse the `Link` response header GitHub's REST API returns on the
-#' contributors endpoint (called with per_page=1&anon=true, see
-#' fetch_contributor_count) into a contributor count. When the response is
-#' paginated, the `rel="last"` link's `page` query parameter IS the total
-#' contributor count, since each page holds exactly one item. When there is
-#' no `Link` header at all (fewer than 2 contributors), the count is simply
-#' the number of items in the parsed response body (0 or 1). Pure: `headers`
-#' is the vector of raw header lines from a `gh api ... -i` response (or
-#' character(0)/no matching line), so this is unit-testable without a
-#' network call.
 #' The top contributor in the contributors call's one-item body: its commit count and
 #' account type (User, Bot or Anonymous). NA for an empty body or any other shape. Pure.
 parse_contributor_top <- function(body) {
@@ -252,6 +242,16 @@ contributor_bot_flag <- function(type) {
   if (identical(type, "Bot")) 1L else if (identical(type, "User")) 0L else NA_integer_
 }
 
+#' Parse the `Link` response header GitHub's REST API returns on the
+#' contributors endpoint (called with per_page=1&anon=true, see
+#' fetch_contributor_count) into a contributor count. When the response is
+#' paginated, the `rel="last"` link's `page` query parameter IS the total
+#' contributor count, since each page holds exactly one item. When there is
+#' no `Link` header at all (fewer than 2 contributors), the count is simply
+#' the number of items in the parsed response body (0 or 1). Pure: `headers`
+#' is the vector of raw header lines from a `gh api ... -i` response (or
+#' character(0)/no matching line), so this is unit-testable without a
+#' network call.
 parse_contributor_link_count <- function(headers, body_len) {
   link_line <- grep("^link:", headers, ignore.case = TRUE, value = TRUE)
   if (length(link_line) == 0) return(as.integer(body_len))
