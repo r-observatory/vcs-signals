@@ -61,6 +61,12 @@ contributor_reply <- function(v) {
        top_type = one(v$top_type, as.character, NA_character_))
 }
 
+#' Repositories whose snapshot row read a top contributor's commits but no Bot or
+#' User account type: an anonymous contributor, or a type GitHub did not give. Pure.
+untyped_top_contributors <- function(snapshot) {
+  snapshot$repo_id[!is.na(snapshot$top_contributor_commits) & is.na(snapshot$top_contributor_bot)]
+}
+
 #' Collect commits_total, contributors_total, and the three responsiveness
 #' medians (median_days_to_close_issue, median_days_to_close_pr,
 #' median_open_issue_age_days) for one even mod-N shard of the roster.
@@ -226,6 +232,12 @@ run_merge <- function(io, out_dir, parts_dir) {
       "INSERT OR REPLACE INTO series_latest (repo_id, metric, value) VALUES (?,?,?)",
       params = list(mat$new_latest$repo_id, mat$new_latest$metric, mat$new_latest$value))
   }
+  # The stored flag described an earlier top contributor, so it goes and the summary
+  # reads NA. signals_series has no NA value: its earlier points stay and none is added.
+  untyped <- untyped_top_contributors(snapshot)
+  if (length(untyped) > 0)
+    DBI::dbExecute(con, "DELETE FROM series_latest WHERE metric = 'top_contributor_bot' AND repo_id = ?",
+                   params = list(untyped))
 
   # Rebuild the summary so commits_total/contributors_total populate. No
   # repository is gauged this run, so every REPO_ATTR_COLS value is carried

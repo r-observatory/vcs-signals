@@ -126,7 +126,7 @@ BATCH_REPOS <- 20L   # repos per batched first-page query (a multi-repo aliased 
 
 # ---- weekly commit-count + contributor-count collection ----
 # top_contributor_commits and top_contributor_bot come from the body of the
-# contributors call; the bot flag is 1 for a bot account, 0 for a person.
+# contributors call; the bot flag is 1 for a bot account, 0 for a user account.
 WEEKLY_METRICS <- c("commits_total", "contributors_total",
                     "median_days_to_close_issue", "median_days_to_close_pr",
                     "median_open_issue_age_days",

@@ -236,7 +236,7 @@ parse_contributor_top <- function(body) {
        top_type = if (is.character(top$type) && length(top$type) == 1L) top$type else NA_character_)
 }
 
-#' 1 for a bot account, 0 for a person, NA for an anonymous identity or anything else. Pure.
+#' 1 for a bot account, 0 for a user account, NA for an anonymous contributor or any other type. Pure.
 contributor_bot_flag <- function(type) {
   if (length(type) != 1L || is.na(type)) return(NA_integer_)
   if (identical(type, "Bot")) 1L else if (identical(type, "User")) 0L else NA_integer_

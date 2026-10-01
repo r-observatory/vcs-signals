@@ -23,7 +23,7 @@ test_that("an empty body, an error object or a missing count has no top contribu
                list(top_commits = NA_integer_, top_type = "User"))
 })
 
-test_that("the bot flag is 1 for a bot, 0 for a person, and unknown otherwise", {
+test_that("the bot flag is 1 for a bot account, 0 for a user account, and unknown otherwise", {
   expect_identical(contributor_bot_flag("Bot"), 1L)
   expect_identical(contributor_bot_flag("User"), 0L)
   expect_identical(contributor_bot_flag("Anonymous"), NA_integer_)
@@ -79,15 +79,23 @@ test_that("run_fetch_shard stores the top contributor's commits and bot flag bes
 })
 
 .tc_rid <- "github.com/a/ok"
-.tc_release <- function() {
+.tc_weeks_ago <- function(n) format(Sys.Date() - 7L * n)
+.tc_point <- function(weeks_ago, metric, value)
+  data.frame(repo_id = .tc_rid, date = .tc_weeks_ago(weeks_ago), metric = metric, value = value,
+             stringsAsFactors = FALSE)
+# A release as earlier weekly runs left it: `points` are their series rows and
+# `latest` the values they last stored, named by metric.
+.tc_release <- function(points = NULL, latest = integer(0)) {
   rel <- tempfile("tc_rel_"); dir.create(rel)
   today <- format(Sys.Date())
   recent <- file.path(rel, "vcs-signals-recent.db")
-  export_series_shard(recent, data.frame(repo_id = .tc_rid, date = today, metric = "stars",
-                                         value = 42L, stringsAsFactors = FALSE))
+  export_series_shard(recent, rbind(data.frame(repo_id = .tc_rid, date = today, metric = "stars",
+                                               value = 42L, stringsAsFactors = FALSE), points))
   con <- DBI::dbConnect(RSQLite::SQLite(), recent); on.exit(DBI::dbDisconnect(con))
   ensure_repo_schema(con); ensure_series_schema(con)
   DBI::dbExecute(con, "INSERT INTO series_latest VALUES (?, 'stars', 42)", params = list(.tc_rid))
+  for (m in names(latest))
+    DBI::dbExecute(con, "INSERT INTO series_latest VALUES (?, ?, ?)", params = list(.tc_rid, m, latest[[m]]))
   DBI::dbWriteTable(con, "repos", data.frame(repo_id = .tc_rid, node_id = "R_1", host = "github",
     host_domain = "github.com", owner = "a", name = "ok", name_with_owner = "a/ok", supported = 1L,
     n_packages = 1L, first_seen = "2026-01-01", last_seen = today, status = "active",
@@ -108,11 +116,34 @@ test_that("run_fetch_shard stores the top contributor's commits and bot flag bes
 .tc_published <- function(rel) {
   con <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel, "vcs-signals-recent.db"))
   on.exit(DBI::dbDisconnect(con))
-  list(series = DBI::dbGetQuery(con, "SELECT metric, value FROM signals_series
+  list(series = DBI::dbGetQuery(con, "SELECT metric, date, value FROM signals_series
+                                       WHERE metric LIKE 'top_contributor%' ORDER BY metric, date"),
+       latest = DBI::dbGetQuery(con, "SELECT metric, value FROM series_latest
                                        WHERE metric LIKE 'top_contributor%' ORDER BY metric"),
        summary = DBI::dbGetQuery(con, "SELECT top_contributor_commits, top_contributor_bot
                                         FROM vcs_signals_summary"))
 }
+.tc_merge <- function(rel, parts)
+  suppressMessages(.tc_weekly$run_merge(local_release_io(rel), tempfile("tc_m_"), parts))
+# The shard a weekly fetch writes for the one repository when the contributors call answers `reply`.
+.tc_fetched <- function(reply) {
+  out_dir <- tempfile("tc_fetch_"); dir.create(out_dir)
+  roster_path <- file.path(out_dir, "vcs-signals-roster.db")
+  write_roster(roster_path, data.frame(repo_id = .tc_rid, owner = "a", name = "ok", stars = 1L,
+                                       done = 0L, stringsAsFactors = FALSE))
+  io <- list(
+    graphql = function(query) list(data = list(
+      r0 = list(defaultBranchRef = list(target = list(history = list(totalCount = 500)))))),
+    contributors = function(owner, name) reply)
+  suppressMessages(.tc_weekly$run_fetch_shard(io, out_dir, roster_path, 0, 1,
+                                              commit_delay = 0, contributor_delay = 0))
+  out_dir
+}
+# Last week's published state: the top contributor had 1537 commits and the given flag.
+.tc_last_week <- function(bot) .tc_release(
+  points = rbind(.tc_point(1, "top_contributor_commits", 1537L), .tc_point(1, "top_contributor_bot", bot)),
+  latest = c(top_contributor_commits = 1537L, top_contributor_bot = bot))
+.tc_flag_points <- function(got) got$series[got$series$metric == "top_contributor_bot", ]
 
 test_that("the weekly merge writes both metrics change-only and the summary carries them", {
   rel <- .tc_release()
@@ -128,4 +159,72 @@ test_that("the weekly merge writes both metrics change-only and the summary carr
   expect_equal(got$series$value[got$series$metric == "top_contributor_bot"], 1L)
   expect_equal(got$summary$top_contributor_bot, 1L)
   expect_equal(sum(got$series$metric == "top_contributor_commits"), 1L)
+})
+
+test_that("untyped_top_contributors names the rows with commits and no flag", {
+  snap <- data.frame(repo_id = c("user", "bot", "anon", "unread"),
+                     top_contributor_commits = c(10L, 20L, 30L, NA),
+                     top_contributor_bot = c(0L, 1L, NA, NA), stringsAsFactors = FALSE)
+  expect_equal(.tc_weekly$untyped_top_contributors(snap), "anon")
+  expect_equal(.tc_weekly$untyped_top_contributors(snap[0, ]), character(0))
+  # A shard written before the two metrics existed has neither column.
+  expect_equal(.tc_weekly$untyped_top_contributors(snap["repo_id"]), character(0))
+})
+
+test_that("a user account that gives way to an anonymous top contributor leaves no flag", {
+  rel <- .tc_last_week(bot = 0L)
+  .tc_merge(rel, .tc_fetched(list(count = 12L, top_commits = 1600L, top_type = "Anonymous")))
+  got <- .tc_published(rel)
+  expect_equal(got$summary$top_contributor_commits, 1600L)
+  expect_true(is.na(got$summary$top_contributor_bot))
+  expect_equal(got$latest$metric, "top_contributor_commits")
+  expect_equal(got$latest$value, 1600L)
+  # The series cannot hold an empty value: last week's point stays and this week adds none.
+  expect_equal(.tc_flag_points(got)$date, .tc_weeks_ago(1))
+  expect_equal(.tc_flag_points(got)$value, 0L)
+})
+
+test_that("a bot account that gives way to an anonymous top contributor leaves no flag", {
+  rel <- .tc_last_week(bot = 1L)
+  .tc_merge(rel, .tc_fetched(list(count = 12L, top_commits = 1600L, top_type = "Anonymous")))
+  got <- .tc_published(rel)
+  expect_equal(got$summary$top_contributor_commits, 1600L)
+  expect_true(is.na(got$summary$top_contributor_bot))
+  expect_equal(got$latest$metric, "top_contributor_commits")
+  expect_equal(.tc_flag_points(got)$date, .tc_weeks_ago(1))
+})
+
+test_that("an account type that is neither Bot nor User leaves no flag", {
+  for (type in list("Organization", NULL)) {
+    rel <- .tc_last_week(bot = 0L)
+    .tc_merge(rel, .tc_fetched(list(count = 12L, top_commits = 1600L, top_type = type)))
+    got <- .tc_published(rel)
+    expect_equal(got$summary$top_contributor_commits, 1600L)
+    expect_true(is.na(got$summary$top_contributor_bot))
+    expect_equal(got$latest$metric, "top_contributor_commits")
+  }
+})
+
+test_that("a user account that follows an anonymous top contributor writes the flag again", {
+  # Two weeks ago a user account, last week anonymous, so no flag is stored.
+  rel <- .tc_release(
+    points = rbind(.tc_point(2, "top_contributor_commits", 1537L), .tc_point(2, "top_contributor_bot", 0L),
+                   .tc_point(1, "top_contributor_commits", 1600L)),
+    latest = c(top_contributor_commits = 1600L))
+  .tc_merge(rel, .tc_fetched(list(count = 12L, top_commits = 1650L, top_type = "User")))
+  got <- .tc_published(rel)
+  expect_equal(got$summary$top_contributor_commits, 1650L)
+  expect_equal(got$summary$top_contributor_bot, 0L)
+  expect_equal(got$latest$value[got$latest$metric == "top_contributor_bot"], 0L)
+  expect_equal(.tc_flag_points(got)$date, c(.tc_weeks_ago(2), .tc_weeks_ago(0)))
+  expect_equal(.tc_flag_points(got)$value, c(0L, 0L))
+})
+
+test_that("a contributors read that fails keeps the stored commits and flag", {
+  rel <- .tc_last_week(bot = 1L)
+  .tc_merge(rel, .tc_fetched(NULL))
+  got <- .tc_published(rel)
+  expect_equal(got$summary$top_contributor_commits, 1537L)
+  expect_equal(got$summary$top_contributor_bot, 1L)
+  expect_equal(got$latest$metric, c("top_contributor_bot", "top_contributor_commits"))
 })
