@@ -48,3 +48,32 @@ test_that("the empty gauge frame has the parsed frame's columns", {
     expect_type(empty[[col]], "character")
   expect_equal(names(parse_gauges(list(NULL))), names(empty))
 })
+
+test_that("parse_gauges reads the newest commit on the default branch and the latest release tag", {
+  j <- jsonlite::fromJSON(readLines("fixtures/gauges.json", warn = FALSE),
+                          simplifyVector = FALSE)
+  df <- parse_gauges(j$data$nodes)
+  a <- df[df$node_id == "R_a", ]
+  expect_equal(a$head_committed_at, "2026-06-30T12:00:00Z")
+  expect_equal(a$last_release_tag, "v3.5.0")
+  expect_equal(a$last_release_at, "2026-01-10T00:00:00Z")
+  expect_equal(a$created_at, "2008-05-25T00:00:00Z")
+  b <- df[df$node_id == "R_b", ]
+  expect_true(is.na(b$head_committed_at))   # empty repository: defaultBranchRef is null
+  expect_true(is.na(b$last_release_tag))
+  expect_type(df$head_committed_at, "character")
+  expect_type(df$last_release_tag, "character")
+})
+
+test_that("a default branch whose target carries no commit date reads NA, not an error", {
+  j <- jsonlite::fromJSON(readLines("fixtures/gauges_one.json", warn = FALSE),
+                          simplifyVector = FALSE)
+  node <- j$data$nodes[[1]]
+  node$defaultBranchRef <- list(target = setNames(list(), character(0)))
+  node$latestRelease <- list(tagName = NULL, publishedAt = NULL, isPrerelease = FALSE)
+  df <- parse_gauges(list(node))
+  expect_equal(nrow(df), 1L)
+  expect_true(is.na(df$head_committed_at))
+  expect_true(is.na(df$last_release_tag))
+  expect_true(is.na(df$last_release_at))
+})

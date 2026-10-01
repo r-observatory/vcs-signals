@@ -16,6 +16,7 @@ build_gauge_query <- function(node_ids) {
     mergedPRs: pullRequests(states: MERGED) { totalCount }
     releases { totalCount }
     latestRelease { tagName publishedAt isPrerelease }
+    defaultBranchRef { target { ... on Commit { committedDate } } }
     licenseInfo { spdxId }
     repositoryTopics(first: 20) { nodes { topic { name } } }
     isArchived isFork isMirror isDisabled
@@ -142,6 +143,9 @@ parse_gauges <- function(nodes) {
       created_at = .nn(n$createdAt, NA_character_),
       pushed_at = .nn(n$pushedAt, NA_character_),
       last_release_at = .nn(n$latestRelease$publishedAt, NA_character_),
+      last_release_tag = .nn(n$latestRelease$tagName, NA_character_),
+      # NA for an empty repository, whose defaultBranchRef is null.
+      head_committed_at = .nn(n$defaultBranchRef$target$committedDate, NA_character_),
       stringsAsFactors = FALSE)
   })
   rows <- Filter(Negate(is.null), rows)
@@ -156,7 +160,8 @@ rows_df_empty_gauges <- function() {
     prs_open = integer(), prs_closed = integer(), prs_merged = integer(), releases_total = integer(),
     size_kb = integer(), license = character(), topics = character(), is_archived = integer(),
     is_fork = integer(), is_mirror = integer(), created_at = character(), pushed_at = character(),
-    last_release_at = character(), stringsAsFactors = FALSE)
+    last_release_at = character(), last_release_tag = character(), head_committed_at = character(),
+    stringsAsFactors = FALSE)
 }
 
 #' Typed zero-row nodes frame for a metric's kind: ts for cumulative metrics,
