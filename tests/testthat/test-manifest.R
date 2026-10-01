@@ -61,6 +61,7 @@ test_that("summary_integrity_core reports filename, bytes, sha256, tables, compl
     vcs_ai_silent_channels = 0L,
     vcs_dev_tooling     = 0L,
     vcs_dev_tooling_rules = 0L,
+    vcs_repo_name_history = 0L,
     vcs_repo_owner      = 0L,
     vcs_signals_summary = 3L))
   expect_true(core$complete)
@@ -192,6 +193,8 @@ test_that("every table the pipeline writes reaches the published summary with it
   DBI::dbExecute(con, "INSERT INTO vcs_repo_owner (repo_id, node_id, owner_login_current, owner_type,
     owner_node_id, name_with_owner_current, observed_on)
     VALUES ('github.com/o/r', 'R_1', 'o', 'Organization', 'O_1', 'o/r', '2026-09-25')")
+  DBI::dbExecute(con, "INSERT INTO vcs_repo_name_history VALUES
+    ('R_1', 1, 'o/r', 'O_1', '2026-09-25', '2026-09-25', 0, NULL)")
 
   out <- tempfile("pub_"); dir.create(out)
   rel <- tempfile("rel_"); dir.create(rel)
@@ -800,6 +803,8 @@ test_that("a publish and a reseed keep the extra tables, both ways round", {
   DBI::dbExecute(con, "INSERT INTO vcs_repo_owner (repo_id, node_id, owner_login_current, owner_type,
     owner_node_id, name_with_owner_current, observed_on)
     VALUES ('github.com/o/r', 'R_1', 'o', 'Organization', 'O_1', 'o/r', '2026-09-25')")
+  DBI::dbExecute(con, "INSERT INTO vcs_repo_name_history VALUES
+    ('R_1', 1, 'o/r', 'O_1', '2026-09-25', '2026-09-25', 0, NULL)")
 
   io <- local_release_io(remote)
   publish(io, con, out, "v1", "live", force_full = TRUE, base_generation = "")

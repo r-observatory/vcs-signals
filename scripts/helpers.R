@@ -318,6 +318,8 @@ read_links_backfill <- function(path) {
 # links existed after such a publish. Written once, by the first publish that
 # has any.
 LINKS_SINCE_KEY <- "repo_package_links_since"
+# The same for vcs_repo_name_history.
+NAME_HISTORY_SINCE_KEY <- "repo_name_history_since"
 
 .mark_links_published <- function(con, today) {
   if (!DBI::dbExistsTable(con, "repo_package_links") || !DBI::dbExistsTable(con, "pipeline_state"))
@@ -396,6 +398,48 @@ restore_package_links <- function(io, con, dir) {
     return(invisible(character(0)))
   }
   stop(msg, call. = FALSE)
+}
+
+.mark_name_history_published <- function(con, today) {
+  if (!DBI::dbExistsTable(con, "vcs_repo_name_history") || !DBI::dbExistsTable(con, "pipeline_state"))
+    return(invisible(FALSE))
+  DBI::dbExecute(con, "INSERT OR IGNORE INTO pipeline_state (key, value)
+    SELECT ?, ? WHERE EXISTS (SELECT 1 FROM vcs_repo_name_history)",
+    params = list(NAME_HISTORY_SINCE_KEY, today))
+  invisible(TRUE)
+}
+
+#' Put back the name history a publish by older code dropped, from the published summary
+#' or its previous copy, as restore_package_links does for the links, or stop: a table
+#' restarted empty would date no rename before today.
+restore_name_history <- function(io, con, dir) {
+  since <- tryCatch(DBI::dbGetQuery(con, "SELECT value FROM pipeline_state WHERE key = ?",
+                                    params = list(NAME_HISTORY_SINCE_KEY))$value,
+                    error = function(e) character(0))
+  if (length(since) == 0) return(invisible(character(0)))
+  if (DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM vcs_repo_name_history")$n > 0)
+    return(invisible(character(0)))
+  dir.create(dir, showWarnings = FALSE, recursive = TRUE)
+  cols <- c("node_id", "episode_seq", "name_with_owner", "owner_node_id", "first_seen",
+            "last_seen", "first_seen_exact", "ended_on")
+  for (asset in c("vcs-signals-summary.db", "vcs-signals-summary-prev.db")) {
+    path <- file.path(dir, asset)
+    if (!isTRUE(io$download(asset, dir)) || !file.exists(path)) next
+    pc <- DBI::dbConnect(RSQLite::SQLite(), path)
+    rows <- .gate_rows(pc, "vcs_repo_name_history")
+    DBI::dbDisconnect(pc)
+    if (is.null(rows) || nrow(rows) == 0 || !all(cols %in% names(rows))) next
+    DBI::dbWriteTable(con, "vcs_repo_name_history", rows[cols], append = TRUE)
+    message(sprintf(paste0("vcs-signals-recent.db carried no vcs_repo_name_history although the ",
+                           "release has published it since %s; restored %d rows from %s"),
+                    since[1], nrow(rows), asset))
+    return(invisible(asset))
+  }
+  stop(sprintf(paste0(
+    "the release has published vcs_repo_name_history since %s, but vcs-signals-recent.db carries ",
+    "none and neither vcs-signals-summary.db nor vcs-signals-summary-prev.db has a copy to restore ",
+    "it from. Code from before the table publishes without it. Going on would restart the table and ",
+    "lose every rename dated since %s."), since[1], since[1]), call. = FALSE)
 }
 
 #' `links_backfill`, when given, is a frame read_links_backfill() has already
@@ -812,6 +856,23 @@ ensure_series_schema <- function(con) {
   DBI::dbExecute(con, "CREATE INDEX IF NOT EXISTS idx_vro_login ON vcs_repo_owner(owner_login_current COLLATE NOCASE)")
   DBI::dbExecute(con, "CREATE INDEX IF NOT EXISTS idx_vro_owner_node ON vcs_repo_owner(owner_node_id)")
   DBI::dbExecute(con, "CREATE INDEX IF NOT EXISTS idx_vro_node ON vcs_repo_owner(node_id)")
+  # Each repository's name and owner over time, one episode for each period it kept one
+  # name and owner, from the same daily gauge answer. Rows are never deleted; a rename
+  # lies in (last_seen, ended_on].
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_repo_name_history (
+    node_id          TEXT NOT NULL,
+    episode_seq      INTEGER NOT NULL,
+    name_with_owner  TEXT NOT NULL,
+    owner_node_id    TEXT NOT NULL,
+    first_seen       TEXT NOT NULL,
+    last_seen        TEXT NOT NULL,
+    first_seen_exact INTEGER NOT NULL,
+    ended_on         TEXT,
+    PRIMARY KEY (node_id, episode_seq),
+    CHECK (last_seen >= first_seen),
+    CHECK (ended_on IS NULL OR ended_on >= last_seen)) WITHOUT ROWID")
+  DBI::dbExecute(con, "CREATE UNIQUE INDEX IF NOT EXISTS ux_vrnh_open
+    ON vcs_repo_name_history(node_id) WHERE ended_on IS NULL")
   # Dev-tooling presence snapshot, one wide row per repo. WITHOUT ROWID is deliberate (see
   # dev_tooling_create_sql): a repo_id point lookup is a single covering seek. The DDL is
   # config-derived so it cannot drift from classify_dev_tooling.
@@ -922,8 +983,44 @@ record_ruleset_history <- function(con, today, version, keys) {
   invisible(NULL)
 }
 
+#' Date renames and transfers from today's gauge answer: a node whose name and owner
+#' match its open episode extends it, any other closes it and opens the next. A node
+#' the answer missed keeps its open episode. Called inside write_repo_owner's transaction.
+.write_name_history <- function(con, sn, today) {
+  obs <- sn[!is.na(sn$name_with_owner) & !is.na(sn$owner_node_id),
+            c("node_id", "name_with_owner", "owner_node_id"), drop = FALSE]
+  open <- DBI::dbGetQuery(con, "SELECT node_id, episode_seq, name_with_owner, owner_node_id
+                                  FROM vcs_repo_name_history WHERE ended_on IS NULL")
+  top <- DBI::dbGetQuery(con, "SELECT node_id, MAX(episode_seq) AS seq
+                                 FROM vcs_repo_name_history GROUP BY node_id")
+  k <- match(obs$node_id, open$node_id)
+  same <- !is.na(k) & obs$name_with_owner == open$name_with_owner[k] &
+    obs$owner_node_id == open$owner_node_id[k]
+  moved <- !is.na(k) & !same
+  if (any(same))
+    DBI::dbExecute(con, "UPDATE vcs_repo_name_history SET last_seen = MAX(last_seen, ?)
+                          WHERE node_id = ? AND episode_seq = ?",
+                   params = list(rep(today, sum(same)), obs$node_id[same], open$episode_seq[k[same]]))
+  if (any(moved))
+    DBI::dbExecute(con, "UPDATE vcs_repo_name_history SET ended_on = ?
+                          WHERE node_id = ? AND episode_seq = ?",
+                   params = list(rep(today, sum(moved)), obs$node_id[moved], open$episode_seq[k[moved]]))
+  new <- obs[!same, , drop = FALSE]
+  if (nrow(new) > 0) {
+    seq <- top$seq[match(new$node_id, top$node_id)]
+    DBI::dbExecute(con, "INSERT INTO vcs_repo_name_history (node_id, episode_seq, name_with_owner,
+                          owner_node_id, first_seen, last_seen, first_seen_exact, ended_on)
+                          VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
+                   params = list(new$node_id, ifelse(is.na(seq), 1L, as.integer(seq) + 1L),
+                                 new$name_with_owner, new$owner_node_id, rep(today, nrow(new)),
+                                 rep(today, nrow(new)), as.integer(moved[!same])))
+  }
+  list(kept = sum(same), moved = sum(moved), first = sum(is.na(k)))
+}
+
 #' Rewrite vcs_repo_owner from today's gauge snapshot in one transaction. A row the
 #' snapshot missed stays for OWNER_STALE_DAYS; a repo_id no longer in repo_map goes.
+#' vcs_repo_name_history is written in the same transaction from the same snapshot.
 write_repo_owner <- function(con, snapshot, repo_map, today) {
   today <- as.Date(today)
   cols <- c("node_id", "name_with_owner", "owner_login", "owner_type", "owner_node_id")
@@ -954,11 +1051,14 @@ write_repo_owner <- function(con, snapshot, repo_map, today) {
   counts$removed <- counts$removed + DBI::dbExecute(con,
     "DELETE FROM vcs_repo_owner WHERE observed_on < ?",
     params = list(format(today - OWNER_STALE_DAYS)))
+  names_n <- .write_name_history(con, sn[sn$node_id %in% repo_map$node_id, , drop = FALSE], format(today))
   DBI::dbCommit(con); ok <- TRUE
 
   cat(sprintf(paste0("repo owners: %d written, %d with no owner returned, %d with another owner type, ",
                      "%d not collected this run, %d removed\n"),
               counts$written, counts$no_owner, counts$other_type, counts$not_collected, counts$removed))
+  cat(sprintf("repo names: %d unchanged, %d renamed or moved, %d seen for the first time\n",
+              names_n$kept, names_n$moved, names_n$first))
   invisible(counts)
 }
 
@@ -1662,6 +1762,10 @@ build_release_notes <- function(summary, changed_shards, tag) {
 # Elementwise, and a NULL status is not a claim of anything.
 .gate_status_is <- function(x, want) !is.na(x) & x == want
 
+# The first three of `x` and how many more, for a gate message.
+.gate_show <- function(x)
+  paste(c(utils::head(x, 3), if (length(x) > 3) sprintf("and %d more", length(x) - 3)), collapse = ", ")
+
 # One string per row over the named columns, so two frames can be compared as
 # sets. NA is a value here, not a wildcard: three of the model key columns are
 # NA for every tool whose trailer names no model, and a join that dropped them
@@ -2047,6 +2151,36 @@ build_release_notes <- function(summary, changed_shards, tag) {
   out
 }
 
+#' The rule for vcs_repo_name_history, which only grows: every published episode is kept,
+#' its first_seen never moves later nor its last_seen earlier, and a set ended_on never changes.
+.regress_repo_name_history <- function(pc, nc) {
+  t <- "vcs_repo_name_history"
+  key <- c("node_id", "episode_seq")
+  need <- c(key, "first_seen", "last_seen", "ended_on")
+  prev <- .gate_rows(pc, t); nxt <- .gate_rows(nc, t)
+  if (is.null(prev) || nrow(prev) == 0 || !all(need %in% names(prev))) return(character(0))
+  if (is.null(nxt) || !all(need %in% names(nxt)))
+    return(sprintf("%s: published without %s, so the gate cannot tell which episodes were kept",
+                   t, paste(setdiff(need, names(nxt)), collapse = ", ")))
+  name <- function(df) paste(df$node_id, df$episode_seq, sep = "#")
+  m <- match(.gate_key(prev, key), .gate_key(nxt, key))
+  gone <- is.na(m)
+  out <- character(0)
+  if (any(gone))
+    out <- c(out, sprintf("%s: %d episode(s) the published table has are gone: %s",
+                          t, sum(gone), .gate_show(name(prev[gone, , drop = FALSE]))))
+  kept <- prev[!gone, , drop = FALSE]
+  now <- nxt[m[!gone], , drop = FALSE]
+  bad <- list(
+    "had first_seen moved later" = is.na(now$first_seen) | now$first_seen > kept$first_seen,
+    "had last_seen moved earlier" = is.na(now$last_seen) | now$last_seen < kept$last_seen,
+    "had ended_on changed" = !is.na(kept$ended_on) & (is.na(now$ended_on) | now$ended_on != kept$ended_on))
+  for (what in names(bad)) if (any(bad[[what]]))
+    out <- c(out, sprintf("%s: %d episode(s) %s: %s", t, sum(bad[[what]]), what,
+                          .gate_show(name(kept[bad[[what]], , drop = FALSE]))))
+  out
+}
+
 #' Refuse to publish a summary that lost ground against the one already out.
 #'
 #' The published summary is a single asset, uploaded with --clobber, so a bad
@@ -2099,6 +2233,7 @@ summary_regressions <- function(prev_path, next_path, tol = 0.02) {
       # Rebuilt from config each merge: a smaller rule set is a ruleset change, not a loss.
       vcs_dev_tooling_rules  = character(0),
       vcs_repo_owner         = .regress_repo_owner(pc, nc),
+      vcs_repo_name_history  = .regress_repo_name_history(pc, nc),
       .regress_row_count(t, pc, nc, tol)))
   }
 
@@ -2436,6 +2571,7 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
   export_series_shard(recent_path, recent_rows)
   # Before the embed, so the recent shard the next run seeds from says so.
   .mark_links_published(con, format(today))
+  .mark_name_history_published(con, format(today))
   .embed_recent_tables(con, recent_path)
   shard_names <- c(shard_names, recent_shard)
 

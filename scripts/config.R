@@ -909,7 +909,7 @@ SUMMARY_EXTRA_TABLES <- c("vcs_ai_models", "vcs_ai_rule_inventory",
                           "vcs_ai_repo_reads", "vcs_ai_account_counts", "vcs_ai_search_log",
                           "vcs_ai_search_coverage", "vcs_ai_review_signals",
                           "vcs_ai_outside_prs", "vcs_ai_ruleset_history",
-                          "vcs_repo_owner")
+                          "vcs_repo_name_history", "vcs_repo_owner")
 
 # Package-to-repository links this pipeline published before it kept them. Built
 # from every surviving copy of what it published: the vcs_signals_summary in a
