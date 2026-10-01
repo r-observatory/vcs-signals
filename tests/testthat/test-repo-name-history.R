@@ -179,6 +179,8 @@ test_that("a seed that lost the name history restores it from the previous summa
 test_that("with no copy left the seed stops rather than restart the name history", {
   rel <- .nh_lost_release(NULL)
   out <- tempfile("nh_seed_"); dir.create(out)
-  expect_error(seed_working_db(local_release_io(rel), out, file.path(out, "_working.db")),
-               "vcs_repo_name_history since 2026-10-02")
+  err <- expect_error(seed_working_db(local_release_io(rel), out, file.path(out, "_working.db")),
+                      "vcs_repo_name_history since 2026-10-02")
+  # No workflow artifact carries the summary, so the message must not send anyone to one.
+  expect_false(grepl("artifact", conditionMessage(err), fixed = TRUE))
 })

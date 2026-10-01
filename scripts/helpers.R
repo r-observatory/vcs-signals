@@ -439,8 +439,7 @@ restore_name_history <- function(io, con, dir) {
     "the release has published vcs_repo_name_history since %s, but vcs-signals-recent.db carries ",
     "none and neither vcs-signals-summary.db nor vcs-signals-summary-prev.db has a copy to restore ",
     "it from. Code from before the table publishes without it. Going on would restart the table and ",
-    "lose every rename dated since %s; the summary a weekly AI run started from, in its ",
-    "ai-flagged-roster artifact, still has it."), since[1], since[1]), call. = FALSE)
+    "lose every rename dated since %s."), since[1], since[1]), call. = FALSE)
 }
 
 #' `links_backfill`, when given, is a frame read_links_backfill() has already
