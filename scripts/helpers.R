@@ -1131,15 +1131,15 @@ pr_merge_ratio <- function(merged, closed) {
 }
 
 #' The days a repository's release count rose, from its releases_total rows. The first row
-#' counts only when it is 1 and dated before `go_live`, where the backfill dated the first
-#' release; a later row counts when it is above the row before. Pure.
+#' counts only when it is above 0 and dated before `go_live`, where the backfill dated the
+#' first releases; a later row counts when it is above the row before. Pure.
 release_rise_dates <- function(dates, values, go_live = NA_character_) {
   ok <- !is.na(dates) & !is.na(values)
   d <- substr(as.character(dates[ok]), 1, 10)
   v <- as.integer(values[ok])
   if (!length(d)) return(character(0))
   o <- order(d); d <- d[o]; v <- v[o]
-  first <- isTRUE(v[1] == 1L && !is.na(go_live) && d[1] < substr(go_live, 1, 10))
+  first <- isTRUE(v[1] >= 1L && !is.na(go_live) && d[1] < substr(go_live, 1, 10))
   d[c(first, v[-1] > v[-length(v)])]
 }
 
