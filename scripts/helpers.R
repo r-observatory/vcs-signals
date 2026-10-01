@@ -1044,7 +1044,8 @@ materialize_series <- function(prev_latest, snapshot_long, date) {
 }
 
 build_signals_summary <- function(latest, series, repos, repo_packages, today,
-                                  compute_release_facts = FALSE, ai_signals = NULL) {
+                                  compute_release_facts = FALSE, ai_signals = NULL,
+                                  go_live = NA_character_) {
   ai_roll <- build_ai_rollups(ai_signals)
   ai_lookup <- function(rid, col) {
     v <- ai_roll[[col]][ai_roll$repo_id == rid]
@@ -1060,12 +1061,13 @@ build_signals_summary <- function(latest, series, repos, repo_packages, today,
       ai_markers_detected = logical(), ai_first_tool = character(), ai_first_date = character(),
       ai_tool_count = integer(), ai_tools = character(), ai_latest_tool = character(),
       ai_latest_date = character(),
-      first_seen = character(), last_seen = character(), stringsAsFactors = FALSE))
+      first_seen = character(), last_seen = character(),
+      last_release_tag = character(), repo_created_at = character(), stringsAsFactors = FALSE))
   val <- function(rid, met) {
     v <- latest$value[latest$repo_id == rid & latest$metric == met]
     if (length(v)) as.integer(v[1]) else NA_integer_
   }
-  rel_dates <- function(rid) series$date[series$repo_id == rid & series$metric == "releases_total"]
+  rel_rows <- function(rid) series[series$repo_id == rid & series$metric == "releases_total", c("date", "value")]
   trend30 <- function(rid) {
     s <- series[series$repo_id == rid & series$metric == "stars", ]
     if (nrow(s) < 2) return(NA_real_)
@@ -1080,18 +1082,12 @@ build_signals_summary <- function(latest, series, repos, repo_packages, today,
   rows <- lapply(seq_len(nrow(repo_packages)), function(i) {
     rid <- repo_packages$repo_id[i]
     ra <- repos[repos$repo_id == rid, ]
-    rd <- rel_dates(rid)
-    # last_release_date: recompute the max from the window each run, but never
-    # regress below a carried-forward prior value (a repo with no recent
-    # release has no rows in the window).
-    prev_last_rel <- if (nrow(ra) && "last_release_date" %in% names(ra)) ra$last_release_date[1] else NA_character_
-    computed_last_rel <- release_last_date(rd)
-    last_rel <- if (is.na(computed_last_rel)) prev_last_rel
-                else if (is.na(prev_last_rel)) computed_last_rel
-                else max(computed_last_rel, prev_last_rel)
-    # cadence: trustworthy only with full history; else carry forward.
-    prev_cadence <- if (nrow(ra) && "median_days_between_releases" %in% names(ra)) as.integer(ra$median_days_between_releases[1]) else NA_integer_
-    cadence <- if (compute_release_facts) median_days_between_releases(rd) else prev_cadence
+    at <- function(col, na) if (nrow(ra) && col %in% names(ra)) ra[[col]][1] else na
+    # Cadence needs full history, so only the weekly merge recomputes it; others carry it.
+    cadence <- if (compute_release_facts) {
+      r <- rel_rows(rid)
+      median_days_between_releases(release_rise_dates(r$date, r$value, go_live))
+    } else as.integer(at("median_days_between_releases", NA_integer_))
     data.frame(package = repo_packages$package[i], origin = repo_packages$origin[i], repo_id = rid,
       stars = val(rid, "stars"), forks = val(rid, "forks"), issues_open = val(rid, "issues_open"),
       prs_open = val(rid, "prs_open"), commits_total = val(rid, "commits_total"),
@@ -1106,7 +1102,7 @@ build_signals_summary <- function(latest, series, repos, repo_packages, today,
       median_days_to_close_issue = val(rid, "median_days_to_close_issue"),
       median_days_to_close_pr = val(rid, "median_days_to_close_pr"),
       median_open_issue_age_days = val(rid, "median_open_issue_age_days"),
-      last_release_date = last_rel,
+      last_release_date = at("last_release_date", NA_character_),
       median_days_between_releases = cadence,
       ai_markers_detected = ai_lookup(rid, "ai_markers_detected"),
       ai_first_tool = ai_lookup(rid, "ai_first_tool"),
@@ -1117,6 +1113,8 @@ build_signals_summary <- function(latest, series, repos, repo_packages, today,
       ai_latest_date = ai_lookup(rid, "ai_latest_date"),
       first_seen = if (nrow(ra)) ra$first_seen[1] else NA_character_,
       last_seen = if (nrow(ra)) ra$last_seen[1] else NA_character_,
+      last_release_tag = at("last_release_tag", NA_character_),
+      repo_created_at = at("repo_created_at", NA_character_),
       stringsAsFactors = FALSE)
   })
   do.call(rbind, rows)
@@ -1132,12 +1130,17 @@ pr_merge_ratio <- function(merged, closed) {
   as.integer(round(100 * merged / denom))
 }
 
-#' Latest release date (max), from the dates on which releases_total changed.
-#' NA when the repo has no releases.
-release_last_date <- function(dates) {
-  d <- substr(dates[!is.na(dates)], 1, 10)
-  if (!length(d)) return(NA_character_)
-  max(d)
+#' The days a repository's release count rose, from its releases_total rows. The first row
+#' counts only when it is 1 and dated before `go_live`, where the backfill dated the first
+#' release; a later row counts when it is above the row before. Pure.
+release_rise_dates <- function(dates, values, go_live = NA_character_) {
+  ok <- !is.na(dates) & !is.na(values)
+  d <- substr(as.character(dates[ok]), 1, 10)
+  v <- as.integer(values[ok])
+  if (!length(d)) return(character(0))
+  o <- order(d); d <- d[o]; v <- v[o]
+  first <- isTRUE(v[1] == 1L && !is.na(go_live) && d[1] < substr(go_live, 1, 10))
+  d[c(first, v[-1] > v[-length(v)])]
 }
 
 #' Median gap in days between consecutive distinct release dates. NA when fewer
