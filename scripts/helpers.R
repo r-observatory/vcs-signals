@@ -812,6 +812,22 @@ ensure_series_schema <- function(con) {
   DBI::dbExecute(con, "CREATE INDEX IF NOT EXISTS idx_vro_login ON vcs_repo_owner(owner_login_current COLLATE NOCASE)")
   DBI::dbExecute(con, "CREATE INDEX IF NOT EXISTS idx_vro_owner_node ON vcs_repo_owner(owner_node_id)")
   DBI::dbExecute(con, "CREATE INDEX IF NOT EXISTS idx_vro_node ON vcs_repo_owner(node_id)")
+  # Each repository's name and owner over time, one episode per name, from the same
+  # daily gauge answer. Rows are never deleted; a rename lies in (last_seen, ended_on].
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS vcs_repo_name_history (
+    node_id          TEXT NOT NULL,
+    episode_seq      INTEGER NOT NULL,
+    name_with_owner  TEXT NOT NULL,
+    owner_node_id    TEXT NOT NULL,
+    first_seen       TEXT NOT NULL,
+    last_seen        TEXT NOT NULL,
+    first_seen_exact INTEGER NOT NULL,
+    ended_on         TEXT,
+    PRIMARY KEY (node_id, episode_seq),
+    CHECK (last_seen >= first_seen),
+    CHECK (ended_on IS NULL OR ended_on >= last_seen)) WITHOUT ROWID")
+  DBI::dbExecute(con, "CREATE UNIQUE INDEX IF NOT EXISTS ux_vrnh_open
+    ON vcs_repo_name_history(node_id) WHERE ended_on IS NULL")
   # Dev-tooling presence snapshot, one wide row per repo. WITHOUT ROWID is deliberate (see
   # dev_tooling_create_sql): a repo_id point lookup is a single covering seek. The DDL is
   # config-derived so it cannot drift from classify_dev_tooling.
@@ -922,8 +938,44 @@ record_ruleset_history <- function(con, today, version, keys) {
   invisible(NULL)
 }
 
+#' Date renames and transfers from today's gauge answer: a node whose name and owner
+#' match its open episode extends it, any other closes it and opens the next. A node
+#' the answer missed keeps its open episode. Called inside write_repo_owner's transaction.
+.write_name_history <- function(con, sn, today) {
+  obs <- sn[!is.na(sn$name_with_owner) & !is.na(sn$owner_node_id),
+            c("node_id", "name_with_owner", "owner_node_id"), drop = FALSE]
+  open <- DBI::dbGetQuery(con, "SELECT node_id, episode_seq, name_with_owner, owner_node_id
+                                  FROM vcs_repo_name_history WHERE ended_on IS NULL")
+  top <- DBI::dbGetQuery(con, "SELECT node_id, MAX(episode_seq) AS seq
+                                 FROM vcs_repo_name_history GROUP BY node_id")
+  k <- match(obs$node_id, open$node_id)
+  same <- !is.na(k) & obs$name_with_owner == open$name_with_owner[k] &
+    obs$owner_node_id == open$owner_node_id[k]
+  moved <- !is.na(k) & !same
+  if (any(same))
+    DBI::dbExecute(con, "UPDATE vcs_repo_name_history SET last_seen = MAX(last_seen, ?)
+                          WHERE node_id = ? AND episode_seq = ?",
+                   params = list(rep(today, sum(same)), obs$node_id[same], open$episode_seq[k[same]]))
+  if (any(moved))
+    DBI::dbExecute(con, "UPDATE vcs_repo_name_history SET ended_on = ?
+                          WHERE node_id = ? AND episode_seq = ?",
+                   params = list(rep(today, sum(moved)), obs$node_id[moved], open$episode_seq[k[moved]]))
+  new <- obs[!same, , drop = FALSE]
+  if (nrow(new) > 0) {
+    seq <- top$seq[match(new$node_id, top$node_id)]
+    DBI::dbExecute(con, "INSERT INTO vcs_repo_name_history (node_id, episode_seq, name_with_owner,
+                          owner_node_id, first_seen, last_seen, first_seen_exact, ended_on)
+                          VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
+                   params = list(new$node_id, ifelse(is.na(seq), 1L, as.integer(seq) + 1L),
+                                 new$name_with_owner, new$owner_node_id, rep(today, nrow(new)),
+                                 rep(today, nrow(new)), as.integer(moved[!same])))
+  }
+  list(kept = sum(same), moved = sum(moved), first = sum(is.na(k)))
+}
+
 #' Rewrite vcs_repo_owner from today's gauge snapshot in one transaction. A row the
 #' snapshot missed stays for OWNER_STALE_DAYS; a repo_id no longer in repo_map goes.
+#' vcs_repo_name_history is written in the same transaction from the same snapshot.
 write_repo_owner <- function(con, snapshot, repo_map, today) {
   today <- as.Date(today)
   cols <- c("node_id", "name_with_owner", "owner_login", "owner_type", "owner_node_id")
@@ -954,11 +1006,14 @@ write_repo_owner <- function(con, snapshot, repo_map, today) {
   counts$removed <- counts$removed + DBI::dbExecute(con,
     "DELETE FROM vcs_repo_owner WHERE observed_on < ?",
     params = list(format(today - OWNER_STALE_DAYS)))
+  names_n <- .write_name_history(con, sn[sn$node_id %in% repo_map$node_id, , drop = FALSE], format(today))
   DBI::dbCommit(con); ok <- TRUE
 
   cat(sprintf(paste0("repo owners: %d written, %d with no owner returned, %d with another owner type, ",
                      "%d not collected this run, %d removed\n"),
               counts$written, counts$no_owner, counts$other_type, counts$not_collected, counts$removed))
+  cat(sprintf("repo names: %d unchanged, %d renamed or moved, %d seen for the first time\n",
+              names_n$kept, names_n$moved, names_n$first))
   invisible(counts)
 }
 
