@@ -37,6 +37,8 @@ export_snapshot_shard <- function(path, rows) {
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   DBI::dbExecute(con, "PRAGMA journal_mode=DELETE")
+  # A metric the rows do not carry is stored NA, as a fetch that failed would be.
+  for (m in setdiff(WEEKLY_METRICS, names(rows))) rows[[m]] <- rep(NA_integer_, nrow(rows))
   cols <- paste(sprintf("%s INTEGER", WEEKLY_METRICS), collapse = ", ")
   DBI::dbExecute(con, sprintf("CREATE TABLE %s (repo_id TEXT PRIMARY KEY, %s)", SNAPSHOT_TABLE, cols))
   if (nrow(rows) > 0) {
@@ -47,6 +49,24 @@ export_snapshot_shard <- function(path, rows) {
 }
 
 # ---- fetch ------------------------------------------------------------------
+#' One contributors reply as list(count, top_commits, top_type). A bare count, the
+#' older reply shape, has no top contributor. Pure.
+contributor_reply <- function(v) {
+  none <- list(count = NA_integer_, top_commits = NA_integer_, top_type = NA_character_)
+  if (is.null(v)) return(none)
+  one <- function(x, cast, na) { x <- suppressWarnings(cast(x)); if (length(x) == 1L) x else na }
+  if (!is.list(v)) return(utils::modifyList(none, list(count = one(v, as.integer, NA_integer_))))
+  list(count = one(v$count, as.integer, NA_integer_),
+       top_commits = one(v$top_commits, as.integer, NA_integer_),
+       top_type = one(v$top_type, as.character, NA_character_))
+}
+
+#' Repositories whose snapshot row read a top contributor's commits but no Bot or
+#' User account type: an anonymous contributor, or a type GitHub did not give. Pure.
+untyped_top_contributors <- function(snapshot) {
+  snapshot$repo_id[!is.na(snapshot$top_contributor_commits) & is.na(snapshot$top_contributor_bot)]
+}
+
 #' Collect commits_total, contributors_total, and the three responsiveness
 #' medians (median_days_to_close_issue, median_days_to_close_pr,
 #' median_open_issue_age_days) for one even mod-N shard of the roster.
@@ -83,14 +103,17 @@ run_fetch_shard <- function(io, out_dir, roster_path, i, N,
   }
 
   contributors_total <- rep(NA_integer_, total)
+  top_commits <- rep(NA_integer_, total)
+  top_bot <- rep(NA_integer_, total)
   n_contrib_ok <- 0L; n_contrib_skipped <- 0L
   for (r in seq_len(total)) {
-    v <- tryCatch(io$contributors(mine$owner[r], mine$name[r]), error = function(e) NA_integer_)
+    v <- tryCatch(io$contributors(mine$owner[r], mine$name[r]), error = function(e) NULL)
     if (contributor_delay > 0) Sys.sleep(contributor_delay)
-    v <- suppressWarnings(as.integer(v))
-    v <- if (length(v) == 1) v else NA_integer_
-    if (is.na(v)) n_contrib_skipped <- n_contrib_skipped + 1L else n_contrib_ok <- n_contrib_ok + 1L
-    contributors_total[r] <- v
+    reply <- contributor_reply(v)
+    if (is.na(reply$count)) n_contrib_skipped <- n_contrib_skipped + 1L else n_contrib_ok <- n_contrib_ok + 1L
+    contributors_total[r] <- reply$count
+    top_commits[r] <- reply$top_commits
+    top_bot[r] <- contributor_bot_flag(reply$top_type)
   }
 
   resp_cols <- data.frame(
@@ -111,6 +134,7 @@ run_fetch_shard <- function(io, out_dir, roster_path, i, N,
 
   rows <- data.frame(repo_id = mine$repo_id, commits_total = commits_total,
                      contributors_total = contributors_total,
+                     top_contributor_commits = top_commits, top_contributor_bot = top_bot,
                      resp_cols, stringsAsFactors = FALSE)
 
   shard_path <- file.path(out_dir, sprintf("vcs-signals-shard-%d.db", i))
@@ -121,9 +145,7 @@ run_fetch_shard <- function(io, out_dir, roster_path, i, N,
 }
 
 # ---- merge --------------------------------------------------------------------
-#' Fold every shard's snapshot of the five WEEKLY_METRICS
-#' (commits_total, contributors_total, median_days_to_close_issue,
-#' median_days_to_close_pr, median_open_issue_age_days) into the published
+#' Fold every shard's snapshot of every WEEKLY_METRICS value into the published
 #' series as a change-only point dated today, rebuild the summary, and
 #' republish. Mirrors backfill.R::run_merge's seed + complete-history-load
 #' pattern (seed_working_db for the recent window, then protect_history_pull
@@ -210,6 +232,12 @@ run_merge <- function(io, out_dir, parts_dir) {
       "INSERT OR REPLACE INTO series_latest (repo_id, metric, value) VALUES (?,?,?)",
       params = list(mat$new_latest$repo_id, mat$new_latest$metric, mat$new_latest$value))
   }
+  # The stored flag described an earlier top contributor, so it goes and the summary
+  # reads NA. signals_series has no NA value: its earlier points stay and none is added.
+  untyped <- untyped_top_contributors(snapshot)
+  if (length(untyped) > 0)
+    DBI::dbExecute(con, "DELETE FROM series_latest WHERE metric = 'top_contributor_bot' AND repo_id = ?",
+                   params = list(untyped))
 
   # Rebuild the summary so commits_total/contributors_total populate. No
   # repository is gauged this run, so every REPO_ATTR_COLS value is carried
