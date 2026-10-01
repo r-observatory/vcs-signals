@@ -763,6 +763,7 @@ ensure_series_schema <- function(con) {
     ai_markers_detected INTEGER, ai_first_tool TEXT, ai_first_date TEXT,
     ai_tool_count INTEGER, ai_tools TEXT, ai_latest_tool TEXT, ai_latest_date TEXT,
     first_seen TEXT, last_seen TEXT, last_release_tag TEXT, repo_created_at TEXT,
+    top_contributor_commits INTEGER, top_contributor_bot INTEGER,
     PRIMARY KEY (package, origin))")
   DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS pipeline_state (key TEXT PRIMARY KEY, value TEXT)")
   # `markers` is the set of markers that fired, comma-joined the way evidence_tiers
@@ -1062,7 +1063,8 @@ build_signals_summary <- function(latest, series, repos, repo_packages, today,
       ai_tool_count = integer(), ai_tools = character(), ai_latest_tool = character(),
       ai_latest_date = character(),
       first_seen = character(), last_seen = character(),
-      last_release_tag = character(), repo_created_at = character(), stringsAsFactors = FALSE))
+      last_release_tag = character(), repo_created_at = character(),
+      top_contributor_commits = integer(), top_contributor_bot = integer(), stringsAsFactors = FALSE))
   val <- function(rid, met) {
     v <- latest$value[latest$repo_id == rid & latest$metric == met]
     if (length(v)) as.integer(v[1]) else NA_integer_
@@ -1115,6 +1117,8 @@ build_signals_summary <- function(latest, series, repos, repo_packages, today,
       last_seen = if (nrow(ra)) ra$last_seen[1] else NA_character_,
       last_release_tag = at("last_release_tag", NA_character_),
       repo_created_at = at("repo_created_at", NA_character_),
+      top_contributor_commits = val(rid, "top_contributor_commits"),
+      top_contributor_bot = val(rid, "top_contributor_bot"),
       stringsAsFactors = FALSE)
   })
   do.call(rbind, rows)
