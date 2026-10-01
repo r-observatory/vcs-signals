@@ -454,3 +454,14 @@ test_that("follow-up pages parse per repository, and a repository GitHub did not
   expect_false("body" %in% names(w$prs))
   expect_null(parse_pr_walk(list(data = list(r0 = NULL)), repos[1, ])[["g/o/n"]])
 })
+
+test_that("the gauge query asks for the default branch's newest commit date inside the Repository fragment", {
+  q <- build_gauge_query(c("R_a"))
+  open <- regexpr("... on Repository {", q, fixed = TRUE)
+  head <- regexpr("defaultBranchRef { target { ... on Commit { committedDate } } }", q, fixed = TRUE)
+  close <- tail(gregexpr("} } }", q, fixed = TRUE)[[1]], 1L)
+  expect_gt(open, 0L)
+  expect_gt(head, open)
+  expect_lt(head, close)
+  expect_match(q, "latestRelease { tagName publishedAt isPrerelease }", fixed = TRUE)
+})

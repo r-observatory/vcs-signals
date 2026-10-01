@@ -211,32 +211,23 @@ run_merge <- function(io, out_dir, parts_dir) {
       params = list(mat$new_latest$repo_id, mat$new_latest$metric, mat$new_latest$value))
   }
 
-  # Rebuild the summary so commits_total/contributors_total populate.
-  # Descriptive attributes (license/topics/is_archived/last_commit_date) are
-  # not collected this run, so they are carried forward from the prior
-  # summary row exactly as run_update does for a repo it didn't collect
-  # this run.
+  # Rebuild the summary so commits_total/contributors_total populate. No
+  # repository is gauged this run, so every REPO_ATTR_COLS value is carried
+  # forward from the prior summary row, as run_update does for one it did not reach.
   repos_all <- DBI::dbReadTable(con, "repos")
   rp_all <- DBI::dbReadTable(con, "repo_packages")
   series_all <- DBI::dbGetQuery(con, "SELECT repo_id, date, metric, value FROM signals_series")
   latest_all <- DBI::dbGetQuery(con, "SELECT repo_id, metric, value FROM series_latest")
-
-  prev_summary_attrs <- DBI::dbGetQuery(con,
-    "SELECT repo_id, license, topics, is_archived, last_commit_date,
-            last_release_date, median_days_between_releases
-       FROM vcs_signals_summary WHERE repo_id IS NOT NULL")
-  if (nrow(prev_summary_attrs) > 0) {
-    prev_summary_attrs <- prev_summary_attrs[!duplicated(prev_summary_attrs$repo_id), ]
-    prev_summary_attrs$is_archived <- as.integer(prev_summary_attrs$is_archived)
-  }
-  repo_attrs <- merge(repos_all[, c("repo_id", "first_seen", "last_seen")], prev_summary_attrs,
+  repo_attrs <- merge(repos_all[, c("repo_id", "first_seen", "last_seen")], prior_repo_attrs(con),
                       by = "repo_id", all.x = TRUE)
 
   ai_all <- if (DBI::dbExistsTable(con, "vcs_ai_signals")) DBI::dbReadTable(con, "vcs_ai_signals") else NULL
+  go_live <- DBI::dbGetQuery(con, "SELECT value FROM pipeline_state WHERE key = 'go_live'")$value
   # Full history is loaded this run (protect_history_pull + year shards), so
   # release cadence is recomputed from scratch rather than carried forward.
   summary_df <- build_signals_summary(latest_all, series_all, repo_attrs, rp_all, today,
-                                      compute_release_facts = TRUE, ai_signals = ai_all)
+                                      compute_release_facts = TRUE, ai_signals = ai_all,
+                                      go_live = if (length(go_live)) go_live[1] else NA_character_)
   DBI::dbExecute(con, "DELETE FROM vcs_signals_summary")
   if (nrow(summary_df) > 0) DBI::dbWriteTable(con, "vcs_signals_summary", summary_df, append = TRUE)
 

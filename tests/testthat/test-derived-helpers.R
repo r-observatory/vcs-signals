@@ -6,12 +6,6 @@ test_that("pr_merge_ratio is percent merged among decided PRs, NA when none deci
   expect_true(is.na(pr_merge_ratio(NA_integer_, 4L)))
 })
 
-test_that("release_last_date is the max date, NA when no releases", {
-  expect_equal(release_last_date(c("2020-01-01", "2022-06-30", "2021-12-31")), "2022-06-30")
-  expect_equal(release_last_date("2019-03-03T10:00:00Z"), "2019-03-03")
-  expect_true(is.na(release_last_date(character(0))))
-})
-
 test_that("median_days_between_releases is median gap of distinct sorted dates, NA when <2", {
   # gaps: 10, 20 -> median 15
   expect_equal(median_days_between_releases(c("2024-01-01", "2024-01-11", "2024-01-31")), 15L)
@@ -35,4 +29,25 @@ test_that("median_days_to_close ignores NA-closed, NA on empty, mean-of-middles 
 test_that("median_open_issue_age measures age from today, NA on empty", {
   expect_equal(median_open_issue_age(c("2024-01-01", "2024-01-11"), "2024-01-21"), 15L)
   expect_true(is.na(median_open_issue_age(character(0), "2024-01-21")))
+})
+
+test_that("release_rise_dates keeps the days the release count rose", {
+  # A backfilled first release counts; the go-live row repeating the count does not.
+  expect_equal(release_rise_dates(c("2019-02-01", "2020-05-01", "2026-04-08", "2026-07-07"),
+                                  c(1L, 2L, 27L, 27L), "2026-07-07"),
+               c("2019-02-01", "2020-05-01", "2026-04-08"))
+  # Two releases created on the first day still make it a day the count rose.
+  expect_equal(release_rise_dates(c("2020-07-23", "2020-07-24"), c(2L, 3L), "2026-07-07"),
+               c("2020-07-23", "2020-07-24"))
+  # A first row on or after go-live dates an observation, not a release.
+  expect_equal(release_rise_dates(c("2026-07-07", "2026-08-01"), c(0L, 1L), "2026-07-07"), "2026-08-01")
+  expect_equal(release_rise_dates(c("2026-07-09", "2026-08-01"), c(3L, 4L), "2026-07-07"), "2026-08-01")
+  # A deleted release is a fall, and the release after it a rise.
+  expect_equal(release_rise_dates(c("2024-01-01", "2024-02-01", "2024-03-01"), c(1L, 0L, 1L), "2026-07-07"),
+               c("2024-01-01", "2024-03-01"))
+  # Unsorted rows and instants.
+  expect_equal(release_rise_dates(c("2024-01-01T00:00:00Z", "2023-01-01"), c(2L, 1L), "2026-07-07"),
+               c("2023-01-01", "2024-01-01"))
+  expect_equal(release_rise_dates(character(0), integer(0), "2026-07-07"), character(0))
+  expect_equal(release_rise_dates("2019-02-01", 1L, NA_character_), character(0))
 })

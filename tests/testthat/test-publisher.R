@@ -77,3 +77,11 @@ test_that("build_release_notes tolerates an empty-year heartbeat", {
   expect_true(grepl("none this run", notes))
   expect_true(grepl("Data through: n/a", notes))
 })
+
+test_that("the release notes say what the two date columns hold", {
+  notes <- build_release_notes(
+    list(packages = 1, repos = 1, data_through = "2026-10-01", years = list()),
+    character(0), "current")
+  expect_match(notes, "newest commit on the default branch", fixed = TRUE)
+  expect_match(notes, "newest GitHub release", fixed = TRUE)
+})

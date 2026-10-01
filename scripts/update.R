@@ -297,47 +297,30 @@ run_update <- function(io, out_dir, opts = list()) {
     rp_all <- DBI::dbReadTable(con, "repo_packages")
     series_all <- DBI::dbGetQuery(con, "SELECT repo_id, date, metric, value FROM signals_series")
 
-    # Descriptive repo attributes (license/topics/is_archived/last_commit_date)
-    # are not columns on the repos table (that schema is frozen per the
-    # design). For a repo collected this run they come from this run's
-    # gauge snapshot, joined onto repo_id via repo_map; for a repo NOT
-    # collected this run they are carried forward from the prior
-    # vcs_signals_summary row (read here, before that table is rebuilt
-    # below), so a deferred repo keeps its last-known descriptive attributes
-    # instead of going NA. A repo with neither (never collected) gets NA.
-    attrs <- data.frame(repo_id = character(), license = character(), topics = character(),
-                        is_archived = integer(), last_commit_date = character(), stringsAsFactors = FALSE)
+    # A repository collected this run takes its values from the gauge answer: the
+    # newest commit on the default branch, the latest release's publish time and
+    # tag, and the creation time. Any other keeps its prior summary row.
+    fresh <- NULL
     if (nrow(repo_map) > 0) {
       sn <- merge(gauges$snapshot, repo_map, by = "node_id")
       pick <- function(col, default) if (col %in% names(sn)) sn[[col]] else rep(default, nrow(sn))
-      attrs <- data.frame(repo_id = sn$repo_id,
+      fresh <- data.frame(repo_id = sn$repo_id,
                           license = pick("license", NA_character_),
                           topics = pick("topics", NA_character_),
                           is_archived = as.integer(pick("is_archived", NA_integer_)),
-                          last_commit_date = pick("pushed_at", NA_character_),
+                          last_commit_date = pick("head_committed_at", NA_character_),
+                          last_release_date = pick("last_release_at", NA_character_),
+                          last_release_tag = pick("last_release_tag", NA_character_),
+                          repo_created_at = pick("created_at", NA_character_),
                           stringsAsFactors = FALSE)
     }
-    prev_summary_attrs <- DBI::dbGetQuery(con,
-      "SELECT repo_id, license, topics, is_archived, last_commit_date,
-              last_release_date, median_days_between_releases
-         FROM vcs_signals_summary WHERE repo_id IS NOT NULL")
-    if (nrow(prev_summary_attrs) > 0) {
-      prev_summary_attrs <- prev_summary_attrs[!duplicated(prev_summary_attrs$repo_id), ]
-      prev_summary_attrs$is_archived <- as.integer(prev_summary_attrs$is_archived)
-    }
-    # last_release_date/median_days_between_releases have no fresh source in
-    # this run's gauge snapshot (attrs), so - unlike the descriptive fields
-    # below, which prefer this run's fresh attrs when available - they always
-    # carry forward from the prior summary for every repo, collected this run
-    # or not; build_signals_summary(compute_release_facts = FALSE) uses these
-    # as the carry-forward floor.
-    release_facts <- prev_summary_attrs[, c("repo_id", "last_release_date", "median_days_between_releases")]
-    descriptive_prev <- prev_summary_attrs[!(prev_summary_attrs$repo_id %in% attrs$repo_id),
-                                            c("repo_id", "license", "topics", "is_archived", "last_commit_date")]
-    combined_attrs <- rbind(attrs, descriptive_prev)
-    repo_attrs <- merge(repos_all[, c("repo_id", "first_seen", "last_seen")], combined_attrs,
+    # Until the first summary built this way is written, a repository this run did
+    # not reach loses its old dates rather than keep a push time or an observation day.
+    reset <- nrow(DBI::dbGetQuery(con, "SELECT 1 FROM pipeline_state WHERE key = ?",
+                                  params = list(REPO_DATES_KEY))) == 0
+    repo_attrs <- merge(repos_all[, c("repo_id", "first_seen", "last_seen")],
+                        carry_repo_attrs(fresh, prior_repo_attrs(con), reset = reset),
                         by = "repo_id", all.x = TRUE)
-    repo_attrs <- merge(repo_attrs, release_facts, by = "repo_id", all.x = TRUE)
 
     # Built from the FULL post-upsert series_latest (every repo, including
     # ones deferred this run), not just this run's snapshot, so a deferred
@@ -350,6 +333,8 @@ run_update <- function(io, out_dir, opts = list()) {
                                         compute_release_facts = FALSE, ai_signals = ai_all)
     DBI::dbExecute(con, "DELETE FROM vcs_signals_summary")
     if (nrow(summary_df) > 0) DBI::dbWriteTable(con, "vcs_signals_summary", summary_df, append = TRUE)
+    DBI::dbExecute(con, "INSERT OR IGNORE INTO pipeline_state (key, value) VALUES (?, ?)",
+                   params = list(REPO_DATES_KEY, REPO_DATES_SOURCE))
     step(sprintf("summary: %d series rows written, %d summary rows rebuilt",
                  nrow(mat$series_rows), nrow(summary_df)))
 
