@@ -2008,7 +2008,9 @@ build_release_notes <- function(summary, changed_shards, tag) {
 #' shorter is either the ruleset reading less than it did or the repository's
 #' history having been rewritten under it. Both are worth a red run. A rebase
 #' over the oldest AI-trailer commits of one repository would refuse a publish,
-#' and that is the price of the rule.
+#' and that is the price of the rule. It is paid once: after the repository has
+#' been checked, the row is recorded in AI_MODEL_ROWS_GONE_AT_SOURCE and the
+#' rule lets that one row go.
 #'
 #' The repository count stays alongside it, and it is honest about where it can
 #' fire: not on the merge, but on the daily path, where this table has shipped
@@ -2040,6 +2042,13 @@ build_release_notes <- function(summary, changed_shards, tag) {
   pair <- paste(prev$repo_id, prev$tool, sep = "\t")
   still_scanned <- pair %in% unique(paste(nxt$repo_id, nxt$tool, sep = "\t"))
   held <- whole & still_scanned & !(.gate_key(prev, key) %in% .gate_key(nxt, key))
+  # A row a history rewrite removed, once checked and recorded in config.R, is not held.
+  known <- if (exists("AI_MODEL_ROWS_GONE_AT_SOURCE")) AI_MODEL_ROWS_GONE_AT_SOURCE
+  excused <- held & .gate_key(prev, key) %in% .gate_key(known, key)
+  if (any(excused))
+    message(sprintf("publish gate: %d model row(s) gone at the source and recorded in AI_MODEL_ROWS_GONE_AT_SOURCE: %s",
+                    sum(excused), .gate_show(unique(paste(prev$repo_id[excused], prev$tool[excused], sep = "/")))))
+  held <- held & !excused
   if (!any(held)) return(out)
   gone <- prev[held, , drop = FALSE]
   lost <- unique(.gate_key(gone, key))

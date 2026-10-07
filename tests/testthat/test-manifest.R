@@ -546,6 +546,104 @@ test_that("a window the scan never saw the end of is not held to what it showed"
   expect_equal(summary_regressions(prev, nxt), character(0))
 })
 
+# ---------------------------------------------------------------------------
+# A maintainer who squashes or rebases can remove the one commit that credited
+# a model. The rule above refuses that publish, and would refuse every publish
+# after it. Once the repository has been looked at, the row is recorded in
+# AI_MODEL_ROWS_GONE_AT_SOURCE and no longer held.
+# ---------------------------------------------------------------------------
+
+.with_rows_gone <- function(rows, env = parent.frame()) {
+  had <- exists("AI_MODEL_ROWS_GONE_AT_SOURCE", envir = globalenv())
+  old <- if (had) get("AI_MODEL_ROWS_GONE_AT_SOURCE", envir = globalenv())
+  withr::defer(if (had) assign("AI_MODEL_ROWS_GONE_AT_SOURCE", old, envir = globalenv())
+               else if (exists("AI_MODEL_ROWS_GONE_AT_SOURCE", envir = globalenv()))
+                 rm("AI_MODEL_ROWS_GONE_AT_SOURCE", envir = globalenv()), envir = env)
+  assign("AI_MODEL_ROWS_GONE_AT_SOURCE", rows, envir = globalenv())
+}
+
+.gone_row <- function(repo_id, family, version = "4.8", tool = "claude",
+                      provider = NA_character_, context_window = NA_character_)
+  data.frame(repo_id = repo_id, tool = tool, provider = provider, family = family,
+             version = version, context_window = context_window,
+             checked_on = "2026-10-07", reason = "history rewritten",
+             stringsAsFactors = FALSE)
+
+test_that("a model row a rewritten history took is refused until it is recorded, then published", {
+  repos <- sprintf("github.com/o/r%d", 1:3)
+  prev <- .mk_extra(tempfile(fileext = ".db"), models = .mk_models(repos, c(3L, 2L, 2L)))
+  nxt  <- .mk_extra(tempfile(fileext = ".db"), models = .mk_models(repos, c(2L, 2L, 2L)))
+  .with_rows_gone(.gone_row("github.com/o/none", "Opus1")[0, ])
+  expect_match(paste(summary_regressions(prev, nxt), collapse = " "),
+               "1 model row(s) are gone from 1 repository/tool pair(s)", fixed = TRUE)
+  .with_rows_gone(.gone_row("github.com/o/r1", "Opus3"))
+  expect_message(r <- summary_regressions(prev, nxt), "github.com/o/r1/claude")
+  expect_equal(r, character(0))
+})
+
+test_that("recording one lost row excuses that row only", {
+  repos <- sprintf("github.com/o/r%d", 1:3)
+  prev <- .mk_extra(tempfile(fileext = ".db"), models = .mk_models(repos, c(3L, 3L, 2L)))
+  # Another row of the same repository, and the same model in another repository.
+  nxt  <- .mk_extra(tempfile(fileext = ".db"), models = .mk_models(repos, c(1L, 2L, 2L)))
+  .with_rows_gone(.gone_row("github.com/o/r1", "Opus3"))
+  r <- paste(suppressMessages(summary_regressions(prev, nxt)), collapse = " ")
+  expect_match(r, "2 model row(s) are gone from 2 repository/tool pair(s)", fixed = TRUE)
+  expect_match(r, "github.com/o/r1/claude", fixed = TRUE)
+  expect_match(r, "github.com/o/r2/claude", fixed = TRUE)
+})
+
+test_that("a recorded row is matched on the whole model, context window included", {
+  mk <- function(cw) {
+    m <- .mk_models("github.com/o/r1", 1L)
+    m$family <- "Opus"; m$version <- "5"; m$context_window <- cw
+    m
+  }
+  prev <- .mk_extra(tempfile(fileext = ".db"), models = mk(NA_character_))
+  nxt  <- .mk_extra(tempfile(fileext = ".db"), models = mk("1M"))
+  .with_rows_gone(.gone_row("github.com/o/r1", "Opus", version = "5", context_window = "1M"))
+  expect_true(length(suppressMessages(summary_regressions(prev, nxt))) > 0)
+  .with_rows_gone(.gone_row("github.com/o/r1", "Opus", version = "5"))
+  expect_equal(suppressMessages(summary_regressions(prev, nxt)), character(0))
+})
+
+test_that("with no record in scope every lost row is still held", {
+  repos <- sprintf("github.com/o/r%d", 1:3)
+  prev <- .mk_extra(tempfile(fileext = ".db"), models = .mk_models(repos, c(3L, 2L, 2L)))
+  nxt  <- .mk_extra(tempfile(fileext = ".db"), models = .mk_models(repos, c(2L, 2L, 2L)))
+  .with_rows_gone(NULL)   # puts the list back afterwards
+  rm("AI_MODEL_ROWS_GONE_AT_SOURCE", envir = globalenv())
+  expect_match(paste(summary_regressions(prev, nxt), collapse = " "), "vcs_ai_models")
+})
+
+test_that("every recorded row says which model, when it was checked and why", {
+  g <- AI_MODEL_ROWS_GONE_AT_SOURCE
+  expect_true(all(c("repo_id", "tool", "provider", "family", "version", "context_window",
+                    "checked_on", "reason") %in% names(g)))
+  expect_true(all(nzchar(g$repo_id) & nzchar(g$tool) & !is.na(g$family)))
+  expect_false(anyNA(as.Date(g$checked_on, format = "%Y-%m-%d")))
+  expect_true(all(nchar(g$reason) > 20))
+  expect_equal(anyDuplicated(g[, c("repo_id", "tool", "provider", "family", "version", "context_window")]), 0L)
+})
+
+test_that("the two rewrites found on 2026-10-07 publish", {
+  # apaTables was squashed into two commits on 2026-08-10, both crediting Fable 5.
+  # virustotal lost its July commits; the later ones name Opus 5 with a context window.
+  one <- function(repo, fam, ver, cw = NA_character_) {
+    m <- .mk_models(repo, 1L)
+    m$family <- fam; m$version <- ver; m$context_window <- cw
+    m
+  }
+  prev <- .mk_extra(tempfile(fileext = ".db"), models = rbind(
+    one("github.com/dstanley4/apatables", "Opus", "4.6"),
+    one("github.com/themains/virustotal", "Opus", "5")))
+  nxt <- .mk_extra(tempfile(fileext = ".db"), models = rbind(
+    one("github.com/dstanley4/apatables", "Fable", "5"),
+    one("github.com/themains/virustotal", "Opus", "5", "1M"),
+    one("github.com/themains/virustotal", "Opus", "5.5", "1M")))
+  expect_equal(suppressMessages(summary_regressions(prev, nxt)), character(0))
+})
+
 test_that("model rows disappearing for whole repositories is still refused", {
   # Coverage, the other half. Every repository that carried model rows must
   # still carry them: the table has shipped empty before, and a seed step that

@@ -847,6 +847,15 @@ AI_SCAN_FAILURE_MAX_SHARE <- 0.02
 # and 508ms for twelve, against the same throttled budget.
 AI_SEARCH_PAGE <- 100L
 
+# Model rows a repository's own history rewrite removed, each checked by hand.
+# The publish gate holds a published model row until it is listed here. Add a
+# row only after confirming on the repository that the commit is gone.
+AI_MODEL_ROWS_GONE_AT_SOURCE <- read.csv(text = trimws(r"(
+repo_id,tool,provider,family,version,context_window,checked_on,reason
+github.com/dstanley4/apatables,claude,,Opus,4.6,,2026-10-07,"The default branch was squashed into two commits on 2026-08-10, both crediting Fable 5. No commit from February 2026 remains."
+github.com/themains/virustotal,claude,,Opus,5,,2026-10-07,"No commit from July 2026 remains on the default branch. The commits of 2026-08-20 credit Opus 5 with a 1M context window, which is a different row."
+)"), stringsAsFactors = FALSE, colClasses = "character", na.strings = "")
+
 AI_CANARY_MIN_ROSTER <- 200L
 
 # Vendor facts in these reasons, each checked on 2026-09-26 at the page named.
