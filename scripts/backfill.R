@@ -49,8 +49,9 @@ load_roster <- function(path) {
 
 # ---- enumerate ----------------------------------------------------------------
 #' Build the GitHub repo roster from the published summary shard: every
-#' repo_id with at least one star, on a supported host. owner/name come from the
-#' shard's repos table, lowercased as repo_id is.
+#' repo_id with at least one star, fork or release, on a GitHub host. owner/name
+#' are derived by splitting repo_id (host_domain/owner/name), never taken from
+#' repos, where a rename writes GitHub's new answer. GitLab gets no backfill.
 run_enumerate <- function(io, out_dir) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   if (!isTRUE(io$download("vcs-signals-summary.db", out_dir)))
@@ -60,17 +61,18 @@ run_enumerate <- function(io, out_dir) {
   con <- DBI::dbConnect(RSQLite::SQLite(), summary_path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   rows <- DBI::dbGetQuery(con,
-    # Inner join: a summary row always has its repos row in the shard.
-    sprintf("SELECT s.repo_id, LOWER(r.owner) AS owner, LOWER(r.name) AS name, MAX(s.stars) AS stars
+    # The join only filters on host; a summary row always has its repos row in the shard.
+    sprintf("SELECT s.repo_id, MAX(s.stars) AS stars
         FROM vcs_signals_summary s JOIN repos r ON r.repo_id = s.repo_id
       WHERE %s
         AND (s.stars > 0 OR s.forks > 0 OR s.releases_total > 0) GROUP BY s.repo_id",
       supported_host_predicate("r.host")))
 
+  parts <- strsplit(rows$repo_id, "/", fixed = TRUE)
   roster <- data.frame(
     repo_id = rows$repo_id,
-    owner   = rows$owner,
-    name    = rows$name,
+    owner   = vapply(parts, function(p) p[2], ""),
+    name    = vapply(parts, function(p) p[3], ""),
     stars   = as.integer(rows$stars),
     done    = 0L,
     stringsAsFactors = FALSE)
