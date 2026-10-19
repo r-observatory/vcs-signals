@@ -1,0 +1,6 @@
+key	value
+ai_state_tables_since	<DATE>
+go_live	<DATE>
+repo_dates_source	head-commit+latest-release
+repo_name_history_since	<DATE>
+repo_package_links_since	<DATE>

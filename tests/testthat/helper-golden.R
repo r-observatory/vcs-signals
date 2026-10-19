@@ -1,0 +1,521 @@
+# The golden record: each publishing path run over one fixture roster, with every table it
+# leaves in its out dir and every request it sends. tests/golden/record.R writes it.
+
+# Every run is dated this day, so values derived from the date hold on any day the suite runs.
+GOLDEN_DAY <- "2026-10-04"
+GOLDEN_SHARDS <- 2L
+
+golden_paths <- function() c("daily", "weekly", "ai", "backfill")
+
+# ---- the roster -------------------------------------------------------------
+# One acquisition. linelist is listed twice, on GitHub for CRAN and on a nested GitLab group for Bioc.
+.golden_acquire <- function() data.frame(
+  package = c("forcats", "goodpractice", "bqmm", "ri2", "linelist", "linelist", "cfr", "usgspkg",
+              "cbpkg", "rfpkg"),
+  origin = c("cran", "cran", "cran", "cran", "cran", "bioc", "bioc", "cran", "cran", "cran"),
+  url_raw = c("https://forcats.tidyverse.org, https://github.com/tidyverse/forcats",
+              "https://docs.ropensci.org/goodpractice/ https://github.com/ropensci-review-tools/goodpractice",
+              "https://github.com/kvenkita/bqmm-r", "https://github.com/acoppock/ri2",
+              "https://github.com/epiverse-trace/linelist", "https://gitlab.com/epiverse/outbreaks/linelist",
+              "https://github.com/epiverse-trace/cfr", "https://code.usgs.gov/water/toxics/usgspkg",
+              "https://codeberg.org/someone/cbpkg", "https://r-forge.r-project.org/projects/rfpkg/"),
+  bugreports_raw = c("https://github.com/tidyverse/forcats/issues", NA, NA, NA,
+                     "https://github.com/epiverse-trace/linelist/issues", NA, NA, NA, NA, NA),
+  stringsAsFactors = FALSE)
+
+# Links from before the run: forcats once lived elsewhere, and retired has left.
+.golden_links_backfill <- function(dir) {
+  path <- file.path(dir, "links-backfill.csv.gz")
+  con <- gzfile(path, "w")
+  writeLines(c("repo_id,package,origin,first_seen,last_seen",
+               "github.com/old-owner/forcats,forcats,cran,2026-08-01,2026-09-15",
+               "gitlab.com/someone/retired,retired,cran,2026-08-01,2026-09-10"), con)
+  close(con)
+  path
+}
+
+# The GitHub repositories the roster names. asked is the slug a package gives and nwo what
+# GitHub answers, so bqmm-r was renamed and ri2 is gone; bqmm is empty and cfr archived.
+.golden_gh <- data.frame(
+  asked = c("tidyverse/forcats", "ropensci-review-tools/goodpractice", "kvenkita/bqmm-r", "acoppock/ri2",
+            "epiverse-trace/linelist", "epiverse-trace/cfr"),
+  nwo = c("tidyverse/forcats", "ropensci-review-tools/goodpractice", "kvenkita/bqmm", NA,
+          "epiverse-trace/linelist", "epiverse-trace/cfr"),
+  id = c("R_forcats", "R_goodpractice", "R_bqmm", NA, "R_linelist", "R_cfr"),
+  user = c(FALSE, FALSE, TRUE, NA, FALSE, FALSE),
+  created = c("2015-08-23T21:23:24Z", "2016-03-08T10:12:00Z", "2024-02-11T09:30:00Z", NA,
+              "2023-03-14T11:00:00Z", "2023-01-20T15:45:00Z"),
+  stars = c(570L, 470L, 3L, NA, 45L, 20L),
+  forks = c(130L, 37L, 0L, NA, 8L, 6L),
+  issues = c(21L, 14L, 0L, NA, 5L, 2L),
+  prs = c(3L, 2L, 0L, NA, 1L, 0L),
+  releases = c(12L, 5L, 0L, NA, 4L, 3L),
+  tag = c("v1.0.1", "v1.0.5", NA, NA, "v1.2.0", "v0.2.0"),
+  published = c("2025-09-03T10:00:00Z", "2025-02-17T12:00:00Z", NA, NA, "2025-05-30T09:00:00Z",
+                "2024-11-02T08:00:00Z"),
+  head = c("2026-09-20T08:00:00Z", "2026-08-30T17:10:00Z", NA, NA, "2026-09-25T13:40:00Z",
+           "2026-07-02T16:05:00Z"),
+  license = c("MIT", "GPL-2.0", NA, NA, "MIT", "MIT"),
+  topics = c("r,factors,tidyverse", "r,linter", "", NA, "r,epidemiology", "r"),
+  archived = c(FALSE, FALSE, FALSE, NA, FALSE, TRUE),
+  commits = c(1210L, 800L, NA, NA, 910L, 640L),
+  stringsAsFactors = FALSE)
+
+# Star, fork and release dates the backfill pages through, three to a page.
+.golden_history <- list(
+  stars = list(
+    "tidyverse/forcats" = c("2016-01-10T08:00:00Z", "2018-05-02T09:30:00Z", "2020-03-03T10:00:00Z",
+                            "2024-11-20T14:00:00Z", "2026-09-30T18:00:00Z"),
+    "ropensci-review-tools/goodpractice" = c("2017-04-01T00:00:00Z", "2025-12-24T12:00:00Z"),
+    "kvenkita/bqmm" = c("2025-01-05T00:00:00Z"),
+    "epiverse-trace/linelist" = c("2023-05-01T00:00:00Z", "2026-02-14T07:00:00Z"),
+    "epiverse-trace/cfr" = c("2023-02-01T00:00:00Z")),
+  forks = list(
+    "tidyverse/forcats" = c("2016-06-01T00:00:00Z", "2022-08-08T08:08:08Z"),
+    "epiverse-trace/linelist" = c("2024-04-04T04:04:04Z")),
+  releases_total = list(
+    "tidyverse/forcats" = c("2016-08-29T00:00:00Z", "2023-01-29T00:00:00Z", "2025-09-03T10:00:00Z"),
+    "ropensci-review-tools/goodpractice" = c("2025-02-17T12:00:00Z"),
+    "epiverse-trace/cfr" = c("2024-11-02T08:00:00Z")))
+
+# The repository a slug names, by the slug asked or the one GitHub answers, or NULL.
+.golden_row <- function(owner, name) {
+  s <- tolower(paste(owner, name, sep = "/"))
+  i <- which(tolower(.golden_gh$asked) == s | tolower(.golden_gh$nwo) %in% s)
+  if (length(i)) .golden_gh[i[1], , drop = FALSE] else NULL
+}
+
+# ---- the fake GitHub ----------------------------------------------------------
+.golden_aliases <- function(q) {
+  m <- regmatches(q, gregexpr('[a-z][0-9]+: repository\\(owner: "[^"]+", name: "[^"]+"', q))[[1]]
+  p <- regmatches(m, regexec('^([a-z][0-9]+): repository\\(owner: "([^"]+)", name: "([^"]+)"', m))
+  data.frame(alias = vapply(p, `[`, "", 2L), owner = vapply(p, `[`, "", 3L), name = vapply(p, `[`, "", 4L),
+             stringsAsFactors = FALSE)
+}
+
+# One answer per alias, and a NOT_FOUND for a repository GitHub does not have.
+.golden_aliased <- function(q, answer) {
+  a <- .golden_aliases(q)
+  data <- list(); errors <- list()
+  for (k in seq_len(nrow(a))) {
+    r <- .golden_row(a$owner[k], a$name[k])
+    if (is.null(r) || is.na(r$id)) {
+      data[a$alias[k]] <- list(NULL)
+      errors[[length(errors) + 1L]] <- list(type = "NOT_FOUND", path = list(a$alias[k]),
+        message = sprintf("Could not resolve to a Repository with the name '%s/%s'.", a$owner[k], a$name[k]))
+    } else data[[a$alias[k]]] <- answer(r)
+  }
+  if (length(errors)) list(data = data, errors = errors) else list(data = data)
+}
+
+.golden_owner <- function(r) {
+  login <- sub("/.*$", "", r$nwo)
+  list(`__typename` = if (r$user) "User" else "Organization", login = login,
+       id = paste0(if (r$user) "U_" else "O_", login))
+}
+
+.golden_gauge_node <- function(r) list(
+  id = r$id, nameWithOwner = r$nwo, stargazerCount = r$stars, forkCount = r$forks,
+  owner = .golden_owner(r), watchers = list(totalCount = r$stars %/% 10L),
+  issues_open = list(totalCount = r$issues), issues_closed = list(totalCount = 10L * r$issues),
+  prs_open = list(totalCount = r$prs), prs_closed = list(totalCount = r$prs + 1L),
+  mergedPRs = list(totalCount = 7L * r$prs), releases = list(totalCount = r$releases),
+  latestRelease = if (!is.na(r$tag)) list(tagName = r$tag, publishedAt = r$published, isPrerelease = FALSE),
+  defaultBranchRef = if (!is.na(r$head)) list(target = list(committedDate = r$head)),
+  licenseInfo = if (!is.na(r$license)) list(spdxId = r$license),
+  repositoryTopics = list(nodes = lapply(strsplit(r$topics, ",", fixed = TRUE)[[1]],
+                                         function(t) list(topic = list(name = t)))),
+  isArchived = r$archived, isFork = FALSE, isMirror = FALSE, isDisabled = FALSE,
+  createdAt = r$created, pushedAt = r$head, updatedAt = r$head, diskUsage = 40L * r$stars + 100L,
+  primaryLanguage = list(name = "R"))
+
+.golden_gauges <- function(q) {
+  ids <- gsub('"', "", regmatches(q, gregexpr('"R_[^"]+"', q))[[1]], fixed = TRUE)
+  nodes <- list(); errors <- list()
+  for (k in seq_along(ids)) {
+    r <- .golden_gh[which(.golden_gh$id == ids[k]), , drop = FALSE]
+    if (nrow(r)) nodes[[k]] <- .golden_gauge_node(r) else {
+      nodes[k] <- list(NULL)
+      errors[[length(errors) + 1L]] <- list(type = "NOT_FOUND", path = list("nodes", k - 1L),
+        message = sprintf("Could not resolve to a node with the global id of '%s'", ids[k]))
+    }
+  }
+  if (length(errors)) list(data = list(nodes = nodes), errors = errors) else list(data = list(nodes = nodes))
+}
+
+.golden_resolved <- function(r) list(id = r$id, nameWithOwner = r$nwo, isArchived = r$archived,
+                                     isFork = FALSE, isMirror = FALSE, isDisabled = FALSE, createdAt = r$created)
+
+# The recorded contents answer for the repository, with a Claude file in forcats and a
+# .claude ignore line in goodpractice.
+.golden_contents <- function(r) {
+  raw <- jsonlite::fromJSON(file.path("fixtures", "contents-2026-09.json"), simplifyVector = FALSE)$data
+  hit <- Filter(function(a) identical(tolower(a$nameWithOwner), tolower(r$nwo)), raw)
+  a <- if (length(hit)) hit[[1]] else list(nameWithOwner = r$nwo, isFork = FALSE, parent = NULL,
+    rootTree = list(entries = list(list(name = "DESCRIPTION", type = "blob"))))
+  if (identical(r$nwo, "tidyverse/forcats")) {
+    a$rootTree$entries <- c(a$rootTree$entries, list(list(name = "CLAUDE.md", type = "blob")))
+    a$descBlob <- list(byteSize = 38L, text = "Package: forcats\nVersion: 1.0.1.9000\n")
+  }
+  if (identical(r$nwo, "ropensci-review-tools/goodpractice")) a$gitignore <- list(text = ".Rproj.user\n.claude\n")
+  a
+}
+
+.golden_commit_node <- function(oid) Find(function(n) startsWith(n$oid, oid), ai_fixture("commits.json"))
+
+.golden_activity <- function(r) {
+  prs <- ai_fixture("activity-prs.json")$data
+  plain <- list(oid = "0a1b2c3d4e", committedDate = "2026-09-25T13:40:00Z", message = "Tidy the vignette",
+                author = list(name = "Maintainer", email = "maintainer@example.org", user = list(login = "maint")))
+  s <- switch(r$nwo,
+    "tidyverse/forcats" = list(prs = list(prs$r2$pullRequests$nodes[[1]]), commits = list(.golden_commit_node("d3106187a2"))),
+    "ropensci-review-tools/goodpractice" = list(prs = list(prs$r6$pullRequests$nodes[[1]]),
+                                                commits = list(.golden_commit_node("1a85ae819e"))),
+    "epiverse-trace/linelist" = list(prs = list(), commits = list(plain)),
+    "epiverse-trace/cfr" = list(prs = list(), commits = list(.golden_commit_node("fe5c63c197"))),
+    list(prs = list(), commits = list()))
+  page <- list(endCursor = NULL, hasNextPage = FALSE)
+  # goodpractice has more commits than one page, so its first read is not whole and its rules are searched.
+  more <- if (identical(r$nwo, "ropensci-review-tools/goodpractice")) list(endCursor = "C1", hasNextPage = TRUE) else page
+  list(pullRequests = list(totalCount = length(s$prs), pageInfo = page, nodes = s$prs),
+       defaultBranchRef = if (!is.na(r$head)) list(target = list(recent = list(pageInfo = more, nodes = s$commits))))
+}
+
+.golden_accounts <- function(r) {
+  counts <- if (identical(r$nwo, "tidyverse/forcats"))
+    list(a_claude = list(totalCount = 2L, nodes = list(list(committedDate = "2025-10-05T05:49:23Z")))) else list()
+  list(defaultBranchRef = if (!is.na(r$head)) list(target = counts))
+}
+
+.golden_responsiveness <- function(r) {
+  k <- match(r$id, .golden_gh$id)
+  at <- function(day, by = 0L) paste0(format(as.Date(day) + by), "T00:00:00Z")
+  if (is.na(r$head)) return(list(closedIssues = list(nodes = list()), resolvedPRs = list(nodes = list()),
+                                 openIssues = list(nodes = list())))
+  list(closedIssues = list(nodes = list(list(createdAt = at("2026-08-01"), closedAt = at("2026-08-04", k)),
+                                        list(createdAt = at("2026-07-01"), closedAt = at("2026-07-30", 2L * k)))),
+       resolvedPRs = list(nodes = list(list(createdAt = at("2026-09-01"), closedAt = at("2026-09-02", k)))),
+       openIssues = list(nodes = list(list(createdAt = at("2026-06-01", -k)), list(createdAt = at("2026-09-20")))))
+}
+
+.golden_commit_count <- function(r)
+  list(defaultBranchRef = if (!is.na(r$commits)) list(target = list(history = list(totalCount = r$commits))))
+
+# One page of a backfill connection, three items to a page from the cursor "c<offset>".
+.golden_connection <- function(r, metric, q) {
+  mc <- METRIC_CONNECTIONS[[metric]]
+  ts <- .golden_history[[metric]][[r$nwo]] %||% character(0)
+  after <- regmatches(q, regexec('after: "c([0-9]+)"', q))[[1]]
+  from <- if (length(after) == 2L) as.integer(after[2]) else 0L
+  take <- ts[seq_along(ts) > from & seq_along(ts) <= from + 3L]
+  items <- lapply(take, function(t) stats::setNames(list(t), mc$ts))
+  more <- from + 3L < length(ts)
+  conn <- list(pageInfo = list(endCursor = if (more) sprintf("c%d", from + 3L), hasNextPage = more))
+  conn[[mc$sel]] <- items
+  stats::setNames(list(conn), mc$conn)
+}
+
+# One page of a file's history, and the ignore file at one commit, for the onset dating.
+.golden_file_history <- function(q) {
+  p <- regmatches(q, regexec('repository\\(owner: "([^"]+)", name: "([^"]+)"\\)', q))[[1]]
+  path <- regmatches(q, regexec('path: "([^"]+)"', q))[[1]][2]
+  key <- paste(tolower(paste(p[2], p[3], sep = "/")), path)
+  nodes <- switch(key,
+    "tidyverse/forcats CLAUDE.md" = list(list(committedDate = "2025-11-02T10:00:00Z"),
+                                         list(committedDate = "2025-06-12T08:00:00Z")),
+    "ropensci-review-tools/goodpractice .gitignore" = list(list(oid = "g2", committedDate = "2026-05-01T00:00:00Z"),
+                                                           list(oid = "g1", committedDate = "2025-12-01T00:00:00Z")),
+    list())
+  list(data = list(repository = list(defaultBranchRef = list(target = list(history = list(
+    pageInfo = list(endCursor = NULL, hasNextPage = FALSE), nodes = nodes))))))
+}
+
+.golden_blob_at <- function(q) {
+  oid <- regmatches(q, regexec('object\\(expression: "([^:"]+):', q))[[1]][2]
+  text <- if (identical(oid, "g2")) ".Rproj.user\n.claude\n" else ".Rproj.user\n"
+  list(data = list(repository = list(object = list(text = text))))
+}
+
+.golden_github <- function(q) {
+  has <- function(s) grepl(s, q, fixed = TRUE)
+  if (has("rateLimit")) return(list(data = list(rateLimit = list(remaining = 4800L, resetAt = "2026-10-04T13:00:00Z"))))
+  if (has("nodes(ids:")) return(.golden_gauges(q))
+  if (has("followRenames: true")) return(.golden_aliased(q, .golden_resolved))
+  if (has("rootTree")) return(.golden_aliased(q, .golden_contents))
+  if (has("a_claude:")) return(.golden_aliased(q, .golden_accounts))
+  if (has("pullRequests(first: 50")) return(.golden_aliased(q, .golden_activity))
+  if (has("closedIssues:")) return(.golden_aliased(q, .golden_responsiveness))
+  if (has("history { totalCount }")) return(.golden_aliased(q, .golden_commit_count))
+  if (has("path: \"")) return(.golden_file_history(q))
+  if (has("object(expression:")) return(.golden_blob_at(q))
+  for (metric in names(.golden_history)) {
+    if (!has(paste0(METRIC_CONNECTIONS[[metric]]$conn, "(first:"))) next
+    if (!has("r0: repository")) {
+      p <- regmatches(q, regexec('repository\\(owner: "([^"]+)", name: "([^"]+)"\\)', q))[[1]]
+      return(list(data = list(repository = .golden_connection(.golden_row(p[2], p[3]), metric, q))))
+    }
+    return(.golden_aliased(q, function(r) .golden_connection(r, metric, q)))
+  }
+  stop("the golden GitHub has no answer for: ", substr(q, 1L, 200L))
+}
+
+# The weekly documents' and the contents check's own repositories get the answers the canary tests use.
+.golden_graphql <- function() {
+  cfg <- AI_QUERY_CANARY
+  slugs <- unique(c(cfg$accounts, cfg$activity))
+  keys <- sprintf('owner: "%s", name: "%s"', sub("/.*$", "", slugs), sub("^[^/]*/", "", slugs))
+  canary <- ai_canary_io()$graphql
+  with_contents_canary(function(q) {
+    if (grepl("pullRequest(number:", q, fixed = TRUE) || any(vapply(keys, grepl, NA, x = q, fixed = TRUE)))
+      return(canary(q))
+    .golden_github(q)
+  })
+}
+
+# A bare count is the older contributors reply; cfr's read fails.
+.golden_contributors <- function(owner, name) switch(tolower(paste(owner, name, sep = "/")),
+  "tidyverse/forcats" = list(count = 45L, top_commits = 310L, top_type = "User"),
+  "ropensci-review-tools/goodpractice" = list(count = 12L, top_commits = 200L, top_type = "Bot"),
+  "kvenkita/bqmm-r" = 1L,
+  "epiverse-trace/linelist" = list(count = 9L, top_commits = 150L, top_type = "Anonymous"),
+  stop("HTTP 502 from the contributors endpoint"))
+
+# Claude credits in forcats and goodpractice; every Assisted-by search is refused, the rest find nothing.
+.golden_search <- function(owner, name, query) {
+  page <- function(date, message) data.frame(date = date, message = message, stringsAsFactors = FALSE)
+  hit <- function(items, n) list(date = items$date[1], message = items$message[1], author = "maint", total_count = n,
+                                 items = items, unavailable = FALSE, incomplete = 0L)
+  repo <- tolower(paste(owner, name, sep = "/"))
+  if (grepl("Assisted-by", query, fixed = TRUE))
+    return(list(date = NA_character_, message = NA_character_, author = NA_character_, total_count = NA_integer_,
+                items = page(character(0), character(0)), unavailable = TRUE, incomplete = 0L))
+  if (identical(repo, "tidyverse/forcats") && grepl("anthropic|claude", query, ignore.case = TRUE))
+    return(hit(page(c("2025-10-05T05:49:23Z", "2026-01-12T09:00:00Z"),
+                    c("Add a vignette\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>",
+                      "Fix the docs\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>")), 2L))
+  if (identical(repo, "ropensci-review-tools/goodpractice") && grepl("Co-Authored-By: Claude", query, fixed = TRUE))
+    return(hit(page("2026-02-02T11:00:00Z", "Lint rules\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>"), 1L))
+  list(date = NA_character_, message = NA_character_, author = NA_character_, total_count = 0L,
+       items = page(character(0), character(0)), unavailable = FALSE, incomplete = 0L)
+}
+
+.golden_cran <- function() data.frame(Package = c("forcats", "goodpractice", "bqmm", "linelist"),
+                                      Version = c("1.0.1", "1.0.5", "0.1.0", "1.2.0"), stringsAsFactors = FALSE)
+
+# The release io over `rel`, every transport member noting its request in `log` first.
+.golden_io <- function(rel, log = NULL) {
+  note <- function(...) if (!is.null(log)) log$requests <- c(log$requests, paste(.golden_escape(c(...)), collapse = "\t"))
+  graphql <- .golden_graphql()
+  local_release_io(rel,
+    acquire = function() { note("acquire"); .golden_acquire() },
+    graphql = function(query) { note("graphql", query); graphql(query) },
+    contributors = function(owner, name) { note("contributors", owner, name); .golden_contributors(owner, name) },
+    # delay is pacing, not part of the request.
+    search_hit = function(owner, name, query, delay = 0) {
+      note("search_hit", owner, name, query); .golden_search(owner, name, query) },
+    cran_packages = function() { note("cran_packages"); .golden_cran() })
+}
+
+# ---- running a path -----------------------------------------------------------
+.golden_scripts <- c(daily = "update.R", weekly = "weekly.R", ai = "ai_backfill.R", backfill = "backfill.R")
+
+# A fresh environment holding what the path's entry script defines, so no two paths share a run_merge.
+.golden_env <- function(path) {
+  e <- new.env(parent = globalenv())
+  wd <- setwd(.repo_root)
+  on.exit(setwd(wd))
+  sys.source(file.path("scripts", .golden_scripts[[path]]), envir = e)
+  e
+}
+
+# weekly.R and backfill.R run the same stages; `fn` finds each in the path's own environment.
+.golden_sharded <- function(fn, io, out, root) {
+  fn("run_enumerate")(io, out)
+  for (i in seq_len(GOLDEN_SHARDS) - 1L)
+    fn("run_fetch_shard")(io, out, file.path(out, "vcs-signals-roster.db"), i, GOLDEN_SHARDS)
+  fn("run_merge")(io, out, out)
+}
+
+.golden_steps <- list(
+  daily = function(fn, io, out, root)
+    fn("run_update")(io, out, list(force_full = TRUE, links_backfill = .golden_links_backfill(root))),
+  weekly = .golden_sharded,
+  ai = function(fn, io, out, root) {
+    fn("run_enumerate_ai")(io, out)
+    for (i in seq_len(GOLDEN_SHARDS) - 1L)
+      fn("run_cheap")(io, out, file.path(out, "vcs-ai-roster.db"), i, GOLDEN_SHARDS)
+    fn("run_gate")(io, out, out)
+    for (i in seq_len(GOLDEN_SHARDS) - 1L)
+      fn("run_deep")(io, out, file.path(out, "vcs-ai-flagged-roster.db"), i, GOLDEN_SHARDS)
+    fn("run_merge")(io, out, out)
+  },
+  backfill = .golden_sharded)
+
+# Stars for three repositories on other hosts in the seeded release, as GitLab collection will
+# publish them, so the GitHub-only rosters of the later paths have signalled rows to leave out.
+.golden_other_hosts <- function(rel) {
+  ids <- c("gitlab.com/epiverse/outbreaks/linelist", "code.usgs.gov/water/toxics", "codeberg.org/someone/cbpkg")
+  stars <- c(12L, 4L, 2L)
+  for (asset in c("vcs-signals-recent.db", "vcs-signals-summary.db")) {
+    con <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel, asset))
+    if (identical(asset, "vcs-signals-recent.db"))
+      DBI::dbExecute(con, "INSERT INTO series_latest (repo_id, metric, value) VALUES (?, 'stars', ?)",
+                     params = list(ids, stars))
+    DBI::dbExecute(con, "UPDATE vcs_signals_summary SET stars = ? WHERE repo_id = ?", params = list(stars, ids))
+    DBI::dbDisconnect(con)
+  }
+}
+
+# Pins the day and drops the pauses for one run; returns the function that puts them back.
+.golden_pin <- function() {
+  g <- globalenv()
+  pinned <- c("Sys.Date", "BATCH_DELAY_S", "BACKFILL_DELAY_S", "CONTRIBUTOR_DELAY_S")
+  had <- vapply(pinned, exists, NA, envir = g, inherits = FALSE)
+  old <- mget(pinned[had], envir = g)
+  day <- as.Date(GOLDEN_DAY)
+  assign("Sys.Date", function() day, envir = g)
+  for (n in pinned[-1]) assign(n, 0, envir = g)
+  function() {
+    rm(list = pinned[!had], envir = g)
+    for (n in names(old)) assign(n, old[[n]], envir = g)
+  }
+}
+
+.golden_quiet <- function(expr) {
+  utils::capture.output(res <- suppressMessages(expr))
+  invisible(res)
+}
+
+#' Runs one path over a fresh release (the other paths over one the daily path published,
+#' plus .golden_other_hosts) and returns its tables, normalised, and the requests it sent, in order.
+golden_run <- function(path, record_requests = TRUE) {
+  stopifnot(length(path) == 1L, path %in% golden_paths())
+  t0 <- Sys.time()
+  root <- tempfile(paste0("golden-", path, "-"))
+  dir.create(root)
+  on.exit(unlink(root, recursive = TRUE), add = TRUE)
+  rel <- file.path(root, "release")
+  dir.create(rel)
+  daily <- .golden_env("daily")
+  env <- if (identical(path, "daily")) daily else .golden_env(path)
+  restore <- .golden_pin()
+  on.exit(restore(), add = TRUE)
+  fn <- function(e) function(name) get(name, envir = e, mode = "function")
+  if (!identical(path, "daily")) {
+    .golden_quiet(.golden_steps$daily(fn(daily), .golden_io(rel), file.path(root, "seed"), root))
+    .golden_other_hosts(rel)
+  }
+  log <- new.env(parent = emptyenv())
+  log$requests <- character(0)
+  out <- file.path(root, "out")
+  .golden_quiet(.golden_steps[[path]](fn(env), .golden_io(rel, if (record_requests) log), out, root))
+  t1 <- Sys.time()
+  list(tables = lapply(.golden_tables(out), golden_normalise, run_date = GOLDEN_DAY, t0 = t0, t1 = t1),
+       requests = log$requests,
+       manifest = .golden_manifest(file.path(out, "manifest.json"), GOLDEN_DAY, t0, t1))
+}
+
+# ---- snapshot -------------------------------------------------------------------
+# Every table of every .db in `out`, named "<db file>/<table>".
+.golden_tables <- function(out) {
+  tables <- list()
+  for (db in sort(list.files(out, pattern = "\\.db$"), method = "radix")) {
+    con <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, db))
+    for (t in sort(DBI::dbListTables(con), method = "radix"))
+      tables[[paste(db, t, sep = "/")]] <- DBI::dbReadTable(con, t)
+    DBI::dbDisconnect(con)
+  }
+  tables
+}
+
+.golden_iso_seconds <- function(x) {
+  m <- regmatches(x, regexec(paste0("^([0-9]{4}-[0-9]{2}-[0-9]{2})[T ]([0-9]{2}:[0-9]{2}:[0-9]{2})",
+                                    "(\\.[0-9]+)?(Z|[+-][0-9]{2}:?[0-9]{2})?$"), x))
+  vapply(m, function(p) {
+    if (length(p) != 5L) return(NA_real_)
+    s <- as.numeric(as.POSIXct(paste(p[2], p[3]), format = "%Y-%m-%d %H:%M:%S", tz = "UTC"))
+    z <- gsub(":", "", p[5], fixed = TRUE)
+    if (nchar(z) == 5L)
+      s <- s - (if (startsWith(z, "-")) -1 else 1) * (3600 * as.numeric(substr(z, 2, 3)) + 60 * as.numeric(substr(z, 4, 5)))
+    s
+  }, numeric(1))
+}
+
+#' Masks a cell only when it is the run's date, or a timestamp inside the run's wall-clock
+#' window [t0, t1]. Other columns keep their type.
+golden_normalise <- function(df, run_date, t0, t1) {
+  lo <- floor(as.numeric(t0)); hi <- ceiling(as.numeric(t1))
+  for (cn in names(df)) {
+    x <- df[[cn]]
+    if (!is.character(x)) next
+    s <- .golden_iso_seconds(x)
+    x[!is.na(x) & x == run_date] <- "<DATE>"
+    x[!is.na(s) & s >= lo & s <= hi] <- "<TS>"
+    df[[cn]] <- x
+  }
+  df
+}
+
+.golden_escape <- function(x) {
+  x <- gsub("\\", "\\\\", x, fixed = TRUE)
+  x <- gsub("\t", "\\t", x, fixed = TRUE)
+  x <- gsub("\n", "\\n", x, fixed = TRUE)
+  gsub("\r", "\\r", x, fixed = TRUE)
+}
+
+# One column as text: doubles exactly, NA as \N.
+.golden_text <- function(x) {
+  if (is.list(x)) x <- vapply(x, function(v) if (is.null(v)) NA_character_ else paste(format(v), collapse = ""), "")
+  na <- is.na(x)
+  s <- if (inherits(x, "integer64")) as.character(x)
+       else if (is.double(x)) {
+         s <- sprintf("%.15g", x)
+         loose <- !na & suppressWarnings(as.numeric(s)) != x
+         s[loose] <- sprintf("%.17g", x[loose])
+         s
+       } else .golden_escape(as.character(x))
+  s[na] <- "\\N"
+  s
+}
+
+.golden_tsv <- function(df) {
+  cols <- lapply(unname(as.list(df)), .golden_text)
+  rows <- character(0)
+  if (nrow(df)) {
+    o <- do.call(order, c(cols, list(method = "radix")))
+    rows <- do.call(paste, c(lapply(cols, `[`, o), sep = "\t"))
+  }
+  paste(c(paste(names(df), collapse = "\t"), rows), collapse = "\n")
+}
+
+# manifest.json as one "key<TAB>value" line per field, in its own order, so the record
+# does not depend on how jsonlite prints. The summary db's byte size and sha256 (and
+# those of the previous summary) are masked: the SQLite file header carries the library
+# version, so they change with an RSQLite upgrade while every table they cover is recorded.
+.golden_manifest <- function(path, run_date, t0, t1) {
+  if (!file.exists(path)) return(NULL)
+  masked <- c("db_bytes", "db_sha256", "summary.previous_summary.bytes", "summary.previous_summary.sha256")
+  flat <- function(x, key) {
+    if (is.null(x)) return(stats::setNames("null", key))
+    if (is.list(x)) {
+      if (!length(x)) return(stats::setNames(if (is.null(names(x))) "[]" else "{}", key))
+      sub <- if (is.null(names(x))) sprintf("%s[%d]", key, seq_along(x))
+             else if (nzchar(key)) paste(key, names(x), sep = ".") else names(x)
+      return(unlist(unname(Map(flat, x, sub))))
+    }
+    v <- if (is.logical(x)) tolower(as.character(x)) else .golden_text(x)
+    if (is.character(x)) v <- golden_normalise(data.frame(v = v, stringsAsFactors = FALSE), run_date, t0, t1)$v
+    stats::setNames(v, key)
+  }
+  kv <- flat(jsonlite::fromJSON(path, simplifyVector = FALSE), "")
+  kv[names(kv) %in% masked] <- "<MASKED>"
+  paste(names(kv), kv, sep = "\t", collapse = "\n")
+}
+
+#' Each table as sorted TSV text, the requests one per line, and the manifest, by record file name.
+golden_snapshot_text <- function(run) {
+  tsv <- vapply(run$tables, .golden_tsv, character(1))
+  names(tsv) <- paste0(sub("/", "__", names(run$tables), fixed = TRUE), ".tsv")
+  c(tsv, requests.txt = paste(run$requests, collapse = "\n"),
+    if (!is.null(run$manifest)) c(manifest.json.tsv = run$manifest))
+}

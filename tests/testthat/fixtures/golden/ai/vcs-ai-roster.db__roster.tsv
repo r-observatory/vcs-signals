@@ -1,0 +1,6 @@
+repo_id	owner	name	node_id	done	commits_read_on	commits_read_through	commits_ruleset	commits_history_complete	prs_newest_created_at	prs_walk_complete	prs_walk_started_on	prs_walk_cursor
+github.com/epiverse-trace/cfr	epiverse-trace	cfr	R_cfr	0	\N	\N	\N	\N	\N	\N	\N	\N
+github.com/epiverse-trace/linelist	epiverse-trace	linelist	R_linelist	0	\N	\N	\N	\N	\N	\N	\N	\N
+github.com/kvenkita/bqmm-r	kvenkita	bqmm	R_bqmm	0	\N	\N	\N	\N	\N	\N	\N	\N
+github.com/ropensci-review-tools/goodpractice	ropensci-review-tools	goodpractice	R_goodpractice	0	\N	\N	\N	\N	\N	\N	\N	\N
+github.com/tidyverse/forcats	tidyverse	forcats	R_forcats	0	\N	\N	\N	\N	\N	\N	\N	\N

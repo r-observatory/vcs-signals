@@ -1,0 +1,79 @@
+tier	tool	status	reason	recorded_on
+A	amazonq	unexplained	\N	\N
+A	amp	genuine	No commit by Amp's account (amp@ampcode.com) has been found. Commits by it are counted in every repository each week.	2026-09-27
+A	codex	genuine	No commit by Codex's accounts (openai-code-agent[bot] and codex) has been found. Commits by them are counted in every repository each week.	2026-09-27
+A	copilot	unexplained	\N	\N
+A	cursor	unexplained	\N	\N
+A	devin	genuine	No repository has a commit by Devin's account (devin-ai-integration[bot]) on its default branch. Commits by it are counted in every repository each week, and a check of all 15,875 on 2026-09-25 found none. Devin shows up through pull requests instead: its account opened 6 in xsdm-devel, and maintainers opened pull requests from a Devin session in sobol and maxentcpp.	2026-09-25
+A	jules	unexplained	\N	\N
+A	junie	genuine	No commit by Junie's account (junie@jetbrains.com) on any default branch, checked across 15,875 on 2026-09-25. Commits by it are counted in every repository each week.	2026-09-25
+A	kiro	genuine	No commit by Kiro's accounts (kiro-agent and kiro-agent[bot]) on any default branch, checked across 15,875 on 2026-09-25. Commits by them are counted in every repository each week.	2026-09-25
+A	openhands	unexplained	\N	\N
+A	replit	genuine	No commit by Replit Agent's account (agent@replit.com) on any default branch, checked across 15,875 on 2026-09-25. Commits by it are counted in every repository each week.	2026-09-25
+A	roo	genuine	No commit by Roo Code's cloud agent accounts (roomote-roomote[bot], roomote[bot] and roomote@roomote.dev) has been found. The older roomote[bot] had none on any default branch across 15,875 on 2026-09-25, and all three are counted in every repository each week.	2026-09-25
+B	aider	unexplained	\N	\N
+B	amp	genuine	No commit crediting Amp (a co-author line at amp@ampcode.com) among 373,252 recent commits from 9,193 repositories, checked 2026-09-25. Every repository's new commits are read each week.	2026-09-25
+B	antigravity	unexplained	\N	\N
+B	augment	genuine	No commit crediting Augment Code (a co-author line at noreply@augmentcode.com) among 373,252 recent commits from 9,193 repositories, checked 2026-09-25. Every repository's new commits are read each week.	2026-09-25
+B	codex	unexplained	\N	\N
+B	continue	genuine	No commit crediting Continue (a co-author line at noreply@continue.dev) among 373,252 recent commits from 9,193 repositories, checked 2026-09-25. Every repository's new commits are read each week.	2026-09-25
+B	corteza	unexplained	\N	\N
+B	crush	unexplained	\N	\N
+B	devin	unexplained	\N	\N
+B	eca	unexplained	\N	\N
+B	factory	genuine	No commit crediting Factory (a co-author line naming factory-droid[bot]) among 373,252 recent commits from 9,193 repositories, checked 2026-09-25. Every repository's new commits are read each week.	2026-09-25
+B	gemini	unexplained	\N	\N
+B	grok	genuine	No commit crediting Grok (a co-author line at an x.ai address) among 373,252 recent commits from 9,193 repositories, checked 2026-09-25. Every repository's new commits are read each week.	2026-09-25
+B	jules	unexplained	\N	\N
+B	kimi	genuine	No commit crediting Kimi (a co-author line at noreply@moonshot.ai) among 373,252 recent commits from 9,193 repositories, checked 2026-09-25. Every repository's new commits are read each week.	2026-09-25
+B	opencode	genuine	No commit crediting OpenCode (a co-author line at noreply@opencode.ai) among 373,252 recent commits from 9,193 repositories, checked 2026-09-25. Every repository's new commits are read each week.	2026-09-25
+B	openhands	unexplained	\N	\N
+B	qwen	unexplained	\N	\N
+B	replit	genuine	No commit crediting Replit has been found. Searched on 2026-07-31 in the 1,964 repositories found by then, and every repository's new commits are now read each week. No repository has a .replit, replit.nix or replit.md file, and the newest 100 commits of 600 sampled repositories had no Replit-Commit-Author line on 2026-09-25.	2026-09-25
+B	vibe	genuine	No commit crediting Mistral Vibe (a co-author line at vibe@mistral.ai) among 373,252 recent commits from 9,193 repositories, checked 2026-09-25. Every repository's new commits are read each week.	2026-09-25
+B	warp	unexplained	\N	\N
+B	windsurf	genuine	Every public commit crediting Windsurf was listed on 2026-09-25: 963 naming Windsurf, 552 naming its bot account (windsurf-bot) and 76 at codeium.com, and none is in a repository we scan. Every repository's new commits are now read each week. Windsurf became Devin Desktop on 2026-06-02 and keeps its rules in .devin/rules, which this page lists under Devin.	2026-09-25
+C	aider	unexplained	\N	\N
+D	agents-dir	unexplained	\N	\N
+D	aider	unexplained	\N	\N
+D	amazonq	genuine	No repository has an .amazonq folder, checked across 15,875. Amazon Q is found another way: its account opened a pull request in ss3sim, merged in May 2025, and made 2 commits there. Its command-line tool has been Kiro since November 2025, which this page lists as its own tool.	2026-09-25
+D	antigravity	unexplained	\N	\N
+D	augment	genuine	No .augment folder in any repository, checked across 15,875 on 2026-09-25. The files at the top of every repository are read each week.	2026-09-25
+D	cline	unexplained	\N	\N
+D	codex	unexplained	\N	\N
+D	continue	unexplained	\N	\N
+D	copilot	unexplained	\N	\N
+D	crush	genuine	No CRUSH.md file in any repository, checked across 15,875 on 2026-09-25. The files at the top of every repository are read each week.	2026-09-25
+D	cursor	unexplained	\N	\N
+D	devin	unexplained	\N	\N
+D	factory	genuine	No .factory folder in any repository, checked across 15,875 on 2026-09-25. The files at the top of every repository are read each week.	2026-09-25
+D	gemini	unexplained	\N	\N
+D	goose	genuine	No .goosehints file in any repository, checked across 15,875 on 2026-09-25. The files at the top of every repository are read each week.	2026-09-25
+D	grok	genuine	No GROK.md, .grok or .xai in any repository, checked across 15,875. xAI's Grok Build reads AGENTS.md, CLAUDE.md and .grok/rules rather than GROK.md, so a repository using it may show only as AGENTS.md or CLAUDE.md.	2026-09-25
+D	jules	unexplained	\N	\N
+D	junie	genuine	No .junie folder in any repository, no commit by Junie's account (junie@jetbrains.com) on any default branch, and no pull request by it among each repository's newest 50, checked across 15,875. Junie now reads AGENTS.md first, so a repository using it may show only as AGENTS.md.	2026-09-25
+D	kilo	unexplained	\N	\N
+D	kiro	unexplained	\N	\N
+D	opencode	unexplained	\N	\N
+D	openhands	unexplained	\N	\N
+D	posit-assistant	unexplained	\N	\N
+D	qwen	unexplained	\N	\N
+D	roo	genuine	No .roo, .roomodes, .roorules or .rooignore in any repository, checked across 15,875, and none of the 218 public commits by Roo's cloud agent account (roomote[bot]) is in a repository we scan. The Roo Code extension was shut down on 2026-05-15, so this will not change.	2026-09-25
+D	trae	genuine	No .trae folder in any repository, checked across 15,875 on 2026-09-25. The files at the top of every repository are read each week.	2026-09-25
+D	vibe	genuine	No .vibe folder in any repository, checked across 15,875 on 2026-09-25. The files at the top of every repository are read each week.	2026-09-25
+D	warp	unexplained	\N	\N
+D	windsurf	unexplained	\N	\N
+PB	amazonq	genuine	No pull request opened by a maintainer from a branch Amazon Q named (Q-DEV-issue-) has been found among the pull requests read in every repository each week. The one such branch found, in ss3sim, was opened by Amazon Q's own account.	2026-09-27
+PB	claude	unexplained	\N	\N
+PB	codex	unexplained	\N	\N
+PB	cursor	unexplained	\N	\N
+PB	openhands	unexplained	\N	\N
+PR	amazonq	unexplained	\N	\N
+PR	claude	unexplained	\N	\N
+PR	codex	genuine	No pull request among each repository's newest 50 was opened by Codex's account (openai-code-agent), checked across 161,444 pull requests on 2026-09-25. Codex's cloud tasks reach a repository as a pull request a maintainer opens, which this page finds by the task link or the Generated with Codex line in its description.	2026-09-25
+PR	copilot	unexplained	\N	\N
+PR	cursor	genuine	No pull request among each repository's newest 50 was opened by Cursor's app account, checked across 161,444 pull requests. Cursor's cloud agent opens pull requests under the maintainer's own account, and this page finds them by the note Cursor writes at the top of the description or the branch name it gives them.	2026-09-25
+PR	devin	unexplained	\N	\N
+PR	jules	unexplained	\N	\N
+PR	kiro	genuine	No pull request among each repository's newest 50 was opened by Kiro's account (kiro-agent), checked across 161,444 pull requests on 2026-09-25.	2026-09-25
+PR	openhands	genuine	No pull request among each repository's newest 50 was opened by OpenHands's account (openhands-agent), checked across 161,444 pull requests.	2026-09-25

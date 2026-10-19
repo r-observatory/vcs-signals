@@ -1,0 +1,13 @@
+repo_id	package	origin	first_seen	last_seen
+code.usgs.gov/water/toxics	usgspkg	cran	<DATE>	<DATE>
+codeberg.org/someone/cbpkg	cbpkg	cran	<DATE>	<DATE>
+github.com/acoppock/ri2	ri2	cran	<DATE>	<DATE>
+github.com/epiverse-trace/cfr	cfr	bioc	<DATE>	<DATE>
+github.com/epiverse-trace/linelist	linelist	cran	<DATE>	<DATE>
+github.com/kvenkita/bqmm-r	bqmm	cran	<DATE>	<DATE>
+github.com/old-owner/forcats	forcats	cran	2026-08-01	2026-09-15
+github.com/ropensci-review-tools/goodpractice	goodpractice	cran	<DATE>	<DATE>
+github.com/tidyverse/forcats	forcats	cran	<DATE>	<DATE>
+gitlab.com/epiverse/outbreaks/linelist	linelist	bioc	<DATE>	<DATE>
+gitlab.com/someone/retired	retired	cran	2026-08-01	2026-09-10
+r-forge.r-project.org/projects/rfpkg	rfpkg	cran	<DATE>	<DATE>

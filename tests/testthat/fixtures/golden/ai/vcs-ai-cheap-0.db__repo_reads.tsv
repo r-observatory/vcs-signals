@@ -1,0 +1,4 @@
+repo_id	commits_read_on	commits_read_through	commits_ruleset	commits_read	commits_window_complete	commits_history_complete	prs_read_on	prs_newest_created_at	prs_walk_complete	prs_walk_started_on	prs_walk_cursor	accounts_counted_on	last_failed_on	last_failure	reached_first
+github.com/epiverse-trace/cfr	<DATE>	2026-03-18T09:27:20Z	2026-09-27	1	1	1	<DATE>	\N	1	<DATE>	\N	<DATE>	\N	\N	1
+github.com/kvenkita/bqmm-r	<DATE>	\N	2026-09-27	0	1	1	<DATE>	\N	1	<DATE>	\N	<DATE>	\N	\N	1
+github.com/tidyverse/forcats	<DATE>	2025-10-05T05:49:23Z	2026-09-27	1	1	1	<DATE>	2026-03-11T08:43:55Z	1	<DATE>	\N	<DATE>	\N	\N	1
