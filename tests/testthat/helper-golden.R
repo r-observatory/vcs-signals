@@ -461,7 +461,7 @@ skip_golden_parity <- function()
 # Stars for three repositories on other hosts in the seeded release, as GitLab collection will
 # publish them, so the GitHub-only rosters of the later paths have signalled rows to leave out.
 .golden_other_hosts <- function(rel) {
-  ids <- c("gitlab.com/epiverse/outbreaks/linelist", "code.usgs.gov/water/toxics", "codeberg.org/someone/cbpkg")
+  ids <- c("gitlab.com/epiverse/outbreaks/linelist", "code.usgs.gov/water/toxics/usgspkg", "codeberg.org/someone/cbpkg")
   stars <- c(12L, 4L, 2L)
   for (asset in c("vcs-signals-recent.db", "vcs-signals-summary.db")) {
     con <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel, asset))

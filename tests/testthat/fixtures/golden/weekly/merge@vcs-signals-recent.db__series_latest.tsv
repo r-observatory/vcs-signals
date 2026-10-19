@@ -1,5 +1,5 @@
 repo_id	metric	value
-code.usgs.gov/water/toxics	stars	4
+code.usgs.gov/water/toxics/usgspkg	stars	4
 codeberg.org/someone/cbpkg	stars	2
 github.com/epiverse-trace/cfr	commits_total	640
 github.com/epiverse-trace/cfr	forks	6

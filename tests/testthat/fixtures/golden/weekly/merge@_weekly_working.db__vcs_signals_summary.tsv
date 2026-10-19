@@ -9,4 +9,4 @@ linelist	bioc	gitlab.com/epiverse/outbreaks/linelist	12	\N	\N	\N	\N	\N	\N	\N	\N	
 linelist	cran	github.com/epiverse-trace/linelist	45	8	5	1	910	9	4	2026-09-25T13:40:00Z	MIT	r,epidemiology	0	9.75609756097561	78	24	6	72	2025-05-30T09:00:00Z	24	\N	\N	\N	\N	\N	\N	\N	2026-08-20	<DATE>	v1.2.0	2023-03-14T11:00:00Z	150	\N
 rfpkg	cran	r-forge.r-project.org/projects/rfpkg	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	2026-08-20	<DATE>	\N	\N	\N	\N
 ri2	cran	github.com/acoppock/ri2	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	2026-08-20	<DATE>	\N	\N	\N	\N
-usgspkg	cran	code.usgs.gov/water/toxics	4	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	2026-08-20	<DATE>	\N	\N	\N	\N
+usgspkg	cran	code.usgs.gov/water/toxics/usgspkg	4	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	2026-08-20	<DATE>	\N	\N	\N	\N
