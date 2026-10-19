@@ -72,7 +72,7 @@ parse_vcs_url <- function(u) {
   if (is.na(domain) || !nzchar(domain)) return(NULL)
   if (endsWith(domain, PAGES_SUFFIX)) return(NULL)            # pages handled by parse_pages_url
 
-  host <- unname(KNOWN_FORGES[domain])
+  host <- if (domain %in% names(GITLAB_DOMAINS)) "gitlab" else unname(KNOWN_FORGES[domain])
   if (is.na(host)) {
     if (.is_denied(domain)) return(NULL)
     if (.looks_like_forge(domain)) host <- "other" else return(NULL)

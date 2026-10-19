@@ -47,8 +47,37 @@ PAGES_SUFFIX <- ".github.io"
 MIRROR_GITHUB_OWNERS <- c("cran", "bioc")   # exact github.com owner match
 MIRROR_DOMAINS       <- c("git.bioconductor.org")
 
-# Hosts we have an adapter for in v1. This sets repos.supported and routes nothing.
-SUPPORTED_HOSTS <- c("github")
+# GitLab domain -> API base. Self-hosted entries are the domains that answered GitLab GraphQL in the recon.
+GITLAB_DOMAINS <- c(
+  "gitlab.com" = "https://gitlab.com",
+  "gitlab.earth.bsc.es" = "https://gitlab.earth.bsc.es",
+  "gitlab.in2p3.fr" = "https://gitlab.in2p3.fr",
+  "code.usgs.gov" = "https://code.usgs.gov",
+  "gitlab.opencode.de" = "https://gitlab.opencode.de",
+  "git.math.uzh.ch" = "https://git.math.uzh.ch",
+  "gitlab.open-tools.net" = "https://gitlab.open-tools.net",
+  "gitlab.gwdg.de" = "https://gitlab.gwdg.de",
+  "gitlab.uni-oldenburg.de" = "https://gitlab.uni-oldenburg.de",
+  "gitlab.math.ethz.ch" = "https://gitlab.math.ethz.ch",
+  "gitlab.croptrust.org" = "https://gitlab.croptrust.org",
+  "gitlab.cirad.fr" = "https://gitlab.cirad.fr",
+  "gitlab-scm.partners.org" = "https://gitlab-scm.partners.org",
+  "git.wur.nl" = "https://git.wur.nl",
+  "git.ufz.de" = "https://git.ufz.de",
+  "git.scicore.unibas.ch" = "https://git.scicore.unibas.ch",
+  "git.sc.uni-leipzig.de" = "https://git.sc.uni-leipzig.de",
+  "git.nomics.world" = "https://git.nomics.world",
+  "git.loe.auf.uni-rostock.de" = "https://git.loe.auf.uni-rostock.de",
+  "git.embl.org" = "https://git.embl.org",
+  "git.ecdf.ed.ac.uk" = "https://git.ecdf.ed.ac.uk",
+  # forge.inrae.fr answers GraphQL; forgemia.inra.fr redirects to it, and a followed redirect turns POST into GET.
+  "forge.inrae.fr" = "https://forge.inrae.fr",
+  "forgemia.inra.fr" = "https://forge.inrae.fr"
+)
+GITLAB_HOSTS <- c("gitlab")
+
+# Hosts we have an adapter for. This sets repos.supported and routes nothing.
+SUPPORTED_HOSTS <- c("github", "gitlab")
 # Hosts whose repositories go to the GitHub collectors (resolve, gauges, weekly, backfill, AI).
 GITHUB_HOSTS <- c("github")
 

@@ -24,11 +24,31 @@ test_that("parse_vcs_url handles other known forges", {
   expect_equal(parse_vcs_url("https://r-forge.r-project.org/projects/x/y")$host, "rforge")
 })
 
-test_that("parse_vcs_url promotes self-hosted forges to other, preserving domain", {
+test_that("parse_vcs_url promotes unlisted self-hosted forges to other, preserving domain", {
   r <- parse_vcs_url("https://gitlab.example.edu/o/n")
   expect_equal(r$host, "other")
   expect_equal(r$host_domain, "gitlab.example.edu")
   expect_equal(parse_vcs_url("https://git.example.org/o/n")$host, "other")
+  expect_equal(parse_vcs_url("https://gitlab.mbb.univ-montp2.fr/o/n")$host, "other")
+})
+
+test_that("parse_vcs_url treats listed GitLab domains as gitlab and keeps nested paths", {
+  r <- parse_vcs_url("https://code.usgs.gov/a/b/c")
+  expect_equal(r$host, "gitlab")
+  expect_equal(r$host_domain, "code.usgs.gov")
+  expect_equal(r$owner, "a/b")
+  expect_equal(r$name, "c")
+  expect_equal(parse_vcs_url("https://forge.inrae.fr/x/y")$host, "gitlab")
+  r <- parse_vcs_url("https://forgemia.inra.fr/x/y")
+  expect_equal(r$host, "gitlab")
+  expect_equal(repo_slug(r$host_domain, r$owner, r$name), "forgemia.inra.fr/x/y")
+})
+
+test_that("repos.supported is 1 for gitlab and 0 for other", {
+  df <- data.frame(package = c("a", "b"), origin = "cran", resolved_from = "url",
+                   host = c("gitlab", "other"), host_domain = c("code.usgs.gov", "git.example.org"),
+                   owner = c("a/b", "o"), name = c("c", "n"), stringsAsFactors = FALSE)
+  expect_equal(build_repo_index(df)$repos$supported, c(1L, 0L))
 })
 
 test_that("parse_vcs_url rejects non-repo and malformed inputs", {
