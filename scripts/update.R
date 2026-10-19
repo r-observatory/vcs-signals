@@ -244,7 +244,7 @@ run_update <- function(io, out_dir, opts = list()) {
   # ---- Stage 2: node-id resolution + lifecycle (rename, gone) ------------
   needing <- DBI::dbGetQuery(con,
     sprintf("SELECT repo_id, owner, name FROM repos WHERE %s AND node_id IS NULL AND status = 'active'",
-            supported_host_predicate()))
+            host_predicate(GITHUB_HOSTS)))
   resolved_ids <- resolve_node_ids(io, needing)
   update_repo_node_ids(con, resolved_ids)
   n_id_resolved <- sum(resolved_ids$status == "active")
@@ -255,7 +255,7 @@ run_update <- function(io, out_dir, opts = list()) {
   # ---- Stage 3: forward gauge collection over active github repos -------
   repo_map <- DBI::dbGetQuery(con,
     sprintf("SELECT node_id, repo_id FROM repos WHERE %s AND status = 'active' AND node_id IS NOT NULL
-      ORDER BY repo_id", supported_host_predicate()))
+      ORDER BY repo_id", host_predicate(GITHUB_HOSTS)))
   # A repo the deadline leaves out keeps its last values, as a deferred one does.
   gauges <- collect_gauges(io, rotate_by_day(repo_map$node_id, today),
                            deadline = started + 60 * deadline_min, now = now,

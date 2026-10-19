@@ -525,7 +525,7 @@ repoint_dead_node_ids <- function(con, io, node_ids, n_gauged) {
   rows <- DBI::dbGetQuery(con, sprintf(
     "SELECT repo_id, owner, name, node_id AS old_id FROM repos
       WHERE %s AND status = 'active' AND node_id IN (%s)",
-    supported_host_predicate(), paste(rep("?", length(node_ids)), collapse = ",")), params = as.list(node_ids))
+    host_predicate(GITHUB_HOSTS), paste(rep("?", length(node_ids)), collapse = ",")), params = as.list(node_ids))
   if (nrow(rows) == 0) return(out)
   found <- resolve_node_ids(io, rows[, c("repo_id", "owner", "name")])
   found <- merge(found, rows[, c("repo_id", "old_id")], by = "repo_id")

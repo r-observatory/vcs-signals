@@ -16,7 +16,7 @@
 # below touch the network or disk, behind an injected io, mirroring
 # scripts/update.R's run_update().
 if (!exists("STARGAZER_PAGE"))      source("scripts/config.R")
-if (!exists("supported_host_predicate")) source("scripts/hosts.R")
+if (!exists("host_predicate"))   source("scripts/hosts.R")
 if (!exists("http_request"))   source("scripts/http.R")
 if (!exists("host_pacer"))     source("scripts/pacing.R")
 if (!exists("ensure_series_schema")) source("scripts/helpers.R")
@@ -66,7 +66,7 @@ run_enumerate <- function(io, out_dir) {
         FROM vcs_signals_summary s JOIN repos r ON r.repo_id = s.repo_id
       WHERE %s
         AND (s.stars > 0 OR s.forks > 0 OR s.releases_total > 0) GROUP BY s.repo_id",
-      supported_host_predicate("r.host")))
+      host_predicate(GITHUB_HOSTS, "r.host")))
 
   parts <- strsplit(rows$repo_id, "/", fixed = TRUE)
   roster <- data.frame(

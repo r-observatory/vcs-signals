@@ -47,8 +47,10 @@ PAGES_SUFFIX <- ".github.io"
 MIRROR_GITHUB_OWNERS <- c("cran", "bioc")   # exact github.com owner match
 MIRROR_DOMAINS       <- c("git.bioconductor.org")
 
-# Hosts we have an adapter for in v1.
+# Hosts we have an adapter for in v1. This sets repos.supported and routes nothing.
 SUPPORTED_HOSTS <- c("github")
+# Hosts whose repositories go to the GitHub collectors (resolve, gauges, weekly, backfill, AI).
+GITHUB_HOSTS <- c("github")
 
 # ---- GitHub forward-gauge collection + publishing ----
 GRAPHQL_ENDPOINT <- "https://api.github.com/graphql"
