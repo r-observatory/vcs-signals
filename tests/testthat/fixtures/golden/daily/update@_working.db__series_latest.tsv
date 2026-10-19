@@ -1,4 +1,9 @@
 repo_id	metric	value
+code.usgs.gov/water/toxics/usgspkg	forks	1
+code.usgs.gov/water/toxics/usgspkg	issues_closed	5
+code.usgs.gov/water/toxics/usgspkg	issues_open	2
+code.usgs.gov/water/toxics/usgspkg	releases_total	0
+code.usgs.gov/water/toxics/usgspkg	stars	4
 github.com/epiverse-trace/cfr	forks	6
 github.com/epiverse-trace/cfr	issues_closed	20
 github.com/epiverse-trace/cfr	issues_open	2
@@ -59,3 +64,11 @@ github.com/tidyverse/forcats	releases_total	12
 github.com/tidyverse/forcats	size_kb	22900
 github.com/tidyverse/forcats	stars	570
 github.com/tidyverse/forcats	watchers	57
+gitlab.com/epiverse/outbreaks/linelist	forks	3
+gitlab.com/epiverse/outbreaks/linelist	issues_closed	9
+gitlab.com/epiverse/outbreaks/linelist	issues_open	4
+gitlab.com/epiverse/outbreaks/linelist	prs_closed	2
+gitlab.com/epiverse/outbreaks/linelist	prs_merged	15
+gitlab.com/epiverse/outbreaks/linelist	prs_open	1
+gitlab.com/epiverse/outbreaks/linelist	releases_total	3
+gitlab.com/epiverse/outbreaks/linelist	stars	12

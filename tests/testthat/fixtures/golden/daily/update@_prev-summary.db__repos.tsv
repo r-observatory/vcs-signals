@@ -7,5 +7,5 @@ github.com/kvenkita/bqmm-r	R_bqmm	github	github.com	kvenkita	bqmm-r	kvenkita/bqm
 github.com/rdatatable/data.table	R_datatable	github	github.com	Rdatatable	data.table	Rdatatable/data.table	1	1	2026-08-20	2026-09-10	active
 github.com/ropensci-review-tools/goodpractice	R_goodpractice	github	github.com	ropensci-review-tools	goodpractice	ropensci-review-tools/goodpractice	1	1	2026-08-20	2026-09-10	active
 github.com/tidyverse/forcats	R_forcats	github	github.com	tidyverse	forcats	tidyverse/forcats	1	1	2026-08-20	2026-09-10	active
-gitlab.com/epiverse/outbreaks/linelist	\N	gitlab	gitlab.com	epiverse/outbreaks	linelist	epiverse/outbreaks/linelist	1	1	2026-08-20	2026-09-10	active
+gitlab.com/epiverse/outbreaks/linelist	gitlab:gitlab.com:46520077	gitlab	gitlab.com	epiverse/outbreaks	linelist	epiverse/outbreaks/linelist	1	1	2026-08-20	2026-09-10	active
 r-forge.r-project.org/projects/rfpkg	\N	rforge	r-forge.r-project.org	projects	rfpkg	projects/rfpkg	0	1	2026-08-20	2026-09-10	active
