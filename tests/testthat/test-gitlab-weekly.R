@@ -141,7 +141,7 @@ test_that("licence: the key comes from license.key, null is a read NA, a refusal
   expect_identical(gl_license(none, "gitlab.com", 1, fake_rest_pacer()$p), list(key = NA_character_, stopped = FALSE, answered = TRUE, read = TRUE))
   limited <- fake_rest_io(function(domain, path) gl_rest_answer(429L))
   expect_identical(gl_license(limited, "gitlab.com", 1, fake_rest_pacer()$p), list(key = NA_character_, stopped = TRUE, answered = FALSE, read = FALSE))
-  ok0 <- fake_rest_io(function(domain, path) gl_rest_answer(body = list(license = list(key = "mit")),
+  ok0 <- fake_rest_io(function(domain, path) gl_rest_answer(body = list(id = 1L, license = list(key = "mit")),
                                                             headers = c(`ratelimit-remaining` = "0")))
   expect_identical(gl_license(ok0, "gitlab.com", 1, fake_rest_pacer()$p), list(key = "mit", stopped = TRUE, answered = TRUE, read = TRUE))
 })
@@ -155,6 +155,24 @@ test_that("licence keys map to GitHub's SPDX spelling and anything else is NA", 
   expect_identical(gl_license_spdx(c("other", "cc-by-nc-4.0", NA, "")), rep(NA_character_, 4L))
   expect_identical(gl_license_spdx("GPL-3.0"), NA_character_)
   expect_identical(gl_license_spdx("mit"), "MIT")
+})
+
+test_that("more GitLab licence keys map to the SPDX spelling GitHub uses", {
+  keys <- c("artistic-2.0", "cecill-2.1", "bsl-1.0", "ms-pl", "eupl-1.2", "zlib", "postgresql", "vim", "wtfpl")
+  expect_identical(gl_license_spdx(keys), c("Artistic-2.0", "CECILL-2.1", "BSL-1.0", "MS-PL", "EUPL-1.2",
+    "Zlib", "PostgreSQL", "Vim", "WTFPL"))
+  expect_identical(gl_license_spdx(c("cecill-b", "cecill-c")), rep(NA_character_, 2L))
+})
+
+test_that("a read answer without a project id is not a licence reading", {
+  for (body in list(list(message = "oops"), list(license = list(key = "mit")), list(), "text")) {
+    io <- fake_rest_io(function(domain, path) gl_rest_answer(body = body))
+    expect_identical(gl_license(io, "gitlab.com", 1, fake_rest_pacer()$p),
+                     list(key = NA_character_, stopped = FALSE, answered = TRUE, read = FALSE))
+  }
+  junk <- fake_rest_io(function(domain, path) list(status = 200L, headers = character(), error = NA_character_, body = "<html>"))
+  expect_identical(gl_license(junk, "gitlab.com", 1, fake_rest_pacer()$p),
+                   list(key = NA_character_, stopped = FALSE, answered = TRUE, read = FALSE))
 })
 
 # ---- commit counts -------------------------------------------------------------
@@ -251,6 +269,20 @@ test_that("gl_rest GETs under /api/v4 with the PRIVATE-TOKEN header from a file"
   r <- gl_rest("gitlab.com", "/projects/1?license=true", state = state, run = tok_curl("{}", seen, refuse = FALSE))
   expect_identical(seen$urls, "https://gitlab.com/api/v4/projects/1?license=true")
   expect_identical(r$status, 200L)
+  # The token is in the header file curl reads, and nowhere in the arguments.
+  spy <- new.env(); spy$args <- character(); spy$file <- NULL
+  inner <- tok_curl("{}", new.env(), refuse = FALSE)
+  run <- function(cmd, args, stdout = TRUE, ...) {
+    plain <- gsub("^'|'$", "", args)
+    f <- sub("^@", "", grep("^@", plain[which(plain == "-H") + 1L], value = TRUE))
+    spy$args <- c(spy$args, args)
+    if (length(f)) spy$file <- readLines(f, warn = FALSE)
+    inner(cmd, args, stdout = stdout, ...)
+  }
+  gl_rest("gitlab.com", "/projects/1", state = gl_run_state(), run = run)
+  expect_false(any(grepl("s3cret", spy$args, fixed = TRUE)))
+  expect_false(any(grepl("PRIVATE-TOKEN", spy$args, fixed = TRUE)))
+  expect_identical(spy$file, "PRIVATE-TOKEN: s3cret")
   withr::local_envvar(GITLAB_TOKEN_GITLAB_COM = NA)
   seen2 <- new.env()
   gl_rest("gitlab.com", "/x", state = gl_run_state(), run = tok_curl("{}", seen2))
