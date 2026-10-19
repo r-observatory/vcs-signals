@@ -1,0 +1,5 @@
+type	name	tbl_name	sql
+table	campaign	campaign	CREATE TABLE `campaign` (\n  `since` TEXT\n)
+table	evidence	evidence	CREATE TABLE `evidence` (\n  `repo_id` TEXT,\n  `tool` TEXT,\n  `tier` TEXT,\n  `marker` TEXT,\n  `agnostic` INTEGER,\n  `role` TEXT,\n  `rule_key` TEXT,\n  `onset` TEXT,\n  `onset_censored` INTEGER,\n  `newest_at` TEXT\n)
+table	flagged	flagged	CREATE TABLE `flagged` (\n  `repo_id` TEXT,\n  `owner` TEXT,\n  `name` TEXT,\n  `node_id` TEXT,\n  `is_fork` INTEGER,\n  `parent` TEXT,\n  `pr_onset_date` TEXT\n)
+table	work	work	CREATE TABLE `work` (\n  `repo_id` TEXT,\n  `tool` TEXT,\n  `rule_key` TEXT,\n  `reason` TEXT,\n  `priority` INTEGER\n)

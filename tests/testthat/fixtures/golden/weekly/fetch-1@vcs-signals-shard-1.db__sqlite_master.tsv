@@ -1,0 +1,3 @@
+type	name	tbl_name	sql
+index	sqlite_autoindex_snapshot_1	snapshot	\N
+table	snapshot	snapshot	CREATE TABLE snapshot (repo_id TEXT PRIMARY KEY, commits_total INTEGER, contributors_total INTEGER, median_days_to_close_issue INTEGER, median_days_to_close_pr INTEGER, median_open_issue_age_days INTEGER, top_contributor_commits INTEGER, top_contributor_bot INTEGER)

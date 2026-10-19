@@ -1,7 +1,8 @@
 #!/usr/bin/env Rscript
-# Writes the golden record: every table each publishing path leaves in its out dir, and
-# every request it sends, under tests/testthat/fixtures/golden/<path>/. Run from the repo
-# root, only when a published value is meant to change:
+# Writes the golden record: every table and schema each publishing path's jobs leave in their
+# out dirs, every request and release call, and the manifest and release notes, under
+# tests/testthat/fixtures/golden/<path>/. Run from the repo root, only when a published value
+# is meant to change:
 #   Rscript tests/golden/record.R
 if (!file.exists(file.path("scripts", "update.R")))
   stop("run this from the repository root", call. = FALSE)
@@ -22,6 +23,6 @@ for (p in golden_paths()) {
   dir.create(dir, recursive = TRUE)
   txt <- golden_snapshot_text(golden_run(p))
   for (f in names(txt)) writeLines(txt[[f]], file.path(dir, f), useBytes = TRUE)
-  cat(sprintf("%s: %d files, %d requests\n", p, length(txt),
+  cat(sprintf("%s: %d files, %d requests and release calls\n", p, length(txt),
               if (nzchar(txt[["requests.txt"]])) length(strsplit(txt[["requests.txt"]], "\n", fixed = TRUE)[[1]]) else 0L))
 }

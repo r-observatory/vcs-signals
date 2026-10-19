@@ -1,0 +1,4 @@
+type	name	tbl_name	sql
+index	idx_series_date	signals_series	CREATE INDEX idx_series_date ON signals_series(date)
+index	sqlite_autoindex_signals_series_1	signals_series	\N
+table	signals_series	signals_series	CREATE TABLE signals_series (\n    repo_id TEXT NOT NULL, date TEXT NOT NULL, metric TEXT NOT NULL, value INTEGER NOT NULL,\n    PRIMARY KEY (repo_id, date, metric))

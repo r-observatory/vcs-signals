@@ -1,3 +1,4 @@
+download	vcs-signals-summary.db
 graphql	query { r0: repository(owner: "epiverse-trace", name: "cfr") {\n      defaultBranchRef { target { ... on Commit {\n        history { totalCount }\n      } } }\n    }\nr1: repository(owner: "kvenkita", name: "bqmm-r") {\n      defaultBranchRef { target { ... on Commit {\n        history { totalCount }\n      } } }\n    }\nr2: repository(owner: "tidyverse", name: "forcats") {\n      defaultBranchRef { target { ... on Commit {\n        history { totalCount }\n      } } }\n    } }
 contributors	epiverse-trace	cfr
 contributors	kvenkita	bqmm-r
@@ -7,3 +8,23 @@ graphql	query { r0: repository(owner: "epiverse-trace", name: "linelist") {\n   
 contributors	epiverse-trace	linelist
 contributors	ropensci-review-tools	goodpractice
 graphql	query { r0: repository(owner: "epiverse-trace", name: "linelist") {\n      closedIssues: issues(states: CLOSED, first: 50, orderBy: {field: UPDATED_AT, direction: DESC}) {\n        nodes { createdAt closedAt } }\n      resolvedPRs: pullRequests(states: [MERGED, CLOSED], first: 50, orderBy: {field: UPDATED_AT, direction: DESC}) {\n        nodes { createdAt closedAt } }\n      openIssues: issues(states: OPEN, first: 50, orderBy: {field: CREATED_AT, direction: ASC}) {\n        nodes { createdAt } }\n    }\nr1: repository(owner: "ropensci-review-tools", name: "goodpractice") {\n      closedIssues: issues(states: CLOSED, first: 50, orderBy: {field: UPDATED_AT, direction: DESC}) {\n        nodes { createdAt closedAt } }\n      resolvedPRs: pullRequests(states: [MERGED, CLOSED], first: 50, orderBy: {field: UPDATED_AT, direction: DESC}) {\n        nodes { createdAt closedAt } }\n      openIssues: issues(states: OPEN, first: 50, orderBy: {field: CREATED_AT, direction: ASC}) {\n        nodes { createdAt } }\n    } }
+generation
+download	vcs-signals-recent.db
+release_exists
+download	manifest.json
+download	vcs-signals-recent.db
+download	vcs-signals-2026.db
+download	vcs-signals-summary.db
+release_exists
+download	manifest.json
+download	vcs-signals-recent.db
+download	vcs-signals-2026.db
+download	vcs-signals-summary.db
+generation
+generation
+upload	vcs-signals-summary-prev.db
+upload	vcs-signals-2026.db
+upload	vcs-signals-recent.db
+upload	vcs-signals-summary.db
+upload	manifest.json
+generation
