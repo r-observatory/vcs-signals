@@ -3,6 +3,7 @@ suppressPackageStartupMessages({
   library(testthat); library(DBI); library(RSQLite)
 })
 source("scripts/config.R")
+source("scripts/hosts.R")
 source("scripts/helpers.R")
 source("scripts/github.R")
 source("scripts/ai_signals.R")
