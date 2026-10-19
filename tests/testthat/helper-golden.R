@@ -339,12 +339,40 @@ skip_golden_parity <- function()
     list())
 }
 
+# Commit totals as GitLab answers them by project id; code.usgs.gov runs a GitLab without commitCount.
+.golden_gl_commits <- function(domain, ids) {
+  if (identical(domain, "code.usgs.gov"))
+    return(list(data = NULL, status = 200L, error = NA_character_,
+                errors = list(list(message = "Field 'commitCount' doesn't exist on type 'Repository'"))))
+  counts <- c("gid://gitlab/Project/46520077" = 310L)
+  ids <- unlist(ids)
+  nodes <- lapply(ids[ids %in% names(counts)], function(i) list(id = i, repository = list(commitCount = counts[[i]])))
+  list(data = list(projects = list(nodes = nodes)), errors = NULL, status = 200L, error = NA_character_)
+}
+
 # As GitLab answers: unknown paths and ids left out, paths matched without case.
 .golden_gitlab <- function(domain, variables, back = 0L) {
+  if (!is.null(variables$ids)) return(.golden_gl_commits(domain, variables$ids))
   keys <- tolower(unlist(variables$keys))
   hit <- Filter(function(n) tolower(n$fullPath) %in% keys || tolower(n$id) %in% keys, .golden_gl_projects(domain, back))
   list(data = list(projects = list(nodes = hit)),
        errors = NULL, status = 200L, error = NA_character_)
+}
+
+# The weekly REST answers: the contributor count in x-total, rows that carry a name and an email the
+# job never keeps, and licence keys, usgspkg's one GitLab files as other. Any other project is a 404.
+.golden_gl_rest <- function(domain, path) {
+  answer <- function(body, headers = character(), status = 200L)
+    list(status = status, headers = headers, error = if (status >= 400L) sprintf("HTTP %d", status) else NA_character_,
+         body = as.character(jsonlite::toJSON(body, auto_unbox = TRUE)))
+  projects <- list("gitlab.com" = list(id = "46520077", total = "6", top = 210L, license = "mit"),
+                   "code.usgs.gov" = list(id = "4711", total = "2", top = 75L, license = "other"))
+  p <- if (domain %in% names(projects)) projects[[domain]]
+  if (is.null(p) || !grepl(sprintf("^/projects/%s[/?]", p$id), path)) return(answer(list(message = "404 Project Not Found"), status = 404L))
+  row <- function(n) list(list(name = "Maintainer", email = "maintainer@example.org", commits = n, additions = 0L, deletions = 0L))
+  if (grepl("order_by=commits", path, fixed = TRUE)) answer(row(p$top))
+  else if (grepl("/repository/contributors", path, fixed = TRUE)) answer(row(3L), c(`x-total` = p$total))
+  else answer(list(id = as.integer(p$id), license = list(key = p$license, name = "Licence")))
 }
 
 # The weekly documents' and the contents check's own repositories get the answers the canary tests use.
@@ -402,6 +430,7 @@ skip_golden_parity <- function()
     gl_graphql = function(domain, query, variables) {
       note("gl_graphql", domain, query, as.character(jsonlite::toJSON(variables, auto_unbox = TRUE)))
       .golden_gitlab(domain, variables, back) },
+    gl_rest = function(domain, path) { note("gl_rest", domain, path); .golden_gl_rest(domain, path) },
     contributors = function(owner, name) { note("contributors", owner, name); .golden_contributors(owner, name) },
     # delay is pacing, not part of the request.
     search_hit = function(owner, name, query, delay = 0) {
@@ -446,19 +475,36 @@ skip_golden_parity <- function()
 
 .golden_shards <- function() seq_len(GOLDEN_SHARDS) - 1L
 
+# The GitLab job's clock: noon UTC on the recorded day, moved only by the job's own pauses.
+.golden_gl_clock <- function() {
+  clock <- new.env(parent = emptyenv())
+  clock$t <- as.numeric(as.POSIXct(paste(GOLDEN_DAY, "12:00:00"), tz = "UTC"))
+  list(now = function() clock$t, sleep = function(s) clock$t <- clock$t + s)
+}
+
 # weekly.yml and backfill.yml: enumerate, a fetch job per shard reading the roster artifact, and
-# a merge reading every shard artifact. `fn` finds each stage in the path's own environment.
-.golden_sharded <- function(fn, io, jobs, root) {
+# a merge reading every shard artifact. weekly.yml also runs fetch-gitlab on the GitLab roster, and
+# its merge reads that job's shard and cursor state. `fn` finds each stage in the path's own environment.
+.golden_sharded <- function(fn, io, jobs, root, gitlab = FALSE) {
   e <- .golden_job(jobs, "enumerate")
-  fn("run_enumerate")(io, file.path(e, "out"))
+  fn(if (gitlab) "run_weekly_enumerate" else "run_enumerate")(io, file.path(e, "out"))
   for (i in .golden_shards()) {
     f <- .golden_job(jobs, sprintf("fetch-%d", i))
     .golden_artifact(e, "vcs-signals-roster.db", file.path(f, "roster"))
     fn("run_fetch_shard")(io, file.path(f, "out"), file.path(f, "roster", "vcs-signals-roster.db"), i, GOLDEN_SHARDS)
   }
+  if (gitlab) {
+    g <- .golden_job(jobs, "fetch-gitlab")
+    .golden_artifact(e, "vcs-signals-roster-gitlab.db", file.path(g, "roster"))
+    clock <- .golden_gl_clock()
+    fn("run_fetch_gitlab")(io, file.path(g, "out"), file.path(g, "roster", "vcs-signals-roster-gitlab.db"),
+                           file.path(g, "out", "vcs-signals-gitlab-state.db"), now = clock$now, sleep = clock$sleep)
+  }
   m <- .golden_job(jobs, "merge")
   for (i in .golden_shards())
     .golden_artifact(file.path(jobs, sprintf("fetch-%d", i)), "vcs-signals-shard-*.db", file.path(m, "parts"))
+  if (gitlab)
+    for (f in c("vcs-signals-shard-gitlab.db", "vcs-signals-gitlab-state.db")) .golden_artifact(g, f, file.path(m, "parts"))
   fn("run_merge")(io, file.path(m, "out"), file.path(m, "parts"))
 }
 
@@ -492,7 +538,7 @@ skip_golden_parity <- function()
 
 .golden_steps <- list(
   daily = function(fn, io, jobs, root) .golden_daily(fn, io, file.path(.golden_job(jobs, "update"), "out"), root, TRUE),
-  weekly = .golden_sharded,
+  weekly = function(fn, io, jobs, root) .golden_sharded(fn, io, jobs, root, gitlab = TRUE),
   ai = .golden_ai,
   backfill = .golden_sharded)
 

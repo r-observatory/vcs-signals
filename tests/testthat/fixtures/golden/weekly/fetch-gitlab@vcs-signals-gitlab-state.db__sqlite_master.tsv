@@ -1,0 +1,3 @@
+type	name	tbl_name	sql
+index	sqlite_autoindex_cursor_1	cursor	\N
+table	cursor	cursor	CREATE TABLE cursor (domain TEXT PRIMARY KEY, last_repo_id TEXT NOT NULL)
