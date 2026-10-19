@@ -20,7 +20,7 @@ fake_gl_io <- function(pool, seen = new.env(), answer = NULL, clock = NULL, cost
     hit <- Filter(function(n) tolower(n$fullPath) %in% tolower(keys) || n$id %in% keys, pool[[domain]])
     num <- vapply(hit, function(n) as.numeric(sub(".*/", "", n$id)), 0)
     hit <- hit[order(-num)]
-    list(data = list(projects = list(count = length(hit), pageInfo = list(hasNextPage = FALSE), nodes = hit)),
+    list(data = list(projects = list(nodes = hit)),
          errors = NULL, status = 200L, error = NA_character_)
   })
 }
@@ -72,6 +72,11 @@ test_that("the query asks by path or by id, 50 at a time, with the feature flags
               "releases(first: 5, sort: RELEASED_AT_DESC) { count nodes { tagName releasedAt upcomingRelease } }",
               "tree { lastCommit { committedDate } }"))
     expect_match(qp, f, fixed = TRUE, info = f)
+  # Older instances reject forkedFrom and commitCount; the rest are unread.
+  for (f in c("forkedFrom", "commitCount", "nameWithNamespace", "group", "rootRef", "empty", "queryComplexity",
+              "pageInfo", "hasNextPage", "\n    count"))
+    expect_false(grepl(f, qp, fixed = TRUE) || grepl(f, qi, fixed = TRUE), info = f)
+  expect_match(qp, "repository { tree { lastCommit { committedDate } } }", fixed = TRUE)
   expect_identical(gl_projects_query(), qp)
   expect_error(gl_projects_query("names"))
 })

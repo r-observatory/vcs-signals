@@ -27,18 +27,15 @@ gl_pacer <- function(now = function() as.numeric(Sys.time()), sleep = Sys.sleep)
              breaker_after = GITLAB_BREAKER_AFTER, now = now, sleep = sleep)
 }
 
+# Only the fields gl_parse_projects reads: older instances reject forkedFrom and commitCount.
 gl_projects_query <- function(by = c("paths", "ids")) {
   by <- match.arg(by)
   keys <- if (by == "paths") c("[String!]", "fullPaths") else c("[ID!]", "ids")
   sprintf('query($keys: %s) {
-  queryComplexity { score limit }
   projects(%s: $keys, first: %d) {
-    count
-    pageInfo { hasNextPage }
     nodes {
-      id fullPath nameWithNamespace
-      group { fullPath }
-      starCount forksCount archived isForked forkedFrom { fullPath }
+      id fullPath
+      starCount forksCount archived isForked
       topics createdAt lastActivityAt
       issuesEnabled mergeRequestsEnabled
       openIssuesCount openMergeRequestsCount
@@ -46,7 +43,7 @@ gl_projects_query <- function(by = c("paths", "ids")) {
       mrClosed: mergeRequests(state: closed) { count }
       mrMerged: mergeRequests(state: merged) { count }
       releases(first: 5, sort: RELEASED_AT_DESC) { count nodes { tagName releasedAt upcomingRelease } }
-      repository { rootRef empty commitCount tree { lastCommit { committedDate } } }
+      repository { tree { lastCommit { committedDate } } }
     }
   }
 }', keys[1], keys[2], GITLAB_BATCH)

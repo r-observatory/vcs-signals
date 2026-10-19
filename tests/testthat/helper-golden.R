@@ -318,28 +318,24 @@ skip_golden_parity <- function()
 # requests switched off and its path resolves only on the recorded day.
 .golden_gl_projects <- function(domain, back = 0L) {
   rel <- function(tag, at, upcoming) list(tagName = tag, releasedAt = at, upcomingRelease = upcoming)
-  base <- list(archived = FALSE, isForked = FALSE, forkedFrom = NULL, issuesEnabled = TRUE, mergeRequestsEnabled = TRUE)
+  base <- list(archived = FALSE, isForked = FALSE, issuesEnabled = TRUE, mergeRequestsEnabled = TRUE)
   switch(domain,
     "gitlab.com" = list(c(list(
       id = "gid://gitlab/Project/46520077", fullPath = "epiverse/outbreaks/linelist",
-      nameWithNamespace = "epiverse / outbreaks / linelist", group = list(fullPath = "epiverse/outbreaks"),
       starCount = 12L - back, forksCount = 3L, topics = list("r", "outbreaks"),
       createdAt = "2023-06-01T09:00:00Z", lastActivityAt = "2026-09-29T08:15:00Z",
       openIssuesCount = 4L + back, openMergeRequestsCount = 1L, issueStatusCounts = list(closed = 9L),
       mrClosed = list(count = 2L), mrMerged = list(count = 15L),
       releases = list(count = 3L, nodes = list(rel("v2.0.0", "2026-12-01T00:00:00Z", TRUE),
                                                rel("v1.3.0", "2026-07-15T10:00:00Z", FALSE))),
-      repository = list(rootRef = "main", empty = FALSE, commitCount = 420L,
-                        tree = list(lastCommit = list(committedDate = "2026-09-29T10:15:00+02:00")))), base)),
+      repository = list(tree = list(lastCommit = list(committedDate = "2026-09-29T10:15:00+02:00")))), base)),
     "code.usgs.gov" = if (back == 0L) list(utils::modifyList(base, list(
       id = "gid://gitlab/Project/4711", fullPath = "water/toxics/usgspkg",
-      nameWithNamespace = "water / toxics / usgspkg", group = list(fullPath = "water/toxics"),
       starCount = 4L, forksCount = 1L, topics = list(), mergeRequestsEnabled = FALSE,
       createdAt = "2021-03-02T16:20:00Z", lastActivityAt = "2026-08-27T17:11:41Z",
       openIssuesCount = 2L, openMergeRequestsCount = 0L, issueStatusCounts = list(closed = 5L),
       mrClosed = list(count = 0L), mrMerged = list(count = 0L), releases = list(count = 0L, nodes = list()),
-      repository = list(rootRef = "main", empty = FALSE, commitCount = 88L,
-                        tree = list(lastCommit = list(committedDate = "2026-08-27T17:00:00Z")))))) else list(),
+      repository = list(tree = list(lastCommit = list(committedDate = "2026-08-27T17:00:00Z")))))) else list(),
     list())
 }
 
@@ -347,8 +343,7 @@ skip_golden_parity <- function()
 .golden_gitlab <- function(domain, variables, back = 0L) {
   keys <- tolower(unlist(variables$keys))
   hit <- Filter(function(n) tolower(n$fullPath) %in% keys || tolower(n$id) %in% keys, .golden_gl_projects(domain, back))
-  list(data = list(queryComplexity = list(score = 100L, limit = 200L),
-                   projects = list(count = length(hit), pageInfo = list(hasNextPage = FALSE), nodes = hit)),
+  list(data = list(projects = list(nodes = hit)),
        errors = NULL, status = 200L, error = NA_character_)
 }
 
