@@ -297,3 +297,21 @@ test_that("run_merge(purge_metrics=c(\"releases\")) deletes those rows from the 
   expect_equal(yr_rows$metric, "stars")
   expect_equal(yr_rows$value, 50L)
 })
+
+test_that("run_enumerate takes owner and name lowercased, as the repo_id is", {
+  src <- tempfile(fileext = ".db")
+  con <- DBI::dbConnect(RSQLite::SQLite(), src)
+  ensure_series_schema(con); ensure_repo_schema(con)
+  DBI::dbExecute(con, "INSERT INTO vcs_signals_summary (package, origin, repo_id, stars, forks, releases_total)
+    VALUES ('data.table', 'cran', 'github.com/rdatatable/data.table', 3400, 960, 9)")
+  DBI::dbExecute(con, "INSERT INTO repos VALUES ('github.com/rdatatable/data.table', 'R_dt', 'github', 'github.com',
+    'Rdatatable', 'data.table', 'Rdatatable/data.table', 1, 1, '2026-01-01', '2026-10-01', 'active')")
+  DBI::dbDisconnect(con)
+  io <- list(download = function(name, dir) file.copy(src, file.path(dir, name), overwrite = TRUE))
+  out <- tempfile()
+  run_enumerate(io, out)
+  roster <- load_roster(file.path(out, "vcs-signals-roster.db"))
+  expect_identical(roster$repo_id, "github.com/rdatatable/data.table")
+  expect_identical(roster$owner, "rdatatable")
+  expect_identical(roster$name, "data.table")
+})

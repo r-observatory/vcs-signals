@@ -47,9 +47,8 @@ load_roster <- function(path) {
 
 # ---- enumerate ----------------------------------------------------------------
 #' Build the GitHub repo roster from the published summary shard: every
-#' repo_id with at least one star, restricted to the supported hosts (the only host
-#' this backfill supports). owner/name come from the shard's repos table,
-#' which already carries the validated repo.
+#' repo_id with at least one star, on a supported host. owner/name come from the
+#' shard's repos table, lowercased as repo_id is.
 run_enumerate <- function(io, out_dir) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   if (!isTRUE(io$download("vcs-signals-summary.db", out_dir)))
@@ -59,10 +58,12 @@ run_enumerate <- function(io, out_dir) {
   con <- DBI::dbConnect(RSQLite::SQLite(), summary_path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   rows <- DBI::dbGetQuery(con,
-    sprintf("SELECT s.repo_id, r.owner, r.name, MAX(s.stars) AS stars
+    # Inner join: a summary row always has its repos row in the shard.
+    sprintf("SELECT s.repo_id, LOWER(r.owner) AS owner, LOWER(r.name) AS name, MAX(s.stars) AS stars
         FROM vcs_signals_summary s JOIN repos r ON r.repo_id = s.repo_id
       WHERE %s
-        AND (s.stars > 0 OR s.forks > 0 OR s.releases_total > 0) GROUP BY s.repo_id", supported_host_predicate("r.host")))
+        AND (s.stars > 0 OR s.forks > 0 OR s.releases_total > 0) GROUP BY s.repo_id",
+      supported_host_predicate("r.host")))
 
   roster <- data.frame(
     repo_id = rows$repo_id,
