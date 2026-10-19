@@ -312,3 +312,20 @@ test_that("no @ reaches any table the job writes or any line it logs", {
     DBI::dbDisconnect(con)
   }
 })
+
+test_that("each licence key with no SPDX mapping is logged once per run", {
+  withr::local_envvar(GITLAB_TOKEN_GITLAB_COM = NA)
+  dir <- withr::local_tempdir()
+  roster <- wkg_roster(dir, list(gitlab.com = 1:4))
+  special <- function(domain, path) {
+    if (!grepl("\\?license=true", path)) return(NULL)
+    id <- as.integer(sub("^/projects/([0-9]+).*$", "\\1", path))
+    key <- c("mit", "cc-by-nc-4.0", "cc-by-nc-4.0", "other")[id]
+    wkg_answer(body = list(id = id, license = list(key = key)))
+  }
+  logged <- new.env(); logged$lines <- character()
+  wkg_run(wkg_io(special = special), roster, wkg_clock(), budget = c(gitlab.com = 100L),
+          log = function(m) logged$lines <- c(logged$lines, m))
+  expect_identical(grep("license key not mapped", logged$lines, value = TRUE),
+                   c("gitlab license key not mapped: cc-by-nc-4.0", "gitlab license key not mapped: other"))
+})

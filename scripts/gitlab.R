@@ -409,14 +409,22 @@ gl_license <- function(io, domain, project_id, pacer) {
   a <- .gl_rest_get(io, pacer, domain, sprintf("/projects/%s?license=true", format(project_id, scientific = FALSE, trim = TRUE)))
   if (a$state == "stopped") return(list(key = NA_character_, stopped = TRUE, answered = FALSE, read = FALSE))
   if (a$state == "failed") return(list(key = NA_character_, stopped = FALSE, answered = TRUE, read = FALSE))
-  list(key = .gl_chr(.gl_at(.gl_body(a$res), "license", "key")), stopped = a$last, answered = TRUE, read = TRUE)
+  body <- .gl_body(a$res)
+  # A 200 that is not a project object is no reading, so it cannot replace a known licence.
+  if (is.null(.gl_at(body, "id"))) return(list(key = NA_character_, stopped = a$last, answered = TRUE, read = FALSE))
+  list(key = .gl_chr(.gl_at(body, "license", "key")), stopped = a$last, answered = TRUE, read = TRUE)
 }
 
 # GitLab licence keys to the SPDX ids GitHub reports; any other key is NA.
 .GL_SPDX <- c(mit = "MIT", `apache-2.0` = "Apache-2.0", `gpl-2.0` = "GPL-2.0", `gpl-3.0` = "GPL-3.0",
   `lgpl-2.1` = "LGPL-2.1", `lgpl-3.0` = "LGPL-3.0", `agpl-3.0` = "AGPL-3.0", `bsd-2-clause` = "BSD-2-Clause",
   `bsd-3-clause` = "BSD-3-Clause", `mpl-2.0` = "MPL-2.0", `cc0-1.0` = "CC0-1.0", unlicense = "Unlicense",
-  `epl-2.0` = "EPL-2.0", isc = "ISC", `cc-by-4.0` = "CC-BY-4.0", `cc-by-sa-4.0` = "CC-BY-SA-4.0")
+  `epl-2.0` = "EPL-2.0", isc = "ISC", `cc-by-4.0` = "CC-BY-4.0", `cc-by-sa-4.0` = "CC-BY-SA-4.0",
+  `afl-3.0` = "AFL-3.0", `artistic-2.0` = "Artistic-2.0", `bsd-3-clause-clear` = "BSD-3-Clause-Clear",
+  `bsl-1.0` = "BSL-1.0", `cecill-2.1` = "CECILL-2.1", `ecl-2.0` = "ECL-2.0", `epl-1.0` = "EPL-1.0",
+  `eupl-1.1` = "EUPL-1.1", `eupl-1.2` = "EUPL-1.2", `lppl-1.3c` = "LPPL-1.3c", `ms-pl` = "MS-PL",
+  `ms-rl` = "MS-RL", ncsa = "NCSA", `ofl-1.1` = "OFL-1.1", `osl-3.0` = "OSL-3.0", postgresql = "PostgreSQL",
+  `upl-1.0` = "UPL-1.0", vim = "Vim", wtfpl = "WTFPL", zlib = "Zlib")
 gl_license_spdx <- function(key) {
   key <- as.character(key)
   out <- unname(.GL_SPDX[key])

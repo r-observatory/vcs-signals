@@ -71,7 +71,10 @@ gitlab_rotation <- function(ids, cursor = NA_character_) {
     li <- if (cn$stopped) NULL else gl_license(io, d, roster$project_id[i], pacer)
     if (!is.na(cn$total)) acc$total[i] <- cn$total
     if (!is.na(cn$top_commits)) acc$top[i] <- cn$top_commits
-    if (isTRUE(li$read)) { acc$license[i] <- gl_license_spdx(li$key); acc$license_read[i] <- TRUE }
+    if (isTRUE(li$read)) {
+      acc$license[i] <- gl_license_spdx(li$key); acc$license_read[i] <- TRUE
+      if (!is.na(li$key) && is.na(acc$license[i])) acc$unmapped <- c(acc$unmapped, li$key)
+    }
     # Visited when every call got an answer of any kind. No repository starts on a deferred host, so a
     # call the breaker refused here came after this repository's own failures, and does not hold it back.
     visited <- cn$answered && !is.null(li) && (li$answered || key %in% pacer$deferred())
@@ -129,6 +132,7 @@ run_fetch_gitlab <- function(io, out_dir, roster_path, state_path,
   acc <- new.env(parent = emptyenv())
   acc$total <- rep(NA_integer_, n); acc$top <- rep(NA_integer_, n)
   acc$license <- rep(NA_character_, n); acc$license_read <- rep(FALSE, n)
+  acc$unmapped <- character()
   acc$cursors <- read_gitlab_cursors(io, state_path, log)
   acc$pos <- stats::setNames(rep(1L, length(hosts)), hosts)
   acc$n_visited <- stats::setNames(rep(0L, length(hosts)), hosts)
@@ -173,6 +177,9 @@ run_fetch_gitlab <- function(io, out_dir, roster_path, state_path,
                                                  read_on = format(Sys.Date()), stringsAsFactors = FALSE), append = TRUE)
   DBI::dbDisconnect(con)
   write_gitlab_cursors(state_path, acc$cursors)
+  # A licence key names no one, so it can be logged.
+  for (k in sort(unique(acc$unmapped), method = "radix"))
+    log(paste("gitlab license key not mapped:", substr(gsub("[^[:alnum:]._+-]", "?", k), 1L, 60L)))
   log(sprintf("weekly fetch gitlab: commits %d, contributors %d, licences %d of %d repos",
               sum(!is.na(rows$commits_total)), sum(!is.na(acc$total)), sum(read), n))
   shard_path
