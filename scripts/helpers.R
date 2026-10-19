@@ -1389,6 +1389,27 @@ extract_recent_rows <- function(con, today, window_days) {
   )
 }
 
+SNAPSHOT_TABLE <- "snapshot"
+
+#' Write a weekly shard's collected (repo_id, commits_total, contributors_total)
+#' rows to a fresh SQLite file, for weekly.R and gitlab_weekly.R. Either numeric
+#' column may be NA for a given repo (a fetch that failed or was skipped this run).
+export_snapshot_shard <- function(path, rows) {
+  if (file.exists(path)) unlink(path)
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  DBI::dbExecute(con, "PRAGMA journal_mode=DELETE")
+  # A metric the rows do not carry is stored NA, as a fetch that failed would be.
+  for (m in setdiff(WEEKLY_METRICS, names(rows))) rows[[m]] <- rep(NA_integer_, nrow(rows))
+  cols <- paste(sprintf("%s INTEGER", WEEKLY_METRICS), collapse = ", ")
+  DBI::dbExecute(con, sprintf("CREATE TABLE %s (repo_id TEXT PRIMARY KEY, %s)", SNAPSHOT_TABLE, cols))
+  if (nrow(rows) > 0) {
+    DBI::dbWriteTable(con, SNAPSHOT_TABLE, rows[c("repo_id", WEEKLY_METRICS)], append = TRUE)
+  }
+  DBI::dbExecute(con, "VACUUM")
+  invisible(path)
+}
+
 #' Write the given rows into a fresh SQLite file at `path`.
 #'
 #' Overwrites any existing file. Always creates the signals_series table

@@ -1,6 +1,6 @@
-# The weekly GitLab job: the roster, the rotation over each host's REST budget, the shard and the
-# cursor state. scripts/weekly.R is sourced from the repo root, as in test-weekly-snapshot.R.
-if (!exists("run_fetch_gitlab")) {
+# The weekly GitLab job: the roster (weekly.R), and the rotation over each host's REST budget, the
+# shard and the cursor state (gitlab_weekly.R). weekly.R is sourced from the repo root.
+if (!exists("run_weekly_enumerate")) {
   .wkg_wd <- setwd(.repo_root)
   source(file.path(.repo_root, "scripts", "weekly.R"))
   setwd(.wkg_wd)
@@ -204,26 +204,69 @@ test_that("a 429 closes the host for the run and leaves the cursor at the last r
   expect_identical(sort(lic$repo_id, method = "radix"), c("code.usgs.gov/g/p1", wkg_ids("gitlab.com", 1:2)))
 })
 
-test_that("a failed call leaves its repository unread, a 404 is read, and a failed download starts at the first", {
+test_that("a 5xx or a 404 visits its repository but writes no licence row, and a failed download starts at the first", {
   withr::local_envvar(GITLAB_TOKEN_GITLAB_COM = NA)
-  roster <- wkg_roster(withr::local_tempdir(), list(gitlab.com = 1:4))
+  roster <- wkg_roster(withr::local_tempdir(), list(gitlab.com = 1:5))
   io <- wkg_io(special = function(domain, path) {
     if (path == "/projects/2?license=true") return(wkg_answer(500L))
     if (startsWith(path, "/projects/3")) return(wkg_answer(404L))
+    # A 200 whose licence is null is a reading: NA.
+    if (path == "/projects/5?license=true") return(wkg_answer(body = list(id = 5L, license = NULL)))
     NULL
   })
   io$download <- function(pattern, dir) stop("HTTP 502")
   r <- wkg_run(io, roster, wkg_clock())
   snap <- wkg_snapshot(r$out)
-  expect_identical(snap$contributors_total, c(1L, 2L, NA, 4L))
-  expect_identical(snap$top_contributor_commits, c(10L, 20L, NA, 40L))
+  expect_identical(snap$contributors_total, c(1L, 2L, NA, 4L, 5L))
+  expect_identical(snap$top_contributor_commits, c(10L, 20L, NA, 40L, 50L))
   lic <- wkg_table(file.path(r$out, "vcs-signals-shard-gitlab.db"), "license")
   lic <- lic[order(lic$repo_id, method = "radix"), ]
-  expect_identical(lic$repo_id, wkg_ids("gitlab.com", c(1L, 3L, 4L)))
-  expect_identical(lic$license, c("MIT", NA, "MIT"))
+  expect_identical(lic$repo_id, wkg_ids("gitlab.com", c(1L, 4L, 5L)))
+  expect_identical(lic$license, c("MIT", "MIT", NA))
   expect_identical(unique(lic$read_on), format(Sys.Date()))
-  # The cursor is the last repository read.
-  expect_identical(wkg_cursor(r$out), c(gitlab.com = "gitlab.com/g/p4"))
+  expect_identical(wkg_cursor(r$out), c(gitlab.com = "gitlab.com/g/p5"))
+})
+
+test_that("a repository whose calls all failed is visited, and the cursor moves to it", {
+  withr::local_envvar(GITLAB_TOKEN_GITLAB_COM = NA)
+  roster <- wkg_roster(withr::local_tempdir(), list(gitlab.com = 1:4))
+  seen <- new.env()
+  io <- wkg_io(seen, special = function(domain, path) if (startsWith(path, "/projects/3")) wkg_answer(500L))
+  r <- wkg_run(io, roster, wkg_clock(), budget = c(gitlab.com = 9L), deadline_min = 5)
+  expect_false(any(startsWith(seen$rest, "gitlab.com/projects/4")))
+  expect_identical(wkg_cursor(r$out), c(gitlab.com = "gitlab.com/g/p3"))
+})
+
+test_that("two failing repositories in a row pass the cursor although the breaker then defers the host", {
+  withr::local_envvar(GITLAB_TOKEN_GITLAB_COM = NA)
+  dir <- withr::local_tempdir()
+  roster <- wkg_roster(dir, list(gitlab.com = 1:5))
+  rel <- file.path(dir, "release-state.db")
+  failing <- function(domain, path) if (grepl("^/projects/[12][/?]", path)) wkg_answer(500L)
+  logs <- new.env(); logs$lines <- character()
+  r1 <- wkg_run(wkg_io(special = failing, state_from = rel), roster, wkg_clock(),
+                log = function(m) logs$lines <- c(logs$lines, m))
+  expect_identical(r1$pacer$deferred(), "gitlab.com")
+  expect_true(any(grepl("deferred", logs$lines, fixed = TRUE)))
+  expect_identical(wkg_cursor(r1$out), c(gitlab.com = "gitlab.com/g/p2"))
+  # The next run starts at p3 and reads the rest.
+  file.copy(file.path(r1$out, "vcs-signals-gitlab-state.db"), rel, overwrite = TRUE)
+  seen <- new.env()
+  r2 <- wkg_run(wkg_io(seen, special = failing, state_from = rel), roster, wkg_clock())
+  expect_match(seen$rest[1], "^gitlab.com/projects/3/")
+  expect_identical(wkg_counted(r2$out), wkg_ids("gitlab.com", 3:5))
+})
+
+test_that("a host whose hour turned while another host ran goes again before the run sleeps", {
+  withr::local_envvar(GITLAB_TOKEN_GITLAB_COM = NA)
+  roster <- wkg_roster(withr::local_tempdir(), list(code.usgs.gov = 1:2, gitlab.com = 1:2))
+  # 100 seconds before the hour; each gitlab.com request takes 40 seconds.
+  clock <- wkg_clock(start = 3600 * 100 + 3500)
+  io <- wkg_io(special = function(domain, path) { if (domain == "gitlab.com") clock$t <- clock$t + 40; NULL })
+  r <- wkg_run(io, roster, clock, budget = c(code.usgs.gov = 3L))
+  expect_true(all(clock$slept < 60))
+  expect_equal(floor(clock$t / 3600), 101)
+  expect_identical(wkg_counted(r$out), c(wkg_ids("code.usgs.gov", 1:2), wkg_ids("gitlab.com", 1:2)))
 })
 
 test_that("the GitLab shard's snapshot table has the GitHub shard's columns, with no bot flag or medians", {

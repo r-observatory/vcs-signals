@@ -35,7 +35,7 @@ test_that("contributors: x-total gives the count and the descending page gives t
   seen <- new.env()
   io <- fake_rest_io(contrib_answer("5", 444L), seen)
   r <- gl_contributors(io, "gitlab.com", 32292794, fake_rest_pacer()$p)
-  expect_identical(r, list(total = 5L, top_commits = 444L, stopped = FALSE, read = TRUE))
+  expect_identical(r, list(total = 5L, top_commits = 444L, stopped = FALSE, answered = TRUE))
   expect_identical(seen$paths, c(
     "gitlab.com/projects/32292794/repository/contributors?per_page=1",
     "gitlab.com/projects/32292794/repository/contributors?order_by=commits&sort=desc&per_page=1"))
@@ -47,13 +47,13 @@ test_that("contributors: a missing x-total is NA and the top commits are still r
     if (grepl("order_by", path)) gl_rest_answer(body = gl_contrib_row(505L)) else gl_rest_answer(body = gl_contrib_row(1L))
   })
   r <- gl_contributors(io, "code.usgs.gov", 4520, fake_rest_pacer()$p)
-  expect_identical(r, list(total = NA_integer_, top_commits = 505L, stopped = FALSE, read = TRUE))
+  expect_identical(r, list(total = NA_integer_, top_commits = 505L, stopped = FALSE, answered = TRUE))
 })
 
 test_that("contributors: an empty list has a zero count and no top commits", {
   io <- fake_rest_io(function(domain, path) gl_rest_answer(body = list(), headers = c(`x-total` = "0")))
   r <- gl_contributors(io, "gitlab.com", 1, fake_rest_pacer()$p)
-  expect_identical(r, list(total = 0L, top_commits = NA_integer_, stopped = FALSE, read = TRUE))
+  expect_identical(r, list(total = 0L, top_commits = NA_integer_, stopped = FALSE, answered = TRUE))
 })
 
 test_that("contributors: a 429 stops the host with no values, and later calls are refused without a request", {
@@ -61,7 +61,7 @@ test_that("contributors: a 429 stops the host with no values, and later calls ar
   io <- fake_rest_io(function(domain, path) gl_rest_answer(429L, headers = c(`retry-after` = "30")), seen)
   f <- fake_rest_pacer()
   r <- gl_contributors(io, "gitlab.com", 1, f$p)
-  expect_identical(r, list(total = NA_integer_, top_commits = NA_integer_, stopped = TRUE, read = FALSE))
+  expect_identical(r, list(total = NA_integer_, top_commits = NA_integer_, stopped = TRUE, answered = FALSE))
   expect_length(seen$paths, 1L)
   r2 <- gl_contributors(io, "gitlab.com", 2, f$p)
   expect_true(r2$stopped)
@@ -77,17 +77,17 @@ test_that("contributors: ratelimit-remaining 0 keeps the values read and stops t
     body = gl_contrib_row(4L), headers = c(`x-total` = "5", `ratelimit-remaining` = "0")), seen)
   f <- fake_rest_pacer()
   r <- gl_contributors(io, "gitlab.com", 1, f$p)
-  expect_identical(r, list(total = 5L, top_commits = NA_integer_, stopped = TRUE, read = FALSE))
+  expect_identical(r, list(total = 5L, top_commits = NA_integer_, stopped = TRUE, answered = FALSE))
   expect_length(seen$paths, 1L)
   expect_true(gl_contributors(io, "gitlab.com", 2, f$p)$stopped)
   expect_length(seen$paths, 1L)
   # On the second request the top row is kept too.
   io2 <- fake_rest_io(contrib_answer("7", 90L, extra = c(`ratelimit-remaining` = "0")))
   r2 <- gl_contributors(io2, "git.example.org", 1, fake_rest_pacer()$p)
-  expect_identical(r2, list(total = 7L, top_commits = 90L, stopped = TRUE, read = TRUE))
+  expect_identical(r2, list(total = 7L, top_commits = 90L, stopped = TRUE, answered = TRUE))
 })
 
-test_that("contributors: a spent hourly budget is a stopped call, and a failure is not read and counts toward the breaker", {
+test_that("contributors: a spent hourly budget is a stopped call, and a failure is answered with no licence read and counts toward the breaker", {
   io <- fake_rest_io(contrib_answer())
   f <- fake_rest_pacer()
   f$p$set_hourly_budget("gitlab.com", 1L)
@@ -95,20 +95,20 @@ test_that("contributors: a spent hourly budget is a stopped call, and a failure 
   bad <- fake_rest_io(function(domain, path) gl_rest_answer(500L))
   g <- fake_rest_pacer()
   r <- gl_contributors(bad, "gitlab.com", 1, g$p)
-  expect_identical(r, list(total = NA_integer_, top_commits = NA_integer_, stopped = FALSE, read = FALSE))
-  expect_identical(gl_license(bad, "gitlab.com", 1, fake_rest_pacer()$p), list(key = NA_character_, stopped = FALSE, read = FALSE))
+  expect_identical(r, list(total = NA_integer_, top_commits = NA_integer_, stopped = FALSE, answered = TRUE))
+  expect_identical(gl_license(bad, "gitlab.com", 1, fake_rest_pacer()$p), list(key = NA_character_, stopped = FALSE, answered = TRUE, read = FALSE))
   for (i in 1:5) gl_contributors(bad, "gitlab.com", i, g$p)
   expect_identical(g$p$deferred(), "gitlab.com")
 })
 
-test_that("a 403, 404 or 410 is an answer about the project: NA values, read, not stopped, never a host failure", {
+test_that("a 403, 404 or 410 is an answer about the project: NA values, answered, no licence read, never a host failure", {
   for (code in c(403L, 404L, 410L)) {
     seen <- new.env()
     io <- fake_rest_io(function(domain, path) gl_rest_answer(code), seen)
     f <- fake_rest_pacer()
     for (i in 1:6) {
-      expect_identical(gl_contributors(io, "gitlab.com", i, f$p), list(total = NA_integer_, top_commits = NA_integer_, stopped = FALSE, read = TRUE))
-      expect_identical(gl_license(io, "gitlab.com", i, f$p), list(key = NA_character_, stopped = FALSE, read = TRUE))
+      expect_identical(gl_contributors(io, "gitlab.com", i, f$p), list(total = NA_integer_, top_commits = NA_integer_, stopped = FALSE, answered = TRUE))
+      expect_identical(gl_license(io, "gitlab.com", i, f$p), list(key = NA_character_, stopped = FALSE, answered = TRUE, read = FALSE))
     }
     expect_identical(f$p$deferred(), character())
     expect_length(seen$paths, 12L)
@@ -117,7 +117,7 @@ test_that("a 403, 404 or 410 is an answer about the project: NA values, read, no
   answer <- function(domain, path) if (grepl("/projects/1/", path, fixed = TRUE)) gl_rest_answer(404L) else contrib_answer("3", 8L)(domain, path)
   f <- fake_rest_pacer()
   for (i in c(1, 1, 1)) gl_contributors(fake_rest_io(answer), "gitlab.com", i, f$p)
-  expect_identical(gl_contributors(fake_rest_io(answer), "gitlab.com", 2, f$p), list(total = 3L, top_commits = 8L, stopped = FALSE, read = TRUE))
+  expect_identical(gl_contributors(fake_rest_io(answer), "gitlab.com", 2, f$p), list(total = 3L, top_commits = 8L, stopped = FALSE, answered = TRUE))
 })
 
 test_that("the REST pacer budgets 45 for gitlab.com, 30 elsewhere and 500 with a token", {
@@ -132,18 +132,18 @@ test_that("the REST pacer budgets 45 for gitlab.com, 30 elsewhere and 500 with a
   expect_equal(allowed(fake_rest_pacer()$p, "gitlab.com"), 500L)
 })
 
-test_that("licence: the key comes from license.key, null is NA, a refusal is stopped", {
+test_that("licence: the key comes from license.key, null is a read NA, a refusal is stopped", {
   seen <- new.env()
   io <- fake_rest_io(function(domain, path) gl_rest_answer(body = list(id = 24125720L, license = list(key = "cc-by-nc-4.0"))), seen)
-  expect_identical(gl_license(io, "gitlab.com", 24125720, fake_rest_pacer()$p), list(key = "cc-by-nc-4.0", stopped = FALSE, read = TRUE))
+  expect_identical(gl_license(io, "gitlab.com", 24125720, fake_rest_pacer()$p), list(key = "cc-by-nc-4.0", stopped = FALSE, answered = TRUE, read = TRUE))
   expect_identical(seen$paths, "gitlab.com/projects/24125720?license=true")
   none <- fake_rest_io(function(domain, path) gl_rest_answer(body = list(id = 1L, license = NULL)))
-  expect_identical(gl_license(none, "gitlab.com", 1, fake_rest_pacer()$p), list(key = NA_character_, stopped = FALSE, read = TRUE))
+  expect_identical(gl_license(none, "gitlab.com", 1, fake_rest_pacer()$p), list(key = NA_character_, stopped = FALSE, answered = TRUE, read = TRUE))
   limited <- fake_rest_io(function(domain, path) gl_rest_answer(429L))
-  expect_identical(gl_license(limited, "gitlab.com", 1, fake_rest_pacer()$p), list(key = NA_character_, stopped = TRUE, read = FALSE))
+  expect_identical(gl_license(limited, "gitlab.com", 1, fake_rest_pacer()$p), list(key = NA_character_, stopped = TRUE, answered = FALSE, read = FALSE))
   ok0 <- fake_rest_io(function(domain, path) gl_rest_answer(body = list(license = list(key = "mit")),
                                                             headers = c(`ratelimit-remaining` = "0")))
-  expect_identical(gl_license(ok0, "gitlab.com", 1, fake_rest_pacer()$p), list(key = "mit", stopped = TRUE, read = TRUE))
+  expect_identical(gl_license(ok0, "gitlab.com", 1, fake_rest_pacer()$p), list(key = "mit", stopped = TRUE, answered = TRUE, read = TRUE))
 })
 
 test_that("licence keys map to GitHub's SPDX spelling and anything else is NA", {

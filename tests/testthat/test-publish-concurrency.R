@@ -76,7 +76,7 @@
 # This week's weekly snapshot: commits_total went from 100 to 500.
 .weekly_parts <- function() {
   p <- tempfile("weekly_parts_"); dir.create(p)
-  .weekly$export_snapshot_shard(file.path(p, "vcs-signals-shard-0.db"), data.frame(
+  export_snapshot_shard(file.path(p, "vcs-signals-shard-0.db"), data.frame(
     repo_id = .rid, commits_total = 500L, contributors_total = 10L,
     median_days_to_close_issue = NA_integer_, median_days_to_close_pr = NA_integer_,
     median_open_issue_age_days = NA_integer_, stringsAsFactors = FALSE))
