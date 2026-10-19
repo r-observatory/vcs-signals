@@ -1,0 +1,9 @@
+{"data":{"queryComplexity":{"score":96,"limit":200},
+ "projects":{"count":1,"pageInfo":{"hasNextPage":false},"nodes":[
+  {"id":"gid://gitlab/Project/9133744","fullPath":"Example-User/Boruta","nameWithNamespace":"Example User / Boruta",
+   "group":null,"starCount":2,"forksCount":0,"archived":false,"isForked":true,"forkedFrom":{"fullPath":"mbq/Boruta"},
+   "topics":["feature-selection"],"createdAt":"2018-11-02T09:14:55Z","lastActivityAt":"2018-11-02T09:14:55Z",
+   "issuesEnabled":false,"mergeRequestsEnabled":false,
+   "openIssuesCount":0,"openMergeRequestsCount":0,"issueStatusCounts":{"closed":0},"mrClosed":{"count":0},"mrMerged":{"count":0},
+   "releases":{"count":0,"nodes":[]},
+   "repository":{"rootRef":"master","empty":false,"commitCount":241,"tree":{"lastCommit":{"committedDate":"2018-10-30T16:02:11Z"}}}}]}}}

@@ -5,8 +5,8 @@ cfr	bioc	github.com/epiverse-trace/cfr	20	6	2	0	\N	\N	3	2026-07-02T16:05:00Z	MIT
 data.table	cran	github.com/rdatatable/data.table	3400	960	800	40	\N	\N	9	2026-09-28T11:20:00Z	MPL-2.0	r,data-table	0	11.111111111111111	87	\N	\N	\N	2024-01-30T09:00:00Z	\N	\N	\N	\N	\N	\N	\N	\N	2026-08-20	<DATE>	v1.16.0	2012-04-02T10:00:00Z	\N	\N
 forcats	cran	github.com/tidyverse/forcats	570	130	21	3	\N	\N	12	2026-09-20T08:00:00Z	MIT	r,factors,tidyverse	0	10.894941634241246	84	\N	\N	\N	2025-09-03T10:00:00Z	\N	\N	\N	\N	\N	\N	\N	\N	2026-08-20	<DATE>	v1.0.1	2015-08-23T21:23:24Z	\N	\N
 goodpractice	cran	github.com/ropensci-review-tools/goodpractice	470	37	14	2	\N	\N	5	2026-08-30T17:10:00Z	GPL-2.0	r,linter	0	10.849056603773585	82	\N	\N	\N	2025-02-17T12:00:00Z	\N	\N	\N	\N	\N	\N	\N	\N	2026-08-20	<DATE>	v1.0.5	2016-03-08T10:12:00Z	\N	\N
-linelist	bioc	gitlab.com/epiverse/outbreaks/linelist	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	2026-08-20	<DATE>	\N	\N	\N	\N
+linelist	bioc	gitlab.com/epiverse/outbreaks/linelist	12	3	4	1	\N	\N	2	2026-09-29T08:15:00Z	\N	r,outbreaks	0	20	88	\N	\N	\N	2026-07-15T10:00:00Z	\N	\N	\N	\N	\N	\N	\N	\N	2026-08-20	<DATE>	v1.3.0	2023-06-01T09:00:00Z	\N	\N
 linelist	cran	github.com/epiverse-trace/linelist	45	8	5	1	\N	\N	4	2026-09-25T13:40:00Z	MIT	r,epidemiology	0	9.75609756097561	78	\N	\N	\N	2025-05-30T09:00:00Z	\N	\N	\N	\N	\N	\N	\N	\N	2026-08-20	<DATE>	v1.2.0	2023-03-14T11:00:00Z	\N	\N
 rfpkg	cran	r-forge.r-project.org/projects/rfpkg	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	2026-08-20	<DATE>	\N	\N	\N	\N
 ri2	cran	github.com/acoppock/ri2	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	2026-08-20	<DATE>	\N	\N	\N	\N
-usgspkg	cran	code.usgs.gov/water/toxics	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	2026-08-20	<DATE>	\N	\N	\N	\N
+usgspkg	cran	code.usgs.gov/water/toxics/usgspkg	4	1	2	\N	\N	\N	0	2026-08-27T17:00:00Z	\N		0	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	2026-08-20	<DATE>	\N	2021-03-02T16:20:00Z	\N	\N

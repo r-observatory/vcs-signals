@@ -1,5 +1,5 @@
 repo_id	package	origin	first_seen	last_seen
-code.usgs.gov/water/toxics	usgspkg	cran	2026-08-20	<DATE>
+code.usgs.gov/water/toxics/usgspkg	usgspkg	cran	2026-08-20	<DATE>
 codeberg.org/someone/cbpkg	cbpkg	cran	2026-08-20	<DATE>
 github.com/acoppock/ri2	ri2	cran	2026-08-20	<DATE>
 github.com/epiverse-trace/cfr	cfr	bioc	<DATE>	<DATE>

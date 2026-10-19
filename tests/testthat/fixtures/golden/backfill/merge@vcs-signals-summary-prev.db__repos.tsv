@@ -1,5 +1,5 @@
 repo_id	node_id	host	host_domain	owner	name	name_with_owner	supported	n_packages	first_seen	last_seen	status
-code.usgs.gov/water/toxics	\N	other	code.usgs.gov	water	toxics	water/toxics	0	1	2026-08-20	<DATE>	active
+code.usgs.gov/water/toxics/usgspkg	gitlab:code.usgs.gov:4711	gitlab	code.usgs.gov	water/toxics	usgspkg	water/toxics/usgspkg	1	1	2026-08-20	<DATE>	active
 codeberg.org/someone/cbpkg	\N	codeberg	codeberg.org	someone	cbpkg	someone/cbpkg	0	1	2026-08-20	<DATE>	active
 github.com/acoppock/ri2	\N	github	github.com	acoppock	ri2	acoppock/ri2	1	1	2026-08-20	<DATE>	gone
 github.com/epiverse-trace/cfr	R_cfr	github	github.com	epiverse	cfr-estimates	epiverse/cfr-estimates	1	1	<DATE>	<DATE>	active
@@ -8,5 +8,5 @@ github.com/kvenkita/bqmm-r	R_bqmm	github	github.com	kvenkita	bqmm-r	kvenkita/bqm
 github.com/rdatatable/data.table	R_datatable	github	github.com	Rdatatable	data.table	Rdatatable/data.table	1	1	2026-08-20	<DATE>	active
 github.com/ropensci-review-tools/goodpractice	R_goodpractice	github	github.com	ropensci-review-tools	goodpractice	ropensci-review-tools/goodpractice	1	1	2026-08-20	<DATE>	active
 github.com/tidyverse/forcats	R_forcats	github	github.com	tidyverse	forcats	tidyverse/forcats	1	1	2026-08-20	<DATE>	active
-gitlab.com/epiverse/outbreaks/linelist	\N	gitlab	gitlab.com	epiverse/outbreaks	linelist	epiverse/outbreaks/linelist	0	1	2026-08-20	<DATE>	active
+gitlab.com/epiverse/outbreaks/linelist	gitlab:gitlab.com:46520077	gitlab	gitlab.com	epiverse/outbreaks	linelist	epiverse/outbreaks/linelist	1	1	2026-08-20	<DATE>	active
 r-forge.r-project.org/projects/rfpkg	\N	rforge	r-forge.r-project.org	projects	rfpkg	projects/rfpkg	0	1	2026-08-20	<DATE>	active

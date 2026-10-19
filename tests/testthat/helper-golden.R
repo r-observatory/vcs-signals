@@ -312,6 +312,41 @@ skip_golden_parity <- function()
   stop("the golden GitHub has no answer for: ", substr(q, 1L, 200L))
 }
 
+# ---- the fake GitLab ----------------------------------------------------------
+# The roster's GitLab projects as GitLab answers `back` daily runs before the recorded day.
+# linelist gains a star each run and lists an upcoming release first; usgspkg has merge
+# requests switched off and its path resolves only on the recorded day.
+.golden_gl_projects <- function(domain, back = 0L) {
+  rel <- function(tag, at, upcoming) list(tagName = tag, releasedAt = at, upcomingRelease = upcoming)
+  base <- list(archived = FALSE, isForked = FALSE, issuesEnabled = TRUE, mergeRequestsEnabled = TRUE)
+  switch(domain,
+    "gitlab.com" = list(c(list(
+      id = "gid://gitlab/Project/46520077", fullPath = "epiverse/outbreaks/linelist",
+      starCount = 12L - back, forksCount = 3L, topics = list("r", "outbreaks"),
+      createdAt = "2023-06-01T09:00:00Z", lastActivityAt = "2026-09-29T08:15:00Z",
+      openIssuesCount = 4L + back, openMergeRequestsCount = 1L, issueStatusCounts = list(closed = 9L),
+      mrClosed = list(count = 2L), mrMerged = list(count = 15L),
+      releases = list(count = 3L, nodes = list(rel("v2.0.0", "2026-12-01T00:00:00Z", TRUE),
+                                               rel("v1.3.0", "2026-07-15T10:00:00Z", FALSE))),
+      repository = list(tree = list(lastCommit = list(committedDate = "2026-09-29T10:15:00+02:00")))), base)),
+    "code.usgs.gov" = if (back == 0L) list(utils::modifyList(base, list(
+      id = "gid://gitlab/Project/4711", fullPath = "water/toxics/usgspkg",
+      starCount = 4L, forksCount = 1L, topics = list(), mergeRequestsEnabled = FALSE,
+      createdAt = "2021-03-02T16:20:00Z", lastActivityAt = "2026-08-27T17:11:41Z",
+      openIssuesCount = 2L, openMergeRequestsCount = 0L, issueStatusCounts = list(closed = 5L),
+      mrClosed = list(count = 0L), mrMerged = list(count = 0L), releases = list(count = 0L, nodes = list()),
+      repository = list(tree = list(lastCommit = list(committedDate = "2026-08-27T17:00:00Z")))))) else list(),
+    list())
+}
+
+# As GitLab answers: unknown paths and ids left out, paths matched without case.
+.golden_gitlab <- function(domain, variables, back = 0L) {
+  keys <- tolower(unlist(variables$keys))
+  hit <- Filter(function(n) tolower(n$fullPath) %in% keys || tolower(n$id) %in% keys, .golden_gl_projects(domain, back))
+  list(data = list(projects = list(nodes = hit)),
+       errors = NULL, status = 200L, error = NA_character_)
+}
+
 # The weekly documents' and the contents check's own repositories get the answers the canary tests use.
 .golden_graphql <- function(gh) {
   cfg <- AI_QUERY_CANARY
@@ -364,6 +399,9 @@ skip_golden_parity <- function()
   io <- local_release_io(rel,
     acquire = function() { note("acquire"); .golden_acquire(back) },
     graphql = function(query) { note("graphql", query); graphql(query) },
+    gl_graphql = function(domain, query, variables) {
+      note("gl_graphql", domain, query, as.character(jsonlite::toJSON(variables, auto_unbox = TRUE)))
+      .golden_gitlab(domain, variables, back) },
     contributors = function(owner, name) { note("contributors", owner, name); .golden_contributors(owner, name) },
     # delay is pacing, not part of the request.
     search_hit = function(owner, name, query, delay = 0) {
@@ -458,11 +496,12 @@ skip_golden_parity <- function()
   ai = .golden_ai,
   backfill = .golden_sharded)
 
-# Stars for three repositories on other hosts in the seeded release, as GitLab collection will
-# publish them, so the GitHub-only rosters of the later paths have signalled rows to leave out.
+# Stars for the Codeberg repository in the seeded release, so the GitHub-only rosters of the
+# later paths have a signalled row with no collector to leave out. The GitLab rows carry what
+# the daily runs collected.
 .golden_other_hosts <- function(rel) {
-  ids <- c("gitlab.com/epiverse/outbreaks/linelist", "code.usgs.gov/water/toxics", "codeberg.org/someone/cbpkg")
-  stars <- c(12L, 4L, 2L)
+  ids <- "codeberg.org/someone/cbpkg"
+  stars <- 2L
   for (asset in c("vcs-signals-recent.db", "vcs-signals-summary.db")) {
     con <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel, asset))
     if (identical(asset, "vcs-signals-recent.db"))

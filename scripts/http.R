@@ -88,14 +88,15 @@ http_request <- function(method, url, headers = character(), body = NULL,
 }
 
 # POST a GraphQL query. GraphQL-level errors come back as `errors`, not thrown.
-http_graphql <- function(endpoint, query, variables = NULL, token = NA, run = system2) {
+http_graphql <- function(endpoint, query, variables = NULL, token = NA, run = system2,
+                         timeout = HTTP_TIMEOUT_S) {
   payload <- list(query = query)
   # An empty list would go out as [], and GraphQL wants an object.
   if (!is.null(variables)) payload$variables <- if (length(variables)) variables else stats::setNames(list(), character())
   body <- jsonlite::toJSON(payload, auto_unbox = TRUE, null = "null")
   secret <- if (.has_token(token)) paste("Authorization: Bearer", token) else character()
   r <- http_request("POST", endpoint, headers = "Content-Type: application/json", body = as.character(body),
-                    run = run, secret_headers = secret)
+                    timeout = timeout, run = run, secret_headers = secret)
   res <- list(data = NULL, errors = NULL, status = r$status, error = r$error)
   if (!is.na(r$error) && is.na(r$status)) return(res)
   parsed <- tryCatch(jsonlite::fromJSON(r$body, simplifyVector = FALSE), error = function(e) NULL)
