@@ -80,6 +80,9 @@ GITLAB_BATCH          <- 50L  # projects per GraphQL request; projects(fullPaths
 GITLAB_MIN_INTERVAL_S <- 2    # seconds between two requests to one host
 GITLAB_MAX_REQUESTS   <- 30L  # GraphQL requests to one host per run, resolution and gauges together
 GITLAB_BREAKER_AFTER  <- 3L   # consecutive failures that defer a host for the rest of the run
+# GitLab runs after the GitHub gauge pass, until this many minutes past the later of that pass's
+# end and its deadline. The job is capped at 150 minutes; the longest recent run took 131.
+GITLAB_DEADLINE_EXTRA_MIN <- 10
 
 # Hosts we have an adapter for. This sets repos.supported and routes nothing.
 SUPPORTED_HOSTS <- c("github", "gitlab")

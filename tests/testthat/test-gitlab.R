@@ -482,16 +482,31 @@ test_that("the last release is the newest one that is out, never an upcoming one
   df <- gl_parse_projects(resp, "gitlab.com", now = now)
   expect_identical(df$last_release_tag, "v3.1.0")
   expect_identical(df$last_release_at, "2026-10-02T15:39:10Z")
-  expect_identical(df$releases_total, 4L)
+  # The two upcoming releases are not counted.
+  expect_identical(df$releases_total, 2L)
   # Flagged upcoming is skipped whatever the clock says.
   flagged <- gl_with_releases(list(gl_rel("v3.2.0", "2026-10-01T00:00:00Z", TRUE), gl_rel("v3.1.0", "2026-09-02T00:00:00Z", FALSE)))
   expect_identical(gl_parse_projects(flagged, "gitlab.com", now = now)$last_release_tag, "v3.1.0")
+  expect_identical(gl_parse_projects(flagged, "gitlab.com", now = now)$releases_total, 1L)
   none <- gl_parse_projects(gl_with_releases(list(gl_rel("v9", "2027-01-01T00:00:00Z", TRUE),
                                                   gl_rel("v8", "2026-12-01T00:00:00Z", TRUE))),
                             "gitlab.com", now = now)
   expect_identical(none$last_release_tag, NA_character_)
   expect_identical(none$last_release_at, NA_character_)
-  expect_identical(none$releases_total, 2L)
+  # Every release was fetched and every one is upcoming, so none is out.
+  expect_identical(none$releases_total, 0L)
+})
+
+test_that("releases are unknown when every fetched release is upcoming and more exist", {
+  now <- as.numeric(as.POSIXct("2026-10-15 00:00:00", tz = "UTC"))
+  five <- lapply(1:5, function(i) gl_rel(sprintf("v9.%d", i), "2027-01-01T00:00:00Z", TRUE))
+  df <- gl_parse_projects(gl_with_releases(five, count = 9L), "gitlab.com", now = now)
+  expect_identical(df$releases_total, NA_integer_)
+  expect_identical(df$last_release_tag, NA_character_)
+  # Four upcoming among five fetched of nine: five are out.
+  some <- c(five[1:4], list(gl_rel("v1.0", "2025-01-01T00:00:00Z", FALSE)))
+  expect_identical(gl_parse_projects(gl_with_releases(some, count = 9L), "gitlab.com", now = now)$releases_total, 5L)
+  expect_identical(gl_parse_projects(gl_with_releases(list(), count = 0L), "gitlab.com", now = now)$releases_total, 0L)
 })
 
 test_that("gl_collect_gauges judges upcoming releases by its own clock", {
@@ -501,7 +516,22 @@ test_that("gl_collect_gauges judges upcoming releases by its own clock", {
   ids <- "gitlab:gitlab.com:85027322"
   before <- gl_collect_gauges(io, gl_map(ids), fake_gl_pacer()$p, now = at("2026-10-15"))
   expect_identical(before$snapshot$last_release_tag, "v3.1.0")
+  expect_identical(before$snapshot$releases_total, 1L)
   after <- gl_collect_gauges(io, gl_map(ids), fake_gl_pacer()$p, now = at("2026-10-21"))
   expect_identical(after$snapshot$last_release_tag, "v3.2.0")
   expect_identical(after$snapshot$last_release_at, "2026-10-20T00:00:00Z")
+  expect_identical(after$snapshot$releases_total, 2L)
+})
+
+test_that("gl_resolve asks nothing once its deadline has passed, and those paths stay for the next run", {
+  f <- fake_gl_pacer()
+  seen <- new.env()
+  io <- fake_gl_io(list(gitlab.com = gl_synthetic(60), code.usgs.gov = gl_pool_of("code_usgs_gov.json")),
+                   seen, clock = f$clock, cost = 10)
+  repos <- gl_repos(c(sprintf("gitlab.com/g/p%d", 1:60), "code.usgs.gov/inl/inlpubs"))
+  got <- gl_resolve(io, repos, f$p, deadline = f$clock$t + 5, now = function() f$clock$t)
+  expect_length(seen$calls, 1L)
+  expect_equal(nrow(got), 50L)
+  expect_false("code.usgs.gov/inl/inlpubs" %in% got$repo_id)
+  expect_false(any(got$status == "gone"))
 })

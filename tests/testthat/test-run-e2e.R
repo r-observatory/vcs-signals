@@ -344,12 +344,16 @@ test_that("a run past its gauge deadline still publishes and keeps the last valu
 
 # GitLab as it answers: unknown keys left out, paths matched without case. A host in `html`
 # answers a sign-in page, a path in `drop` is left out, and `edit` changes each project.
-# Every request is kept in seen$gl as "<domain> <keys>".
-.e2e_gitlab <- function(seen = new.env(), html = character(0), drop = character(0), edit = identity) {
+# Every request is kept in seen$gl as "<domain> <keys>", and in seen$all after GitHub's.
+# With `clock`, each request moves clock$t on by `cost` seconds.
+.e2e_gitlab <- function(seen = new.env(), html = character(0), drop = character(0), edit = identity,
+                        clock = NULL, cost = 0) {
   seen$gl <- character(0)
   function(domain, query, variables) {
     keys <- unlist(variables$keys)
     seen$gl <- c(seen$gl, paste(domain, paste(keys, collapse = " ")))
+    seen$all <- c(seen$all, paste("gitlab", domain))
+    if (!is.null(clock)) clock$t <- clock$t + cost
     if (domain %in% html) return(list(data = NULL, errors = NULL, status = 200L, error = "response is not JSON"))
     hit <- Filter(function(n) (tolower(n$fullPath) %in% tolower(keys) || n$id %in% keys) && !(n$fullPath %in% drop),
                   .e2e_gl_nodes(domain))
@@ -363,14 +367,17 @@ test_that("a run past its gauge deadline still publishes and keeps the last valu
   seen$gh <- character(0)
   function(query) {
     seen$gh <- c(seen$gh, query)
+    seen$all <- c(seen$all, if (grepl("nodes(ids:", query, fixed = TRUE)) "github gauges" else "github")
     if (spent && grepl("rateLimit", query)) return(list(data = list(rateLimit = list(remaining = 0L))))
     .e2e_fixture(query)
   }
 }
 
-.e2e_gl_io <- function(rel, seen = new.env(), spent = FALSE, ...)
+.e2e_gl_io <- function(rel, seen = new.env(), spent = FALSE, ...) {
+  seen$all <- character(0)
   local_release_io(rel, acquire = .e2e_gl_acquire, graphql = .e2e_github(seen, spent),
                    gl_graphql = .e2e_gitlab(seen, ...))
+}
 
 .e2e_read <- function(rel, sql, db = "vcs-signals-recent.db") {
   con <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel, db))
@@ -440,6 +447,8 @@ test_that("a GitHub budget below the reserve skips only GitHub, and GitLab is st
   more <- function(n) { n$starCount <- n$starCount + 5L; n }
   io <- .e2e_gl_io(d$rel, seen, spent = TRUE, edit = more)
   res <- suppressMessages(capture.output(run_update(io, d$out, list())))
+  expect_true(any(grepl("^gauges: GitHub skipped", res)))
+  expect_false(any(grepl("collected 0 repos", res, fixed = TRUE)))
   expect_length(seen$gh, 1L)
   expect_match(seen$gh, "rateLimit", fixed = TRUE)
   expect_identical(.e2e_summary(d$rel, "rurl")$stars, 12L)
@@ -478,7 +487,8 @@ test_that("a GitLab host answering HTML defers only its own repositories", {
   expect_identical(inl$last_release_tag, "v1.4.0")
   expect_identical(.e2e_read(d$rel, "SELECT node_id, status FROM repos WHERE repo_id = 'code.usgs.gov/inl/inlpubs'"),
                    data.frame(node_id = "gitlab:code.usgs.gov:4520", status = "active", stringsAsFactors = FALSE))
-  expect_true(any(grepl("code.usgs.gov.*response is not JSON", log)))
+  expect_true(any(grepl("^GitLab code.usgs.gov: .*response is not JSON", log)))
+  expect_false(any(grepl("gitlab: GitLab", log, fixed = TRUE)))
 })
 
 test_that("a GitLab project missing from the answer keeps its id and values and is never looked up on GitHub", {
@@ -520,4 +530,116 @@ test_that("one GitLab pacer serves both stages, so a host's request cap covers t
 test_that("the real daily io reaches GitLab through gl_graphql", {
   src <- paste(readLines(file.path(.repo_root, "scripts", "update.R"), warn = FALSE), collapse = "\n")
   expect_true(grepl("gl_graphql\\s*=\\s*gl_graphql", src))
+})
+
+test_that("a day GitHub skips while GitLab collects leaves an owner row last seen 15 days ago, and publishes", {
+  d <- .e2e_gl_first_run("gl_owner_old")
+  old <- format(Sys.Date() - 15)
+  for (f in c("vcs-signals-recent.db", "vcs-signals-summary.db")) {
+    con <- DBI::dbConnect(RSQLite::SQLite(), file.path(d$rel, f))
+    DBI::dbExecute(con, "UPDATE vcs_repo_owner SET observed_on = ?", params = list(old))
+    DBI::dbDisconnect(con)
+  }
+  owners <- .e2e_read(d$rel, "SELECT * FROM vcs_repo_owner")
+  expect_identical(owners$observed_on, old)
+  more <- function(n) { n$starCount <- n$starCount + 5L; n }
+  io <- .e2e_gl_io(d$rel, spent = TRUE, edit = more)
+  expect_no_error(suppressMessages(capture.output(run_update(io, d$out, list()))))
+  expect_true("manifest.json" %in% io$uploaded())
+  expect_identical(.e2e_summary(d$rel, "rurl")$stars, 12L)
+  for (f in c("vcs-signals-recent.db", "vcs-signals-summary.db"))
+    expect_identical(.e2e_read(d$rel, "SELECT * FROM vcs_repo_owner", f), owners, info = f)
+})
+
+test_that("a fault in the GitLab code is logged and leaves GitHub and the publish going", {
+  old <- gl_parse_projects
+  assign("gl_parse_projects", function(...) stop("simulated fault in gitlab.R"), envir = globalenv())
+  restored <- FALSE
+  withr::defer(if (!restored) assign("gl_parse_projects", old, envir = globalenv()))
+  out <- tempfile("out_gl_fault"); dir.create(out)
+  rel <- tempfile("rel_gl_fault"); dir.create(rel)
+  seen <- new.env()
+  io <- .e2e_gl_io(rel, seen)
+  log <- capture.output(res <- suppressMessages(run_update(io, out, list(force_full = TRUE))))
+  expect_true(any(grepl("nodes(ids:", seen$gh, fixed = TRUE)))
+  expect_true("manifest.json" %in% io$uploaded())
+  expect_identical(.e2e_summary(rel, "ggplot2")$stars, 6959L)
+  expect_true(any(grepl("simulated fault in gitlab.R", log, fixed = TRUE)))
+  expect_identical(.e2e_read(rel, "SELECT node_id, status FROM repos WHERE host = 'gitlab'")$status, c("active", "active"))
+  expect_true(all(is.na(.e2e_read(rel, "SELECT node_id FROM repos WHERE host = 'gitlab'")$node_id)))
+
+  # A fault in the gauge step, once the ids are known, keeps GitLab's last values.
+  assign("gl_parse_projects", old, envir = globalenv())
+  restored <- TRUE
+  suppressMessages(capture.output(run_update(.e2e_gl_io(rel), out, list())))
+  expect_identical(.e2e_summary(rel, "rurl")$stars, 7L)
+  old_cg <- gl_collect_gauges
+  assign("gl_collect_gauges", function(...) stop("simulated gauge fault"), envir = globalenv())
+  withr::defer(assign("gl_collect_gauges", old_cg, envir = globalenv()))
+  more <- function(n) { n$starCount <- n$starCount + 5L; n }
+  seen2 <- new.env()
+  io2 <- .e2e_gl_io(rel, seen2, edit = more)
+  log2 <- capture.output(res2 <- suppressMessages(run_update(io2, out, list())))
+  expect_true(any(grepl("simulated gauge fault", log2, fixed = TRUE)))
+  expect_true(any(grepl("nodes(ids:", seen2$gh, fixed = TRUE)))
+  expect_true("manifest.json" %in% io2$uploaded())
+  expect_identical(.e2e_summary(rel, "rurl")$stars, 7L)
+  expect_identical(.e2e_summary(rel, "ggplot2")$stars, 6959L)
+})
+
+test_that("GitLab asks nothing until GitHub's gauge pass is done", {
+  d <- .e2e_gl_first_run("gl_order")
+  all <- d$seen$all
+  expect_true(any(all == "github gauges"))
+  expect_gt(min(grep("^gitlab ", all)), max(which(all == "github gauges")))
+  # The next day too, when only the gauges are asked.
+  seen <- new.env()
+  suppressMessages(capture.output(run_update(.e2e_gl_io(d$rel, seen), d$out, list())))
+  expect_gt(min(grep("^gitlab ", seen$all)), max(which(seen$all == "github gauges")))
+})
+
+test_that("GitLab still runs after GitHub's gauge pass is cut by its deadline", {
+  d <- .e2e_gl_first_run("gl_after_cut")
+  seen <- new.env()
+  more <- function(n) { n$starCount <- n$starCount + 5L; n }
+  log <- capture.output(res <- suppressMessages(
+    run_update(.e2e_gl_io(d$rel, seen, edit = more), d$out, list(gauge_deadline_min = 0))))
+  expect_false(any(grepl("nodes(ids:", seen$gh, fixed = TRUE)))
+  expect_true(any(grepl("1 repos not reached by the 0 min deadline", log, fixed = TRUE)))
+  expect_length(seen$gl, 2L)
+  expect_identical(.e2e_summary(d$rel, "rurl")$stars, 12L)
+  expect_identical(.e2e_summary(d$rel, "inlpubs")$stars, 5L)
+  expect_identical(.e2e_summary(d$rel, "ggplot2")$stars, 6959L)
+})
+
+test_that("GitLab gets its own allowance past GitHub's deadline, and what it does not reach keeps its values", {
+  expect_identical(GITLAB_DEADLINE_EXTRA_MIN, 10)
+  clock <- new.env(); clock$t <- 1e9
+  out <- tempfile("out_gl_slow"); dir.create(out)
+  rel <- tempfile("rel_gl_slow"); dir.create(rel)
+  seen <- new.env()
+  # Each GitLab request takes 6 minutes, so the 10 minutes past GitHub's deadline fit two.
+  io <- .e2e_gl_io(rel, seen, clock = clock, cost = 360)
+  log <- capture.output(suppressMessages(
+    run_update(io, out, list(force_full = TRUE, gauge_deadline_min = 0, now = function() clock$t))))
+  expect_identical(seen$gl, c("code.usgs.gov inl/inlpubs", "gitlab.com bart-turczynski/rurl"))
+  expect_true("manifest.json" %in% io$uploaded())
+  ids <- .e2e_read(rel, "SELECT repo_id, node_id, status FROM repos WHERE host = 'gitlab' ORDER BY repo_id")
+  expect_identical(ids$node_id, c("gitlab:code.usgs.gov:4520", "gitlab:gitlab.com:85027322"))
+  expect_identical(ids$status, c("active", "active"))
+  expect_true(any(grepl("2 not reached", log, fixed = TRUE)))
+  expect_length(.e2e_latest(rel, "gitlab.com/bart-turczynski/rurl"), 0L)
+
+  # A path the allowance does not reach stays without an id, active, for the next run.
+  clock2 <- new.env(); clock2$t <- 2e9
+  out2 <- tempfile("out_gl_slow2"); dir.create(out2)
+  rel2 <- tempfile("rel_gl_slow2"); dir.create(rel2)
+  seen2 <- new.env()
+  io2 <- .e2e_gl_io(rel2, seen2, clock = clock2, cost = 660)
+  suppressMessages(capture.output(
+    run_update(io2, out2, list(force_full = TRUE, gauge_deadline_min = 0, now = function() clock2$t))))
+  expect_identical(seen2$gl, "code.usgs.gov inl/inlpubs")
+  ids2 <- .e2e_read(rel2, "SELECT node_id, status FROM repos WHERE host = 'gitlab' ORDER BY repo_id")
+  expect_identical(ids2$node_id, c("gitlab:code.usgs.gov:4520", NA))
+  expect_identical(ids2$status, c("active", "active"))
 })

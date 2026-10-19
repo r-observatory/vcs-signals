@@ -173,6 +173,45 @@ seed_working_db <- function(io, out_dir, working_path) {
   seeded(TRUE)
 }
 
+# ---- GitLab -------------------------------------------------------------------
+# GitLab's ids and then its gauges for one run, through one pacer so its per-host cap covers
+# both, until `deadline`. A path that does not resolve is never gone: path lookup does not follow
+# renames, so it stays without an id and is asked again next run. A project left out of a clean
+# answer keeps its id and values; it never goes to repoint_dead_node_ids, which asks GitHub.
+# A fault in either step is logged and leaves the GitLab repositories it covers deferred with
+# their last values, so GitHub's rows and the publish go on. `snapshot` has exactly the GitHub
+# gauge columns (full_path and gl_id dropped); `map` is node_id, repo_id.
+.gitlab_pass <- function(io, con, deadline, now) {
+  log <- function(m) cat(m, "\n", sep = "")
+  pacer <- gl_pacer(now = now, sleep = if (is.function(io$sleep)) io$sleep else Sys.sleep)
+  tryCatch({
+    needing <- DBI::dbGetQuery(con,
+      sprintf("SELECT repo_id, owner, name FROM repos WHERE %s AND node_id IS NULL AND status = 'active'
+        ORDER BY repo_id", host_predicate(GITLAB_HOSTS)))
+    needing$domain <- sub("/.*$", "", needing$repo_id)
+    needing$path <- sub("^[^/]+/", "", needing$repo_id)
+    ids <- gl_resolve(io, needing, pacer, log = log, deadline = deadline, now = now)
+    update_repo_node_ids(con, ids)
+    cat(sprintf("GitLab ids: %d resolved, %d not found or not asked\n", nrow(ids), nrow(needing) - nrow(ids)))
+  }, error = function(e)
+    log(sprintf("GitLab: id lookup stopped by a fault, unresolved paths wait for the next run: %s",
+                conditionMessage(e))))
+  map <- DBI::dbGetQuery(con,
+    sprintf("SELECT node_id, repo_id FROM repos WHERE %s AND status = 'active' AND node_id IS NOT NULL
+      ORDER BY repo_id", host_predicate(GITLAB_HOSTS)))
+  out <- tryCatch({
+    g <- gl_collect_gauges(io, map, pacer, deadline = deadline, now = now, log = log)
+    if (!is.null(g$snapshot)) g$snapshot <- g$snapshot[, names(rows_df_empty_gauges()), drop = FALSE]
+    g
+  }, error = function(e) {
+    log(sprintf("GitLab: gauges stopped by a fault, every GitLab repository keeps its last values: %s",
+                conditionMessage(e)))
+    list(snapshot = NULL, deferred = map$node_id, unresolvable = character(0), unreached = character(0))
+  })
+  out$map <- map
+  out
+}
+
 # ---- the five-stage orchestrator -------------------------------------------
 #' Run one full vcs-signals update pass behind an injected io.
 #'
@@ -240,9 +279,6 @@ run_update <- function(io, out_dir, opts = list()) {
     message(sprintf(
       "graphql rate remaining (%s) below reserve (%d); skipping GitHub node-id resolution and collection this run",
       rl, POINT_RESERVE))
-  # One GitLab pacer for stages 2 and 3, so its per-host request cap covers the run.
-  gl_pace <- gl_pacer(now = now, sleep = if (is.function(io$sleep)) io$sleep else Sys.sleep)
-  gl_log <- function(m) cat("gitlab:", m, "\n")
 
   # ---- Stage 2: node-id resolution + lifecycle (rename, gone) ------------
   if (github_ok) {
@@ -256,52 +292,44 @@ run_update <- function(io, out_dir, opts = list()) {
     n_id_deferred <- nrow(needing) - nrow(resolved_ids)
     cat(sprintf("node ids: %d resolved, %d deferred, %d gone\n", n_id_resolved, n_id_deferred, n_id_gone))
   }
-  # A GitLab path that does not resolve is never gone: path lookup does not follow renames,
-  # so it stays without an id and is asked again next run.
-  gl_needing <- DBI::dbGetQuery(con,
-    sprintf("SELECT repo_id, owner, name FROM repos WHERE %s AND node_id IS NULL AND status = 'active'
-      ORDER BY repo_id", host_predicate(GITLAB_HOSTS)))
-  gl_needing$domain <- sub("/.*$", "", gl_needing$repo_id)
-  gl_needing$path <- sub("^[^/]+/", "", gl_needing$repo_id)
-  gl_ids <- gl_resolve(io, gl_needing, gl_pace, log = gl_log)
-  update_repo_node_ids(con, gl_ids)
-  cat(sprintf("gitlab ids: %d resolved, %d not found or not asked\n", nrow(gl_ids), nrow(gl_needing) - nrow(gl_ids)))
 
-  # ---- Stage 3: forward gauge collection over active GitHub and GitLab repos
+  # ---- Stage 3: forward gauge collection over active github repos -------
   # The GitHub map is read even when GitHub is skipped, so its repos count as
   # not collected rather than gone from the owner table.
   repo_map <- DBI::dbGetQuery(con,
     sprintf("SELECT node_id, repo_id FROM repos WHERE %s AND status = 'active' AND node_id IS NOT NULL
       ORDER BY repo_id", host_predicate(GITHUB_HOSTS)))
-  # A repo the deadline leaves out keeps its last values, as a deferred one does.
   gauges <- list(snapshot = NULL, deferred = character(0), unresolvable = character(0), unreached = character(0))
-  if (github_ok)
+  if (github_ok) {
+    # A repo the deadline leaves out keeps its last values, as a deferred one does.
     gauges <- collect_gauges(io, rotate_by_day(repo_map$node_id, today),
                              deadline = started + 60 * deadline_min, now = now,
                              log = function(m) cat("gauges:", m, "\n"))
-  n_gauges_collected <- if (!is.null(gauges$snapshot)) nrow(gauges$snapshot) else 0L
-  cat(sprintf("gauges: collected %d repos, %d deferred\n", n_gauges_collected, length(gauges$deferred)))
-  dead <- repoint_dead_node_ids(con, io, gauges$unresolvable, nrow(repo_map))
-  step(sprintf("gauges: %d node ids no longer resolve, %d moved to the new id of a recreated repo%s; %d repos not reached by the %s min deadline",
-               dead$dead, dead$repointed,
-               if (dead$skipped) " (over the cap, none looked up)" else "",
-               length(gauges$unreached), format(deadline_min)))
+    n_gauges_collected <- if (!is.null(gauges$snapshot)) nrow(gauges$snapshot) else 0L
+    cat(sprintf("gauges: collected %d repos, %d deferred\n", n_gauges_collected, length(gauges$deferred)))
+    dead <- repoint_dead_node_ids(con, io, gauges$unresolvable, nrow(repo_map))
+    step(sprintf("gauges: %d node ids no longer resolve, %d moved to the new id of a recreated repo%s; %d repos not reached by the %s min deadline",
+                 dead$dead, dead$repointed,
+                 if (dead$skipped) " (over the cap, none looked up)" else "",
+                 length(gauges$unreached), format(deadline_min)))
+  } else {
+    cat("gauges: GitHub skipped this run (rate budget below the reserve); its repos keep their last values\n")
+  }
+  # Owner rows come from GitHub's answer alone (see stage 4).
+  gh_snapshot <- gauges$snapshot
+  gh_map <- repo_map
 
-  # GitLab after GitHub, on the same deadline. A project left out of a clean answer is logged
-  # and keeps its id and values: it never goes to repoint_dead_node_ids, which asks GitHub.
-  gl_map <- DBI::dbGetQuery(con,
-    sprintf("SELECT node_id, repo_id FROM repos WHERE %s AND status = 'active' AND node_id IS NOT NULL
-      ORDER BY repo_id", host_predicate(GITLAB_HOSTS)))
-  gl <- gl_collect_gauges(io, gl_map, gl_pace, deadline = started + 60 * deadline_min, now = now, log = gl_log)
-  step(sprintf("gitlab gauges: collected %d repos, %d deferred, %d not in GitLab's answer, %d not reached",
+  # ---- GitLab: ids, then gauges, once GitHub's pass is done, so GitHub's
+  # timing is as it was. Its own allowance runs past GitHub's deadline. ------
+  gl <- .gitlab_pass(io, con, deadline = max(now(), started + 60 * deadline_min) + 60 * GITLAB_DEADLINE_EXTRA_MIN,
+                     now = now)
+  step(sprintf("GitLab gauges: collected %d repos, %d deferred, %d not in GitLab's answer, %d not reached",
                if (is.null(gl$snapshot)) 0L else nrow(gl$snapshot), length(gl$deferred),
                length(gl$unresolvable), length(gl$unreached)))
-  if (!is.null(gl$snapshot))
-    gauges$snapshot <- rbind(gauges$snapshot,
-                             gl$snapshot[, setdiff(names(gl$snapshot), c("full_path", "gl_id")), drop = FALSE])
+  gauges$snapshot <- rbind(gauges$snapshot, gl$snapshot)
   gauges$deferred <- c(gauges$deferred, gl$deferred)
   gauges$unreached <- c(gauges$unreached, gl$unreached)
-  repo_map <- rbind(repo_map, gl_map)
+  repo_map <- rbind(repo_map, gl$map)
   snapshot_long <- gauges_to_long(gauges$snapshot, repo_map)
   cut <- gauge_cut_verdict(length(gauges$unreached), nrow(repo_map))
   if (length(cut$lines)) cat(cut$lines, sep = "\n")
@@ -314,7 +342,10 @@ run_update <- function(io, out_dir, opts = list()) {
   # publish() heartbeat, rather than rebuild from an empty snapshot and
   # publish an all-NA dataset over the top of good accumulated history.
   if (!is.null(gauges$snapshot) && nrow(gauges$snapshot) > 0) {
-    write_repo_owner(con, gauges$snapshot, repo_map, today_s)
+    # Only on a day GitHub answered: its stale cleanup and the owner gate both date from the
+    # newest GitHub observation, and a GitLab-only day would expire rows the gate expects kept.
+    if (!is.null(gh_snapshot) && nrow(gh_snapshot) > 0)
+      write_repo_owner(con, gh_snapshot, gh_map, today_s)
     prev_latest <- DBI::dbGetQuery(con, "SELECT repo_id, metric, value FROM series_latest")
     mat <- materialize_series(prev_latest, snapshot_long, today_s)
 

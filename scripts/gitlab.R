@@ -79,16 +79,28 @@ gl_projects_query <- function(by = c("paths", "ids")) {
   if (is.na(t)) NA_character_ else format(t, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
 }
 
-# The newest release that is out. GitLab sorts upcoming (future-dated) releases first, and
-# GitHub's latestRelease is never one, so they are skipped; NULL when every one is upcoming.
+# A release flagged upcoming, or dated after `now`. GitLab sorts these first; GitHub's
+# latestRelease is never one, and its count does not include them.
+.gl_upcoming <- function(r, now) {
+  if (isTRUE(.gl_at(r, "upcomingRelease"))) return(TRUE)
+  at <- .gl_utc(.gl_at(r, "releasedAt"))
+  !is.na(at) && as.numeric(as.POSIXct(at, tz = "UTC", format = "%Y-%m-%dT%H:%M:%SZ")) > now
+}
+
+# The newest release that is out, or NULL when every fetched one is upcoming.
 .gl_released <- function(nodes, now) {
-  for (r in if (is.list(nodes)) nodes) {
-    if (isTRUE(.gl_at(r, "upcomingRelease"))) next
-    at <- .gl_utc(.gl_at(r, "releasedAt"))
-    if (!is.na(at) && as.numeric(as.POSIXct(at, tz = "UTC", format = "%Y-%m-%dT%H:%M:%SZ")) > now) next
-    return(r)
-  }
+  for (r in if (is.list(nodes)) nodes) if (!.gl_upcoming(r, now)) return(r)
   NULL
+}
+
+# GitLab's count less the upcoming releases among the newest fetched. NA when every fetched one
+# is upcoming and more exist, since how many of the rest are out is unknown.
+.gl_released_count <- function(count, nodes, now) {
+  if (is.na(count)) return(NA_integer_)
+  nodes <- if (is.list(nodes)) nodes else list()
+  up <- sum(vapply(nodes, .gl_upcoming, NA, now = now))
+  if (length(nodes) && up == length(nodes) && count > length(nodes)) return(NA_integer_)
+  as.integer(max(count - up, 0L))
 }
 
 .gl_nodes <- function(resp) {
@@ -103,7 +115,8 @@ gl_projects_query <- function(by = c("paths", "ids")) {
   issues <- !isFALSE(.gl_at(n, "issuesEnabled"))
   mrs <- !isFALSE(.gl_at(n, "mergeRequestsEnabled"))
   topics <- .gl_at(n, "topics")
-  release <- .gl_released(.gl_at(n, "releases", "nodes"), now)
+  rel_nodes <- .gl_at(n, "releases", "nodes")
+  release <- .gl_released(rel_nodes, now)
   data.frame(
     node_id = paste0("gitlab:", domain, ":", sub("^.*/", "", gid)),
     name_with_owner = .gl_chr(.gl_at(n, "fullPath")),
@@ -115,7 +128,7 @@ gl_projects_query <- function(by = c("paths", "ids")) {
     prs_open = if (mrs) .gl_int(.gl_at(n, "openMergeRequestsCount")) else NA_integer_,
     prs_closed = if (mrs) .gl_int(.gl_at(n, "mrClosed", "count")) else NA_integer_,
     prs_merged = if (mrs) .gl_int(.gl_at(n, "mrMerged", "count")) else NA_integer_,
-    releases_total = .gl_int(.gl_at(n, "releases", "count")),
+    releases_total = .gl_released_count(.gl_int(.gl_at(n, "releases", "count")), rel_nodes, now),
     size_kb = NA_integer_, license = NA_character_,
     topics = if (is.list(topics) || is.character(topics))
       paste(unlist(Filter(is.character, topics)), collapse = ",") else NA_character_,
@@ -180,8 +193,9 @@ gl_parse_projects <- function(resp, domain, now = as.numeric(Sys.time())) {
 #' Resolve GitLab paths to project ids. `repos` has repo_id, domain and path (the full path).
 #' Returns resolve_node_ids' shape for the projects found, all status 'active'. A path the answer
 #' leaves out is not returned and is never marked gone: path lookup does not follow renames, so it
-#' is asked again next run. A failed batch contributes no rows.
-gl_resolve <- function(io, repos, pacer, log = NULL) {
+#' is asked again next run. A failed batch, or one not asked by `deadline`, contributes no rows.
+gl_resolve <- function(io, repos, pacer, log = NULL, deadline = Inf,
+                       now = function() as.numeric(Sys.time())) {
   out <- list(data.frame(repo_id = character(), node_id = character(), owner = character(),
     name = character(), name_with_owner = character(), status = character(), stringsAsFactors = FALSE))
   repos <- repos[!is.na(repos$path) & nzchar(repos$path), , drop = FALSE]
@@ -189,6 +203,11 @@ gl_resolve <- function(io, repos, pacer, log = NULL) {
     sub <- repos[repos$domain == d, , drop = FALSE]
     batches <- unname(chunk(unique(sub$path), GITLAB_BATCH))
     for (i in seq_along(batches)) {
+      if (now() >= deadline) {
+        .gl_log(log, sprintf("GitLab %s: %d paths not asked before the deadline, left for the next run",
+                             d, length(unlist(batches[i:length(batches)]))))
+        break
+      }
       a <- .gl_ask(io, pacer, d, "paths", batches[[i]], log)
       if (a$state == "refused") {
         .gl_log(log, .gl_stop_note(pacer, d, length(unlist(batches[i:length(batches)]))))
