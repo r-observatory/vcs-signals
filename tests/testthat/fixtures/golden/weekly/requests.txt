@@ -9,6 +9,15 @@ contributors	epiverse-trace	linelist
 contributors	rdatatable	data.table
 contributors	tidyverse	forcats
 graphql	query { r0: repository(owner: "epiverse-trace", name: "linelist") {\n      closedIssues: issues(states: CLOSED, first: 50, orderBy: {field: UPDATED_AT, direction: DESC}) {\n        nodes { createdAt closedAt } }\n      resolvedPRs: pullRequests(states: [MERGED, CLOSED], first: 50, orderBy: {field: UPDATED_AT, direction: DESC}) {\n        nodes { createdAt closedAt } }\n      openIssues: issues(states: OPEN, first: 50, orderBy: {field: CREATED_AT, direction: ASC}) {\n        nodes { createdAt } }\n    }\nr1: repository(owner: "rdatatable", name: "data.table") {\n      closedIssues: issues(states: CLOSED, first: 50, orderBy: {field: UPDATED_AT, direction: DESC}) {\n        nodes { createdAt closedAt } }\n      resolvedPRs: pullRequests(states: [MERGED, CLOSED], first: 50, orderBy: {field: UPDATED_AT, direction: DESC}) {\n        nodes { createdAt closedAt } }\n      openIssues: issues(states: OPEN, first: 50, orderBy: {field: CREATED_AT, direction: ASC}) {\n        nodes { createdAt } }\n    }\nr2: repository(owner: "tidyverse", name: "forcats") {\n      closedIssues: issues(states: CLOSED, first: 50, orderBy: {field: UPDATED_AT, direction: DESC}) {\n        nodes { createdAt closedAt } }\n      resolvedPRs: pullRequests(states: [MERGED, CLOSED], first: 50, orderBy: {field: UPDATED_AT, direction: DESC}) {\n        nodes { createdAt closedAt } }\n      openIssues: issues(states: OPEN, first: 50, orderBy: {field: CREATED_AT, direction: ASC}) {\n        nodes { createdAt } }\n    } }
+gl_graphql	code.usgs.gov	query($ids: [ID!]) {\n  projects(ids: $ids, first: 50) { nodes { id repository { commitCount } } }\n}	{"ids":["gid://gitlab/Project/4711"]}
+gl_graphql	gitlab.com	query($ids: [ID!]) {\n  projects(ids: $ids, first: 50) { nodes { id repository { commitCount } } }\n}	{"ids":["gid://gitlab/Project/46520077"]}
+download	vcs-signals-gitlab-state.db
+gl_rest	code.usgs.gov	/projects/4711/repository/contributors?per_page=1
+gl_rest	code.usgs.gov	/projects/4711/repository/contributors?order_by=commits&sort=desc&per_page=1
+gl_rest	code.usgs.gov	/projects/4711?license=true
+gl_rest	gitlab.com	/projects/46520077/repository/contributors?per_page=1
+gl_rest	gitlab.com	/projects/46520077/repository/contributors?order_by=commits&sort=desc&per_page=1
+gl_rest	gitlab.com	/projects/46520077?license=true
 generation
 download	vcs-signals-recent.db
 release_exists
@@ -29,3 +38,4 @@ upload	vcs-signals-recent.db
 upload	vcs-signals-summary.db
 upload	manifest.json
 generation
+upload	vcs-signals-gitlab-state.db

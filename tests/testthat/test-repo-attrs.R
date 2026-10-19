@@ -140,7 +140,7 @@ test_that("with the reset, a repository not collected loses only its two dates",
 
 .ra_weekly_parts <- function() {
   p <- tempfile("ra_weekly_parts_"); dir.create(p)
-  .ra_weekly$export_snapshot_shard(file.path(p, "vcs-signals-shard-0.db"), data.frame(
+  export_snapshot_shard(file.path(p, "vcs-signals-shard-0.db"), data.frame(
     repo_id = .ra_rid, commits_total = 500L, contributors_total = 10L,
     median_days_to_close_issue = NA_integer_, median_days_to_close_pr = NA_integer_,
     median_open_issue_age_days = NA_integer_, stringsAsFactors = FALSE))

@@ -85,3 +85,25 @@ test_that("the run budget counts a host's requests over the pacer's life, not pe
   expect_equal(f$p$spent("a"), 0)
   for (i in 1:3) expect_true(f$p$before("b"))
 })
+
+test_that("a host's hourly budget can be changed mid-run and other hosts keep theirs", {
+  f <- fake_pacer(min_interval = c(default = 0), hourly_budget = c(default = 5))
+  for (i in 1:3) expect_true(f$p$before("a"))
+  f$p$set_hourly_budget("a", 3L)
+  expect_false(f$p$before("a"))
+  f$p$set_hourly_budget("a", 0L)
+  expect_false(f$p$before("a"))
+  for (i in 1:5) expect_true(f$p$before("b"))
+  expect_false(f$p$before("b"))
+  f$p$set_hourly_budget("b", 6L)
+  expect_true(f$p$before("b"))
+})
+
+test_that("the hourly budget in force reads back per host, after a mid-run change too", {
+  f <- fake_pacer(min_interval = c(default = 0), hourly_budget = c(default = 30, a = 45))
+  expect_equal(f$p$hourly_budget("a"), 45)
+  expect_equal(f$p$hourly_budget("b"), 30)
+  f$p$set_hourly_budget("a", 0L)
+  expect_equal(f$p$hourly_budget("a"), 0)
+  expect_equal(f$p$hourly_budget("b"), 30)
+})

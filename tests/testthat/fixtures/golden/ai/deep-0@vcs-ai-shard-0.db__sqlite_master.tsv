@@ -12,6 +12,7 @@ index	sqlite_autoindex_vcs_signals_summary_1	vcs_signals_summary	\N
 index	ux_vrnh_open	vcs_repo_name_history	CREATE UNIQUE INDEX ux_vrnh_open\n    ON vcs_repo_name_history(node_id) WHERE ended_on IS NULL
 table	account_counts	account_counts	CREATE TABLE `account_counts` (\n  `repo_id` TEXT,\n  `tool` TEXT,\n  `identity_set` TEXT,\n  `commits` INTEGER,\n  `newest_commit_date` TEXT,\n  `measured_on` TEXT\n)
 table	campaign	campaign	CREATE TABLE `campaign` (\n  `since` TEXT\n)
+table	gitlab_license	gitlab_license	CREATE TABLE gitlab_license (\n    repo_id TEXT PRIMARY KEY, license TEXT, read_on TEXT NOT NULL) WITHOUT ROWID
 table	pipeline_state	pipeline_state	CREATE TABLE pipeline_state (key TEXT PRIMARY KEY, value TEXT)
 table	search_log	search_log	CREATE TABLE `search_log` (\n  `repo_id` TEXT,\n  `rule_key` TEXT,\n  `rule_rev` INTEGER,\n  `ruleset_version` TEXT,\n  `asked_on` TEXT,\n  `outcome` TEXT,\n  `total_count` INTEGER,\n  `verified` INTEGER,\n  `incomplete` INTEGER,\n  `first_hit_on` TEXT,\n  `source` TEXT\n)
 table	series_latest	series_latest	CREATE TABLE series_latest (\n    repo_id TEXT NOT NULL, metric TEXT NOT NULL, value INTEGER NOT NULL,\n    PRIMARY KEY (repo_id, metric))

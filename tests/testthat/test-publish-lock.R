@@ -22,11 +22,11 @@
 # green suite. So a job that runs anything under scripts/ or calls Rscript is a
 # publisher unless the call is one of these read-only modes, written as a plain
 # or quoted word straight after the script. Only run_update and the three
-# run_merge functions reach publish(), and publish() is the only caller of
-# io$upload. A new mode or a new script counts as publishing until it is listed
+# run_merge functions reach publish(), and only they and the weekly merge's
+# GitLab state upload call io$upload. A new mode or a new script counts as publishing until it is listed
 # here, which is the moment to check that it never uploads.
 .READ_ONLY_MODES <- list(
-  "weekly.R"      = c("enumerate", "fetch"),
+  "weekly.R"      = c("enumerate", "fetch", "fetch-gitlab"),
   "backfill.R"    = c("enumerate", "fetch"),
   "ai_backfill.R" = c("enumerate", "cheap", "gate", "gate-incremental", "deep"))
 
@@ -636,4 +636,20 @@ test_that("every merge job downloads the partials run_merge reads", {
   rerun <- rerun[.is_code(rerun)]
   guard <- grep("Refuse an empty parts directory", rerun)
   expect_true(any(grepl("vcs-ai-cheap-*.db", rerun[guard:min(length(rerun), guard + 14L)], fixed = TRUE)))
+})
+
+test_that("the weekly merge runs when the GitLab fetch fails, and only that fetch sees the GitLab token", {
+  wf_dir <- file.path(.repo_root, ".github", "workflows")
+  skip_if_not(dir.exists(wf_dir), "workflows not in this checkout")
+  weekly <- readLines(file.path(wf_dir, "weekly.yml"), warn = FALSE)
+  jobs <- lapply(.workflow_jobs(weekly), function(j) j[.is_code(j)])
+  cond <- grep("^\\s*if:", jobs[["merge"]], value = TRUE)
+  expect_equal(length(cond), 1L)
+  expect_match(cond, "!cancelled()", fixed = TRUE)
+  expect_match(cond, "needs.fetch.result == 'success'", fixed = TRUE)
+  expect_false(grepl("fetch-gitlab", cond, fixed = TRUE))
+  holders <- names(Filter(function(j) any(grepl("GITLAB_TOKEN_GITLAB_COM", j, fixed = TRUE)), jobs))
+  expect_identical(holders, "fetch-gitlab")
+  for (wf in setdiff(list.files(wf_dir, pattern = "\\.ya?ml$"), "weekly.yml"))
+    expect_false(any(grepl("GITLAB_TOKEN_GITLAB_COM", readLines(file.path(wf_dir, wf), warn = FALSE), fixed = TRUE)), info = wf)
 })

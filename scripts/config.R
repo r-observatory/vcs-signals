@@ -80,6 +80,13 @@ GITLAB_BATCH          <- 50L  # projects per GraphQL request; projects(fullPaths
 GITLAB_MIN_INTERVAL_S <- 2    # seconds between two requests to one host
 GITLAB_MAX_REQUESTS   <- 30L  # GraphQL requests to one host per run, resolution and gauges together
 GITLAB_BREAKER_AFTER  <- 3L   # consecutive failures that defer a host for the rest of the run
+# GitLab REST requests per host per hour (gl_rest_pacer): anonymous, and with a GITLAB_TOKEN_<DOMAIN> set.
+GITLAB_REST_HOURLY       <- c(gitlab.com = 45L, default = 30L)
+GITLAB_REST_HOURLY_TOKEN <- 500L
+# The weekly REST pass (weekly.R fetch-gitlab) stops at this deadline, inside the job's 240-minute cap.
+GITLAB_WEEKLY_DEADLINE_MIN <- 200
+# REST calls one repository costs weekly: two for contributors, one for the licence.
+GITLAB_REST_CALLS_PER_REPO <- 3L
 # GitLab runs after the GitHub gauge pass, until this many minutes past the later of that pass's
 # end and its deadline. update.yml caps the job at 170 minutes; the longest recent job took 136.
 GITLAB_DEADLINE_EXTRA_MIN <- 10
@@ -950,6 +957,8 @@ PB,amazonq,genuine,"No pull request opened by a maintainer from a branch Amazon 
 # seeded, and once a package has left CRAN or moved its URL it is the only record
 # anywhere of which repository the package was. A path that dropped it would
 # lose those links for good, because nothing resolves a delisted package again.
+# gitlab_license is written only by the weekly merge, and every other publish
+# carries it so a GitLab licence outlives the daily runs.
 # vcs_repo_owner stays the last entry; tables added later go before it.
 SUMMARY_EXTRA_TABLES <- c("vcs_ai_models", "vcs_ai_rule_inventory",
                           "vcs_ai_silent_channels", "repo_package_links",
@@ -957,7 +966,7 @@ SUMMARY_EXTRA_TABLES <- c("vcs_ai_models", "vcs_ai_rule_inventory",
                           "vcs_ai_repo_reads", "vcs_ai_account_counts", "vcs_ai_search_log",
                           "vcs_ai_search_coverage", "vcs_ai_review_signals",
                           "vcs_ai_outside_prs", "vcs_ai_ruleset_history",
-                          "vcs_repo_name_history", "vcs_repo_owner")
+                          "vcs_repo_name_history", "gitlab_license", "vcs_repo_owner")
 
 # Package-to-repository links this pipeline published before it kept them. Built
 # from every surviving copy of what it published: the vcs_signals_summary in a

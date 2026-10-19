@@ -179,3 +179,28 @@ test_that("run_merge is change-only: an unchanged weekly value on a second run a
     "SELECT * FROM signals_series WHERE metric IN ('commits_total','contributors_total')")
   expect_equal(nrow(series), 2)   # still just the one row each from run 1, none added by run 2
 })
+
+test_that("run_merge uploads the GitLab cursor state after the publish, only when the artifact supplied one", {
+  released <- tempfile("released"); dir.create(released)
+  .weekly_merge_fixture(released, format(Sys.Date()))
+  parts <- tempfile("parts"); dir.create(parts)
+  export_snapshot_shard(file.path(parts, "vcs-signals-shard-0.db"),
+    data.frame(repo_id = "github.com/a/ok", commits_total = 500L, stringsAsFactors = FALSE))
+  io <- local_release_io(released)
+  utils::capture.output(suppressMessages(run_merge(io, tempfile("out"), parts)))
+  expect_true("manifest.json" %in% io$uploaded())
+  expect_false("vcs-signals-gitlab-state.db" %in% io$uploaded())
+  expect_false(file.exists(file.path(released, "vcs-signals-gitlab-state.db")))
+
+  write_gitlab_cursors(file.path(parts, "vcs-signals-gitlab-state.db"), c(gitlab.com = "gitlab.com/g/p3"))
+  io2 <- local_release_io(released)
+  utils::capture.output(suppressMessages(run_merge(io2, tempfile("out"), parts)))
+  expect_identical(utils::tail(io2$uploaded(), 2L), c("manifest.json", "vcs-signals-gitlab-state.db"))
+  expect_true(file.exists(file.path(released, "vcs-signals-gitlab-state.db")))
+
+  # A failed state upload is reported and leaves the published merge standing.
+  io3 <- local_release_io(released, on_upload = function(name)
+    if (name == "vcs-signals-gitlab-state.db") stop("HTTP 502"))
+  utils::capture.output(msgs <- testthat::capture_messages(expect_no_error(run_merge(io3, tempfile("out"), parts))))
+  expect_true(any(grepl("vcs-signals-gitlab-state.db", msgs, fixed = TRUE)))
+})

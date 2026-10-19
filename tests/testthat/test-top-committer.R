@@ -44,7 +44,7 @@ test_that("both are weekly metrics, named within the viewer's metric width", {
 
 test_that("a snapshot written without the new metrics stores them as NA", {
   p <- tempfile(fileext = ".db")
-  .tc_weekly$export_snapshot_shard(p, data.frame(repo_id = "r", commits_total = 1L,
+  export_snapshot_shard(p, data.frame(repo_id = "r", commits_total = 1L,
                                                  contributors_total = 2L, stringsAsFactors = FALSE))
   con <- DBI::dbConnect(RSQLite::SQLite(), p); on.exit(DBI::dbDisconnect(con))
   row <- DBI::dbReadTable(con, "snapshot")
@@ -108,7 +108,7 @@ test_that("run_fetch_shard stores the top contributor's commits and bot flag bes
 }
 .tc_parts <- function(commits, bot) {
   p <- tempfile("tc_parts_"); dir.create(p)
-  .tc_weekly$export_snapshot_shard(file.path(p, "vcs-signals-shard-0.db"), data.frame(
+  export_snapshot_shard(file.path(p, "vcs-signals-shard-0.db"), data.frame(
     repo_id = .tc_rid, commits_total = 500L, contributors_total = 10L,
     top_contributor_commits = commits, top_contributor_bot = bot, stringsAsFactors = FALSE))
   p

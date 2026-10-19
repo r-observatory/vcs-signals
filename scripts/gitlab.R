@@ -12,10 +12,52 @@ gl_token <- function(domain) {
   if (nzchar(v)) v else NA_character_
 }
 
+# Per-run token state: domains whose token was refused, domains already logged as accepted, and
+# the REST pacer whose budget a refusal lowers. The caller makes one per run.
+gl_run_state <- function(pacer = NULL, log = NULL) {
+  st <- new.env(parent = emptyenv())
+  st$dropped <- character(); st$accepted <- character(); st$pacer <- pacer; st$log <- log
+  st
+}
+
+# The anonymous hourly REST budget of a domain's host.
+.gl_rest_anon <- function(domain) {
+  key <- .gl_key(domain)
+  if (key %in% names(GITLAB_REST_HOURLY)) GITLAB_REST_HOURLY[[key]] else GITLAB_REST_HOURLY[["default"]]
+}
+
+# Sends with the domain's token unless this run dropped it. `send(token)` returns a result with
+# `status`. A 401 while the token is set drops it, lowers the REST budget and retries once without it.
+.gl_with_token <- function(domain, state, send) {
+  if (is.null(state)) state <- gl_run_state()
+  tok <- if (domain %in% state$dropped) NA_character_ else gl_token(domain)
+  r <- send(tok)
+  if (!.has_token(tok)) return(r)
+  if (identical(r$status, 401L)) {
+    state$dropped <- c(state$dropped, domain)
+    if (!is.null(state$pacer)) state$pacer$set_hourly_budget(.gl_key(domain), .gl_rest_anon(domain))
+    .gl_log(state$log, sprintf("gitlab %s: token refused (401), continuing without it", domain))
+    return(send(NA_character_))
+  }
+  if (!is.na(r$status) && r$status < 300L && !domain %in% state$accepted) {
+    state$accepted <- c(state$accepted, domain)
+    .gl_log(state$log, sprintf("gitlab %s: token accepted, REST budget %d per hour", domain, GITLAB_REST_HOURLY_TOKEN))
+  }
+  r
+}
+
 # The real io member: one POST to the domain's GraphQL endpoint.
-gl_graphql <- function(domain, query, variables = NULL, run = system2) {
-  http_graphql(paste0(gl_api_base(domain), "/api/graphql"), query, variables,
-               token = gl_token(domain), run = run, timeout = HTTP_TIMEOUT_GITLAB_S)
+gl_graphql <- function(domain, query, variables = NULL, run = system2, state = NULL) {
+  .gl_with_token(domain, state, function(tok)
+    http_graphql(paste0(gl_api_base(domain), "/api/graphql"), query, variables,
+                 token = tok, run = run, timeout = HTTP_TIMEOUT_GITLAB_S))
+}
+
+# The real io member: GET <base>/api/v4<path>, an http_request() result.
+gl_rest <- function(domain, path, run = system2, state = NULL) {
+  .gl_with_token(domain, state, function(tok)
+    http_request("GET", paste0(gl_api_base(domain), "/api/v4", path), run = run, timeout = HTTP_TIMEOUT_GITLAB_S,
+                 secret_headers = if (.has_token(tok)) paste("PRIVATE-TOKEN:", tok) else character()))
 }
 
 # The pacer's key: the API base's host, so two domains served by one server share its budget.
@@ -273,4 +315,119 @@ gl_collect_gauges <- function(io, repo_map, pacer, deadline = Inf,
   }
   list(snapshot = if (length(records)) do.call(rbind, records) else NULL, deferred = deferred,
        unresolvable = unique(unresolvable), unreached = unreached)
+}
+
+# ---- weekly: commit totals, contributors, licence ------------------------------
+# REST pacer: hourly budgets by host, 500 where a token is set. GraphQL uses gl_pacer().
+gl_rest_pacer <- function(now = function() as.numeric(Sys.time()), sleep = Sys.sleep) {
+  hourly <- GITLAB_REST_HOURLY
+  for (d in names(GITLAB_DOMAINS)) if (!is.na(gl_token(d))) hourly[[.gl_key(d)]] <- GITLAB_REST_HOURLY_TOKEN
+  host_pacer(min_interval = c(default = GITLAB_MIN_INTERVAL_S), hourly_budget = hourly,
+             breaker_after = GITLAB_BREAKER_AFTER, now = now, sleep = sleep)
+}
+
+.gl_commits_query <- sprintf("query($ids: [ID!]) {
+  projects(ids: $ids, first: %d) { nodes { id repository { commitCount } } }
+}", GITLAB_BATCH)
+
+.gl_commit_schema_error <- function(res)
+  any(vapply(Filter(is.list, .gl_at(res, "errors")), function(e)
+    grepl("commitCount", .gl_chr(.gl_at(e, "message")), fixed = TRUE), NA))
+
+#' Commit totals by repo_id for GitLab repos (node_id, repo_id, domain), 50 ids per GraphQL request.
+#' NA where a project is missing, empty, in a refused or failed batch, or its host rejects commitCount
+#' (that host is not asked again).
+gl_commit_counts <- function(io, repos, pacer) {
+  out <- data.frame(repo_id = repos$repo_id, commits_total = rep(NA_integer_, nrow(repos)), stringsAsFactors = FALSE)
+  for (d in unique(repos$domain)) {
+    rows <- which(repos$domain == d & !is.na(repos$node_id) & grepl(.GL_NODE_RE, repos$node_id))
+    key <- .gl_key(d)
+    for (b in unname(chunk(rows, GITLAB_BATCH))) {
+      if (!isTRUE(pacer$before(key))) break
+      res <- tryCatch(io$gl_graphql(d, .gl_commits_query, list(ids = as.list(.gl_gid(repos$node_id[b])))),
+                      error = function(e) list(error = conditionMessage(e)))
+      if (.gl_commit_schema_error(res)) { pacer$after(key, TRUE); break }
+      nodes <- .gl_nodes(res)
+      e <- .gl_at(res, "error")
+      pacer$after(key, is.list(res) && (is.null(e) || is.na(.gl_chr(e))) && !is.null(nodes))
+      if (is.null(nodes)) next
+      got <- vapply(nodes, function(n) .gl_int(.gl_at(n, "repository", "commitCount")), 1L)
+      ids <- vapply(nodes, function(n) .gl_chr(.gl_at(n, "id")), "")
+      hit <- match(.gl_gid(repos$node_id[b]), ids)
+      out$commits_total[b[!is.na(hit)]] <- got[hit[!is.na(hit)]]
+    }
+  }
+  out
+}
+
+# One paced REST GET. state is "stopped" (budget spent, or the host said 429 or ratelimit-remaining 0
+# earlier), "failed" or "ok". `last` is TRUE when this answer says no more requests this run: the host
+# is then closed for the run by setting its budget to 0. Neither case counts toward the breaker.
+.gl_rest_get <- function(io, pacer, domain, path) {
+  key <- .gl_key(domain)
+  if (!isTRUE(pacer$before(key))) return(list(state = "stopped"))
+  r <- tryCatch(io$gl_rest(domain, path), error = function(e) list(status = NA_integer_, error = conditionMessage(e)))
+  if (identical(r$status, 429L)) { pacer$set_hourly_budget(key, 0L); return(list(state = "stopped")) }
+  ok <- is.list(r) && is.na(.gl_chr(r$error)) && !is.na(r$status) && r$status < 300L
+  # A 403, 404 or 410 is an answer about the project: the host is fine, the values are NA.
+  gone <- is.list(r) && !is.na(r$status) && r$status %in% c(403L, 404L, 410L)
+  pacer$after(key, ok || gone)
+  if (!ok) return(list(state = "failed"))
+  last <- identical(unname(r$headers["ratelimit-remaining"]), "0")
+  if (last) pacer$set_hourly_budget(key, 0L)
+  list(state = "ok", res = r, last = last)
+}
+
+.gl_body <- function(r) tryCatch(jsonlite::fromJSON(r$body, simplifyVector = FALSE), error = function(e) NULL)
+
+#' Contributor count (x-total) and the top contributor's commits for one project, two REST GETs.
+#' No name or email is read from the rows. stopped is TRUE when the host's REST calls ended this run.
+#' answered is TRUE when every call it needed got an answer of any kind, a 403, 404, 410, 5xx or
+#' network error included (a failed first call needs no second); FALSE when the pacer refused a call
+#' or the host said 429 or ratelimit-remaining 0 before the calls were done.
+gl_contributors <- function(io, domain, project_id, pacer) {
+  out <- list(total = NA_integer_, top_commits = NA_integer_, stopped = FALSE, answered = FALSE)
+  base <- sprintf("/projects/%s/repository/contributors", format(project_id, scientific = FALSE, trim = TRUE))
+  a <- .gl_rest_get(io, pacer, domain, paste0(base, "?per_page=1"))
+  if (a$state == "stopped") { out$stopped <- TRUE; return(out) }
+  if (a$state == "failed") { out$answered <- TRUE; return(out) }
+  out$total <- suppressWarnings(as.integer(unname(a$res$headers["x-total"])))
+  if (a$last) { out$stopped <- TRUE; return(out) }
+  b <- .gl_rest_get(io, pacer, domain, paste0(base, "?order_by=commits&sort=desc&per_page=1"))
+  if (b$state == "stopped") { out$stopped <- TRUE; return(out) }
+  out$answered <- TRUE
+  if (b$state == "failed") return(out)
+  body <- .gl_body(b$res)
+  out$top_commits <- .gl_int(.gl_at(body, 1L, "commits"))
+  out$stopped <- b$last
+  out
+}
+
+#' The licence key of one project (license.key, NA when none), one REST GET. answered as for
+#' gl_contributors; read only for a 200, where a null licence is a reading of NA.
+gl_license <- function(io, domain, project_id, pacer) {
+  a <- .gl_rest_get(io, pacer, domain, sprintf("/projects/%s?license=true", format(project_id, scientific = FALSE, trim = TRUE)))
+  if (a$state == "stopped") return(list(key = NA_character_, stopped = TRUE, answered = FALSE, read = FALSE))
+  if (a$state == "failed") return(list(key = NA_character_, stopped = FALSE, answered = TRUE, read = FALSE))
+  body <- .gl_body(a$res)
+  # A 200 that is not a project object is no reading, so it cannot replace a known licence.
+  if (is.null(.gl_at(body, "id"))) return(list(key = NA_character_, stopped = a$last, answered = TRUE, read = FALSE))
+  list(key = .gl_chr(.gl_at(body, "license", "key")), stopped = a$last, answered = TRUE, read = TRUE)
+}
+
+# GitLab licence keys to the SPDX ids GitHub reports; any other key is NA.
+.GL_SPDX <- c(mit = "MIT", `apache-2.0` = "Apache-2.0", `gpl-2.0` = "GPL-2.0", `gpl-3.0` = "GPL-3.0",
+  `lgpl-2.1` = "LGPL-2.1", `lgpl-3.0` = "LGPL-3.0", `agpl-3.0` = "AGPL-3.0", `bsd-2-clause` = "BSD-2-Clause",
+  `bsd-3-clause` = "BSD-3-Clause", `mpl-2.0` = "MPL-2.0", `cc0-1.0` = "CC0-1.0", unlicense = "Unlicense",
+  `epl-2.0` = "EPL-2.0", isc = "ISC", `cc-by-4.0` = "CC-BY-4.0", `cc-by-sa-4.0` = "CC-BY-SA-4.0",
+  `afl-3.0` = "AFL-3.0", `artistic-2.0` = "Artistic-2.0", `bsd-3-clause-clear` = "BSD-3-Clause-Clear",
+  `bsl-1.0` = "BSL-1.0", `cecill-2.1` = "CECILL-2.1", `ecl-2.0` = "ECL-2.0", `epl-1.0` = "EPL-1.0",
+  `eupl-1.1` = "EUPL-1.1", `eupl-1.2` = "EUPL-1.2", `lppl-1.3c` = "LPPL-1.3c", `ms-pl` = "MS-PL",
+  `ms-rl` = "MS-RL", ncsa = "NCSA", `ofl-1.1` = "OFL-1.1", `osl-3.0` = "OSL-3.0", postgresql = "PostgreSQL",
+  `upl-1.0` = "UPL-1.0", vim = "Vim", wtfpl = "WTFPL", zlib = "Zlib")
+gl_license_spdx <- function(key) {
+  key <- as.character(key)
+  out <- unname(.GL_SPDX[key])
+  out[is.na(key)] <- NA_character_
+  out
 }

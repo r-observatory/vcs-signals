@@ -11,6 +11,8 @@
 #                three responsiveness medians (median_days_to_close_issue,
 #                median_days_to_close_pr, median_open_issue_age_days) -
 #                matrix job
+#   fetch-gitlab -> the GitLab roster's commit totals, contributors and
+#                licences, read in turn under each host's REST budget - one job
 #   merge     -> fold every shard's snapshot into the published series as a
 #                change-only weekly point dated today, rebuild the summary,
 #                and republish - one job
@@ -26,31 +28,10 @@ if (!exists("host_pacer"))     source("scripts/pacing.R")
 if (!exists("ensure_series_schema")) source("scripts/helpers.R")
 if (!exists("build_gauge_query"))    source("scripts/github.R")
 if (!exists("gl_collect_gauges"))    source("scripts/gitlab.R")
+if (!exists("run_fetch_gitlab"))     source("scripts/gitlab_weekly.R")
 if (!exists("gh_release_exists"))    source("scripts/update.R")  # default_io, gh_release_*, seed_working_db
 if (!exists("run_enumerate"))        source("scripts/backfill.R") # run_enumerate, write_roster, load_roster
 suppressPackageStartupMessages({ library(DBI); library(RSQLite) })
-
-SNAPSHOT_TABLE <- "snapshot"
-
-# ---- snapshot shard IO ------------------------------------------------------
-#' Write a shard's collected (repo_id, commits_total, contributors_total)
-#' rows to a fresh SQLite file. Either numeric column may be NA for a given
-#' repo (a fetch that failed or was skipped this run).
-export_snapshot_shard <- function(path, rows) {
-  if (file.exists(path)) unlink(path)
-  con <- DBI::dbConnect(RSQLite::SQLite(), path)
-  on.exit(DBI::dbDisconnect(con), add = TRUE)
-  DBI::dbExecute(con, "PRAGMA journal_mode=DELETE")
-  # A metric the rows do not carry is stored NA, as a fetch that failed would be.
-  for (m in setdiff(WEEKLY_METRICS, names(rows))) rows[[m]] <- rep(NA_integer_, nrow(rows))
-  cols <- paste(sprintf("%s INTEGER", WEEKLY_METRICS), collapse = ", ")
-  DBI::dbExecute(con, sprintf("CREATE TABLE %s (repo_id TEXT PRIMARY KEY, %s)", SNAPSHOT_TABLE, cols))
-  if (nrow(rows) > 0) {
-    DBI::dbWriteTable(con, SNAPSHOT_TABLE, rows[c("repo_id", WEEKLY_METRICS)], append = TRUE)
-  }
-  DBI::dbExecute(con, "VACUUM")
-  invisible(path)
-}
 
 # ---- fetch ------------------------------------------------------------------
 #' One contributors reply as list(count, top_commits, top_type). A bare count, the
@@ -148,6 +129,47 @@ run_fetch_shard <- function(io, out_dir, roster_path, i, N,
   shard_path
 }
 
+# ---- GitLab -----------------------------------------------------------------------
+# The roster fetch-gitlab reads. The pass itself is in gitlab_weekly.R.
+GITLAB_ROSTER_DB <- "vcs-signals-roster-gitlab.db"
+
+write_gitlab_roster <- function(path, roster_df) {
+  if (file.exists(path)) unlink(path)
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  DBI::dbExecute(con, "PRAGMA journal_mode=DELETE")
+  DBI::dbExecute(con, sprintf("CREATE TABLE %s (repo_id TEXT PRIMARY KEY, node_id TEXT NOT NULL,
+    domain TEXT NOT NULL, project_id INTEGER NOT NULL)", ROSTER_TABLE))
+  if (nrow(roster_df) > 0)
+    DBI::dbWriteTable(con, ROSTER_TABLE, roster_df[c("repo_id", "node_id", "domain", "project_id")], append = TRUE)
+  invisible(path)
+}
+
+#' The GitLab roster from the summary run_enumerate downloaded: every active GitLab repository with a
+#' node id, with the domain and project id that id carries.
+enumerate_gitlab <- function(summary_path, path) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), summary_path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  rows <- DBI::dbGetQuery(con, sprintf(
+    "SELECT repo_id, node_id FROM repos WHERE %s AND status = 'active' AND node_id IS NOT NULL ORDER BY repo_id",
+    host_predicate(GITLAB_HOSTS)))
+  rows <- rows[grepl(.GL_NODE_RE, rows$node_id), , drop = FALSE]
+  roster <- data.frame(repo_id = rows$repo_id, node_id = rows$node_id,
+                       domain = sub(.GL_NODE_RE, "\\1", rows$node_id),
+                       project_id = as.integer(sub("^.*:", "", rows$node_id)), stringsAsFactors = FALSE)
+  message(sprintf("enumerate: %d gitlab repos on %d hosts", nrow(roster), length(unique(roster$domain))))
+  write_gitlab_roster(path, roster)
+}
+
+#' weekly.yml's enumerate: the GitHub roster, then the GitLab one. A GitLab roster that cannot be
+#' written leaves fetch-gitlab without one and the GitHub shards untouched.
+run_weekly_enumerate <- function(io, out_dir) {
+  res <- run_enumerate(io, out_dir)
+  tryCatch(enumerate_gitlab(file.path(out_dir, "vcs-signals-summary.db"), file.path(out_dir, GITLAB_ROSTER_DB)),
+           error = function(e) message("enumerate: no gitlab roster: ", conditionMessage(e)))
+  invisible(res)
+}
+
 # ---- merge --------------------------------------------------------------------
 #' Fold every shard's snapshot of every WEEKLY_METRICS value into the published
 #' series as a change-only point dated today, rebuild the summary, and
@@ -160,7 +182,10 @@ run_fetch_shard <- function(io, out_dir, roster_path, i, N,
 #' so a daily metric (stars, forks, ...) already sitting in series_latest can
 #' never be clobbered or spuriously re-emitted by this pass; snapshot_long is
 #' likewise built from WEEKLY_METRICS alone. A repo unchanged since the last
-#' weekly run contributes no new signals_series row for that metric.
+#' weekly run contributes no new signals_series row for that metric. The GitLab
+#' shard's licence readings go into gitlab_license, which every summary build
+#' reads for GitLab rows. The GitLab cursor state in parts_dir, when
+#' fetch-gitlab supplied it, is uploaded after the publish.
 run_merge <- function(io, out_dir, parts_dir) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   working_path <- file.path(out_dir, "_weekly_working.db")
@@ -196,12 +221,22 @@ run_merge <- function(io, out_dir, parts_dir) {
                matrix(integer(0), nrow = 0, ncol = length(WEEKLY_METRICS)),
                stringsAsFactors = FALSE),
     c("repo_id", WEEKLY_METRICS))
-  snap_rows <- lapply(parts, function(p) {
+  read_part <- function(p) {
     pcon <- DBI::dbConnect(RSQLite::SQLite(), p)
     on.exit(DBI::dbDisconnect(pcon), add = TRUE)
-    if (!DBI::dbExistsTable(pcon, SNAPSHOT_TABLE)) return(empty_snapshot)
-    DBI::dbReadTable(pcon, SNAPSHOT_TABLE)
-  })
+    list(snapshot = if (DBI::dbExistsTable(pcon, SNAPSHOT_TABLE)) DBI::dbReadTable(pcon, SNAPSHOT_TABLE) else empty_snapshot,
+         license = if (DBI::dbExistsTable(pcon, "license")) DBI::dbReadTable(pcon, "license"))
+  }
+  # A fault in the GitLab shard skips that file, so the GitHub shards still merge and publish.
+  read_part_guarded <- function(p) {
+    if (basename(p) != GITLAB_SHARD_DB) return(read_part(p))
+    tryCatch(suppressWarnings(read_part(p)), error = function(e) {
+      message(sprintf("GitLab shard %s not read, skipped: %s", GITLAB_SHARD_DB, substr(conditionMessage(e), 1L, 200L)))
+      list(snapshot = empty_snapshot, license = NULL)
+    })
+  }
+  shard_reads <- lapply(parts, read_part_guarded)
+  snap_rows <- lapply(shard_reads, function(r) r$snapshot)
   snapshot <- if (length(snap_rows)) do.call(rbind, snap_rows) else empty_snapshot
   snapshot <- snapshot[!duplicated(snapshot$repo_id), , drop = FALSE]
 
@@ -243,15 +278,21 @@ run_merge <- function(io, out_dir, parts_dir) {
     DBI::dbExecute(con, "DELETE FROM series_latest WHERE metric = 'top_contributor_bot' AND repo_id = ?",
                    params = list(untyped))
 
+  # The GitLab job's licence readings. A repository it did not read keeps its stored licence.
+  readings <- lapply(shard_reads, function(r) r$license)
+  n_licences <- upsert_gitlab_license(con, do.call(rbind, readings))
+
   # Rebuild the summary so commits_total/contributors_total populate. No
   # repository is gauged this run, so every REPO_ATTR_COLS value is carried
-  # forward from the prior summary row, as run_update does for one it did not reach.
+  # forward from the prior summary row, as run_update does for one it did not reach,
+  # except a GitLab row's licence, which comes from gitlab_license.
   repos_all <- DBI::dbReadTable(con, "repos")
   rp_all <- DBI::dbReadTable(con, "repo_packages")
   series_all <- DBI::dbGetQuery(con, "SELECT repo_id, date, metric, value FROM signals_series")
   latest_all <- DBI::dbGetQuery(con, "SELECT repo_id, metric, value FROM series_latest")
   repo_attrs <- merge(repos_all[, c("repo_id", "first_seen", "last_seen")], prior_repo_attrs(con),
                       by = "repo_id", all.x = TRUE)
+  repo_attrs <- apply_gitlab_license(con, repo_attrs)
 
   ai_all <- if (DBI::dbExistsTable(con, "vcs_ai_signals")) DBI::dbReadTable(con, "vcs_ai_signals") else NULL
   go_live <- DBI::dbGetQuery(con, "SELECT value FROM pipeline_state WHERE key = 'go_live'")$value
@@ -264,11 +305,19 @@ run_merge <- function(io, out_dir, parts_dir) {
   if (nrow(summary_df) > 0) DBI::dbWriteTable(con, "vcs_signals_summary", summary_df, append = TRUE)
 
   touched_years <- unique(substr(mat$series_rows$date, 1, 4))
-  message(sprintf("weekly merge: %d shard partials, %d repos snapshotted, %d changed rows, %d year(s) touched",
-                  length(parts), nrow(snapshot), n_inserted, length(touched_years)))
+  message(sprintf("weekly merge: %d shard partials, %d repos snapshotted, %d changed rows, %d year(s) touched, %d GitLab licence(s) read",
+                  length(parts), nrow(snapshot), n_inserted, length(touched_years), n_licences))
 
-  invisible(publish(io, con, out_dir, tag = "current", source_kind = "live", touched_years = touched_years,
-                    base_generation = attr(seed, "generation")))
+  res <- publish(io, con, out_dir, tag = "current", source_kind = "live", touched_years = touched_years,
+                 base_generation = attr(seed, "generation"))
+  # The cursors go up only once the values read with them are published. A failed upload costs the
+  # next GitLab run a repeat of this run's repositories.
+  state <- file.path(parts_dir, GITLAB_STATE_DB)
+  if (file.exists(state))
+    tryCatch(io$upload(state), error = function(e)
+      message(sprintf("weekly merge: %s not uploaded, the next GitLab run starts from the previous cursors: %s",
+                      GITLAB_STATE_DB, conditionMessage(e))))
+  invisible(res)
 }
 
 # ---- CLI dispatch -----------------------------------------------------------------
@@ -276,16 +325,23 @@ run_merge <- function(io, out_dir, parts_dir) {
 # point CI does.
 main <- function(mode, out_dir, io = NULL) {
   token <- Sys.getenv("VCS_SIGNALS_TOKEN")
-  if (is.null(io)) io <- list(
-    graphql        = default_io(token)$graphql,
-    contributors   = function(owner, name) fetch_contributor_count(token, owner, name),
-    release_exists = function() gh_release_exists(RELEASE_REPO),
-    generation     = function() gh_release_generation(RELEASE_REPO),
-    download       = function(pattern, dir) gh_release_download(RELEASE_REPO, pattern, dir),
-    upload         = function(path) gh_release_upload(RELEASE_REPO, path))
+  # One GitLab REST pacer per run: the token state lowers its budget on a 401 and the rotation reads it.
+  gl_rest_p <- gl_rest_pacer()
+  if (is.null(io)) {
+    gl_state <- gl_run_state(pacer = gl_rest_p, log = message)
+    io <- list(
+      graphql        = default_io(token)$graphql,
+      contributors   = function(owner, name) fetch_contributor_count(token, owner, name),
+      gl_graphql     = function(domain, query, variables) gl_graphql(domain, query, variables, state = gl_state),
+      gl_rest        = function(domain, path) gl_rest(domain, path, state = gl_state),
+      release_exists = function() gh_release_exists(RELEASE_REPO),
+      generation     = function() gh_release_generation(RELEASE_REPO),
+      download       = function(pattern, dir) gh_release_download(RELEASE_REPO, pattern, dir),
+      upload         = function(path) gh_release_upload(RELEASE_REPO, path))
+  }
 
   if (mode == "enumerate") {
-    run_enumerate(io, out_dir)
+    run_weekly_enumerate(io, out_dir)
   } else if (mode == "fetch") {
     i <- suppressWarnings(as.integer(Sys.getenv("VCS_SHARD_I", "0")))
     N <- suppressWarnings(as.integer(Sys.getenv("VCS_SHARD_N", "1")))
@@ -293,13 +349,17 @@ main <- function(mode, out_dir, io = NULL) {
       stop("fetch: VCS_SHARD_I must be in [0, VCS_SHARD_N)")
     roster_dir <- Sys.getenv("VCS_ROSTER", out_dir)
     run_fetch_shard(io, out_dir, file.path(roster_dir, "vcs-signals-roster.db"), i, N)
+  } else if (mode == "fetch-gitlab") {
+    roster_dir <- Sys.getenv("VCS_ROSTER", out_dir)
+    run_fetch_gitlab(io, out_dir, file.path(roster_dir, GITLAB_ROSTER_DB), file.path(out_dir, GITLAB_STATE_DB),
+                     rest_pacer = gl_rest_p)
   } else if (mode == "merge") {
     # If another publisher replaced the release between this merge's seed and its
     # publish (the AI merge shares this Sunday cron), the merge waits for that
     # publisher to finish, seeds again from what it left, and rebuilds.
     retry_on_publish_conflict(io, function() run_merge(io, out_dir, Sys.getenv("VCS_PARTS", "parts")))
   } else {
-    stop("usage: weekly.R [enumerate|fetch|merge]")
+    stop("usage: weekly.R [enumerate|fetch|fetch-gitlab|merge]")
   }
 }
 

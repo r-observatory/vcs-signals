@@ -1063,6 +1063,7 @@ run_merge <- function(io, out_dir, parts_dir) {
   latest_all <- DBI::dbGetQuery(con, "SELECT repo_id, metric, value FROM series_latest")
   repo_attrs <- merge(repos_all[, c("repo_id", "first_seen", "last_seen")], prior_repo_attrs(con),
                       by = "repo_id", all.x = TRUE)
+  repo_attrs <- apply_gitlab_license(con, repo_attrs)
   summary_df <- build_signals_summary(latest_all, series_all, repo_attrs, rp_all, today,
                                       compute_release_facts = FALSE, ai_signals = reduced)
   DBI::dbExecute(con, "DELETE FROM vcs_signals_summary")
