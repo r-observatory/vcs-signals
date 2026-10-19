@@ -424,7 +424,10 @@ gl_license <- function(io, domain, project_id, pacer) {
   `bsl-1.0` = "BSL-1.0", `cecill-2.1` = "CECILL-2.1", `ecl-2.0` = "ECL-2.0", `epl-1.0` = "EPL-1.0",
   `eupl-1.1` = "EUPL-1.1", `eupl-1.2` = "EUPL-1.2", `lppl-1.3c` = "LPPL-1.3c", `ms-pl` = "MS-PL",
   `ms-rl` = "MS-RL", ncsa = "NCSA", `ofl-1.1` = "OFL-1.1", `osl-3.0` = "OSL-3.0", postgresql = "PostgreSQL",
-  `upl-1.0` = "UPL-1.0", vim = "Vim", wtfpl = "WTFPL", zlib = "Zlib")
+  `upl-1.0` = "UPL-1.0", vim = "Vim", wtfpl = "WTFPL", zlib = "Zlib",
+  # GitHub reports an or-later licence by its plain id.
+  `gpl-2.0+` = "GPL-2.0", `gpl-3.0+` = "GPL-3.0", `lgpl-2.1+` = "LGPL-2.1", `lgpl-3.0+` = "LGPL-3.0",
+  `agpl-3.0+` = "AGPL-3.0")
 gl_license_spdx <- function(key) {
   key <- as.character(key)
   out <- unname(.GL_SPDX[key])

@@ -164,6 +164,11 @@ test_that("more GitLab licence keys map to the SPDX spelling GitHub uses", {
   expect_identical(gl_license_spdx(c("cecill-b", "cecill-c")), rep(NA_character_, 2L))
 })
 
+test_that("GitLab's or-later keys map to the plain id, as GitHub reports them", {
+  keys <- c("gpl-2.0+", "gpl-3.0+", "lgpl-2.1+", "lgpl-3.0+", "agpl-3.0+")
+  expect_identical(gl_license_spdx(keys), c("GPL-2.0", "GPL-3.0", "LGPL-2.1", "LGPL-3.0", "AGPL-3.0"))
+})
+
 test_that("a read answer without a project id is not a licence reading", {
   for (body in list(list(message = "oops"), list(license = list(key = "mit")), list(), "text")) {
     io <- fake_rest_io(function(domain, path) gl_rest_answer(body = body))
