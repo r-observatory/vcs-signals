@@ -75,6 +75,11 @@ GITLAB_DOMAINS <- c(
   "forgemia.inra.fr" = "https://forge.inrae.fr"
 )
 GITLAB_HOSTS <- c("gitlab")
+# GitLab collection (scripts/gitlab.R), paced per domain through one gl_pacer() per run.
+GITLAB_BATCH          <- 50L  # projects per GraphQL request; projects(fullPaths:) takes at most 50
+GITLAB_MIN_INTERVAL_S <- 2    # seconds between two requests to one host
+GITLAB_MAX_REQUESTS   <- 30L  # GraphQL requests to one host per run, resolution and gauges together
+GITLAB_BREAKER_AFTER  <- 3L   # consecutive failures that defer a host for the rest of the run
 
 # Hosts we have an adapter for. This sets repos.supported and routes nothing.
 SUPPORTED_HOSTS <- c("github", "gitlab")
@@ -991,3 +996,5 @@ AI_WORK_PRIORITY <- c(onset = 1L, `account-count` = 2L, `window-hit` = 3L, `coun
 
 # Seconds before curl gives up on one request (the GitLab transport, scripts/http.R).
 HTTP_TIMEOUT_S <- 20
+# GitLab gets longer: git.nomics.world took 19.7 s for one project.
+HTTP_TIMEOUT_GITLAB_S <- 30

@@ -1,15 +1,16 @@
-# scripts/pacing.R - per-host request pacing: a minimum interval, an hourly budget and a failure breaker.
+# scripts/pacing.R - per-host request pacing: a minimum interval, hourly and run budgets and a failure breaker.
 
 # One pacer per run. State is per host, so one host never blocks another.
 # Settings are named vectors; a host without its own entry uses `default`.
+# run_budget caps a host's requests over the pacer's life, so over the run.
 host_pacer <- function(min_interval = c(default = 1), hourly_budget = c(default = Inf),
                        breaker_after = 5L, now = function() as.numeric(Sys.time()),
-                       sleep = Sys.sleep) {
+                       sleep = Sys.sleep, run_budget = c(default = Inf)) {
   state <- new.env(parent = emptyenv())
   setting <- function(x, host) if (host %in% names(x)) x[[host]] else x[["default"]]
   get_host <- function(host) {
     if (is.null(state[[host]]))
-      state[[host]] <- list(last = -Inf, hour = NA_real_, count = 0L, fails = 0L, deferred = FALSE)
+      state[[host]] <- list(last = -Inf, hour = NA_real_, count = 0L, total = 0L, fails = 0L, deferred = FALSE)
     state[[host]]
   }
   # The budget counts requests in the current UTC clock hour.
@@ -20,9 +21,11 @@ host_pacer <- function(min_interval = c(default = 1), hourly_budget = c(default 
     h <- get_host(host)
     if (h$deferred) return(FALSE)
     if (spent_in_hour(h) >= setting(hourly_budget, host)) return(FALSE)
+    if (h$total >= setting(run_budget, host)) return(FALSE)
     wait <- h$last + setting(min_interval, host) - now()
     if (wait > 0) sleep(wait)
     h$count <- spent_in_hour(h) + 1L
+    h$total <- h$total + 1L
     h$hour <- hour_now()
     h$last <- now()
     state[[host]] <- h

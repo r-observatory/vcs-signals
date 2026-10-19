@@ -74,3 +74,14 @@ test_that("deferred hosts are sorted and stay deferred across hours", {
   f$clock$t <- f$clock$t + 7200
   expect_false(f$p$before("m"))
 })
+
+test_that("the run budget counts a host's requests over the pacer's life, not per clock hour", {
+  f <- fake_pacer(min_interval = c(default = 0), run_budget = c(default = Inf, a = 2))
+  expect_true(f$p$before("a"))
+  f$clock$t <- f$clock$t + 7200
+  expect_true(f$p$before("a"))
+  f$clock$t <- f$clock$t + 7200
+  expect_false(f$p$before("a"))
+  expect_equal(f$p$spent("a"), 0)
+  for (i in 1:3) expect_true(f$p$before("b"))
+})

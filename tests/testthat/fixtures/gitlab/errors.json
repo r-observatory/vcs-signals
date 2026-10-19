@@ -1,0 +1,1 @@
+{"errors":[{"message":"Field 'issueStatusCounts' doesn't exist on type 'Project'","locations":[{"line":12,"column":7}],"path":["query","projects","nodes","issueStatusCounts"],"extensions":{"code":"undefinedField","typeName":"Project","fieldName":"issueStatusCounts"}}]}

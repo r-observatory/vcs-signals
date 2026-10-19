@@ -21,6 +21,7 @@ if (!exists("http_request"))   source("scripts/http.R")
 if (!exists("host_pacer"))     source("scripts/pacing.R")
 if (!exists("ensure_series_schema")) source("scripts/helpers.R")
 if (!exists("build_tree_query"))     source("scripts/github.R")
+if (!exists("gl_collect_gauges"))    source("scripts/gitlab.R")
 if (!exists("gh_release_exists"))    source("scripts/update.R")   # default_io, gh_release_*, seed_working_db
 if (!exists("build_ai_detail"))      source("scripts/ai_signals.R")
 if (!exists("url_points_into"))      source("scripts/dev_tooling.R")

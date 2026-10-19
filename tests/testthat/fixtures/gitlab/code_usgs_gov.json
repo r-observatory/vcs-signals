@@ -1,0 +1,10 @@
+{"data":{"queryComplexity":{"score":93,"limit":200},
+ "projects":{"count":1,"pageInfo":{"hasNextPage":false},"nodes":[
+  {"id":"gid://gitlab/Project/4520","fullPath":"inl/inlpubs","nameWithNamespace":"INLPO / inlpubs","group":{"fullPath":"inl"},
+   "starCount":0,"forksCount":2,"archived":false,"isForked":false,"forkedFrom":null,"topics":[],
+   "createdAt":"2020-09-29T16:55:08Z","lastActivityAt":"2026-08-27T17:11:41Z",
+   "issuesEnabled":true,"mergeRequestsEnabled":true,
+   "openIssuesCount":0,"openMergeRequestsCount":0,
+   "issueStatusCounts":{"closed":4},"mrClosed":{"count":3},"mrMerged":{"count":106},
+   "releases":{"count":10,"nodes":[{"tagName":"v1.4.0","releasedAt":"2026-07-06T23:20:08Z"}]},
+   "repository":{"rootRef":"main","empty":false,"commitCount":689,"tree":{"lastCommit":{"committedDate":"2026-07-06T22:14:50+00:00"}}}}]}}}

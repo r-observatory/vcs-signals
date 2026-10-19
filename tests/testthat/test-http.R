@@ -154,3 +154,11 @@ test_that("an empty or missing token sends no token header", {
     }
   }
 })
+
+test_that("http_graphql passes its timeout to curl, HTTP_TIMEOUT_S by default", {
+  seen <- new.env()
+  http_graphql("https://x", "q", run = .fake_curl(200L, body = "{}", seen = seen))
+  expect_equal(seen$args[match("--max-time", seen$args) + 1L], as.character(HTTP_TIMEOUT_S))
+  http_graphql("https://x", "q", timeout = 30, run = .fake_curl(200L, body = "{}", seen = seen))
+  expect_equal(seen$args[match("--max-time", seen$args) + 1L], "30")
+})

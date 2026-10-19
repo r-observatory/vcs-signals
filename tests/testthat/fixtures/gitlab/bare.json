@@ -1,0 +1,10 @@
+{"data":{"queryComplexity":{"score":93,"limit":200},
+ "projects":{"count":1,"pageInfo":{"hasNextPage":false},"nodes":[
+  {"id":"gid://gitlab/Project/31477","fullPath":"example/empty-pkg","nameWithNamespace":"example / empty-pkg","group":{"fullPath":"example"},
+   "starCount":1,"forksCount":0,"archived":false,"isForked":false,"forkedFrom":null,"topics":[],
+   "createdAt":"2021-02-15T10:21:37+01:00","lastActivityAt":"2021-02-15T10:21:37+01:00",
+   "issuesEnabled":true,"mergeRequestsEnabled":true,
+   "openIssuesCount":0,"openMergeRequestsCount":0,
+   "issueStatusCounts":null,"mrClosed":{"count":0},"mrMerged":{"count":0},
+   "releases":{"count":0,"nodes":[]},
+   "repository":{"rootRef":null,"empty":true,"commitCount":0,"tree":null}}]}}}
