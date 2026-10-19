@@ -1,4 +1,5 @@
 test_that("every publishing path reproduces the golden record", {
+  skip_golden_parity()
   for (p in golden_paths()) {
     got <- golden_snapshot_text(golden_run(p))
     dir <- file.path("fixtures", "golden", p)
@@ -9,6 +10,7 @@ test_that("every publishing path reproduces the golden record", {
 })
 
 test_that("the harness notices a changed published value", {
+  skip_golden_parity()
   run <- golden_run("daily")
   k <- grep("series_latest$", names(run$tables), value = TRUE)[1]
   run$tables[[k]]$value[1] <- run$tables[[k]]$value[1] + 1
@@ -18,6 +20,7 @@ test_that("the harness notices a changed published value", {
 })
 
 test_that("each path publishes its own tables", {
+  skip_golden_parity()
   expect_true(any(grepl("vcs_signals_summary", names(golden_run("daily")$tables))))
   expect_true(any(grepl("vcs_ai_signals", names(golden_run("ai")$tables))))
   expect_true(any(grepl("series_latest", names(golden_run("weekly")$tables))))

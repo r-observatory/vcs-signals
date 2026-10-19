@@ -11,6 +11,12 @@ GOLDEN_SHARDS <- 2L
 
 golden_paths <- function() c("daily", "weekly", "ai", "backfill")
 
+# The publishing workflows set VCS_SKIP_GOLDEN_PARITY=1: a scheduled run changes no code, so a
+# difference there could only come from a package release, which must not stop the day's data.
+skip_golden_parity <- function()
+  testthat::skip_if(identical(Sys.getenv("VCS_SKIP_GOLDEN_PARITY"), "1"),
+                    "VCS_SKIP_GOLDEN_PARITY is 1 (a publishing run, which changes no code)")
+
 # ---- the roster -------------------------------------------------------------
 # One acquisition. linelist is listed twice, on GitHub for CRAN and on a nested GitLab group for
 # Bioc. cfr arrives on the recorded day, so that day's run resolves one repository.
