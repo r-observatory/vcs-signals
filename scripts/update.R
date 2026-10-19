@@ -12,6 +12,7 @@
 # these paths are always repo-root-relative.
 source("scripts/config.R")
 source("scripts/hosts.R")
+source("scripts/http.R")
 source("scripts/helpers.R")
 source("scripts/github.R")
 if (!exists("build_ai_rollups")) source("scripts/ai_signals.R")

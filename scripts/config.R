@@ -957,3 +957,6 @@ AI_DEEP_BUDGET_S <- 3.25 * 3600
 # The order the search pass works through each week, most urgent first.
 AI_WORK_PRIORITY <- c(onset = 1L, `account-count` = 2L, `window-hit` = 3L, `count-refresh` = 4L,
                       `re-ask` = 5L, campaign = 6L, `rule-new` = 7L, `never-asked` = 8L)
+
+# Seconds before curl gives up on one request (the GitLab transport, scripts/http.R).
+HTTP_TIMEOUT_S <- 20
