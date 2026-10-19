@@ -3,8 +3,8 @@
 # run_update(io, out_dir, opts) drives five ordered stages behind an injected
 # io: (1) resolve, (2) node-id resolution + lifecycle, (3) forward gauge
 # collection, (4) series/summary materialization + go-live watermark, (5)
-# publish. main() builds the real io (network acquisition, GitHub GraphQL,
-# gh-release download/upload) and calls run_update(); the hermetic test
+# publish. main() builds the real io (network acquisition, GitHub and GitLab
+# GraphQL, gh-release download/upload) and calls run_update(); the hermetic test
 # drives run_update() directly with a fake io, so no live network runs in CI.
 #
 # Sourced from tests/testthat/helper-setup.R (with cwd temporarily chdir'd to
@@ -178,7 +178,8 @@ seed_working_db <- function(io, out_dir, working_path) {
 #'
 #' io must expose: acquire() -> data.frame(package, origin, url_raw,
 #' bugreports_raw); graphql(query) -> parsed GraphQL response (list, with
-#' $data/$errors, or throws on transport error); release_exists() ->
+#' $data/$errors, or throws on transport error); gl_graphql(domain, query,
+#' variables) -> an http_graphql() result from that GitLab host; release_exists() ->
 #' logical; generation() -> the release generation string (see
 #' gh_release_generation); download(pattern, dir) -> logical; upload(path) ->
 #' invisible.
@@ -229,39 +230,55 @@ run_update <- function(io, out_dir, opts = list()) {
   write_repo_tables(con, idx$repos, idx$repo_packages, today_s, links_backfill = links_backfill)
   print_coverage(input, resolved, idx)
 
-  # ---- Rate-limit preflight (I3): below-reserve skips resolve + collection
-  # + materialization entirely, publishing a clean heartbeat instead of
-  # spending down points on a run that cannot safely complete. -------------
+  # ---- Rate-limit preflight (I3): a GitHub budget below the reserve skips
+  # GitHub's resolve and collection rather than spend down points on a run
+  # that cannot safely complete. GitLab, paced on its own, still runs; if
+  # nothing at all is collected, stage 4 publishes a clean heartbeat. --------
   rl <- graphql_rate_remaining(io)
-  if (rl < POINT_RESERVE) {
+  github_ok <- rl >= POINT_RESERVE
+  if (!github_ok)
     message(sprintf(
-      "graphql rate remaining (%s) below reserve (%d); skipping node-id resolution and collection this run",
+      "graphql rate remaining (%s) below reserve (%d); skipping GitHub node-id resolution and collection this run",
       rl, POINT_RESERVE))
-    return(invisible(publish(io, con, out_dir, tag, source_kind = "live",
-                              force_full = force_full, touched_years = character(0),
-                              base_generation = attr(seed, "generation"))))
-  }
+  # One GitLab pacer for stages 2 and 3, so its per-host request cap covers the run.
+  gl_pace <- gl_pacer(now = now, sleep = if (is.function(io$sleep)) io$sleep else Sys.sleep)
+  gl_log <- function(m) cat("gitlab:", m, "\n")
 
   # ---- Stage 2: node-id resolution + lifecycle (rename, gone) ------------
-  needing <- DBI::dbGetQuery(con,
-    sprintf("SELECT repo_id, owner, name FROM repos WHERE %s AND node_id IS NULL AND status = 'active'",
-            host_predicate(GITHUB_HOSTS)))
-  resolved_ids <- resolve_node_ids(io, needing)
-  update_repo_node_ids(con, resolved_ids)
-  n_id_resolved <- sum(resolved_ids$status == "active")
-  n_id_gone <- sum(resolved_ids$status == "gone")
-  n_id_deferred <- nrow(needing) - nrow(resolved_ids)
-  cat(sprintf("node ids: %d resolved, %d deferred, %d gone\n", n_id_resolved, n_id_deferred, n_id_gone))
+  if (github_ok) {
+    needing <- DBI::dbGetQuery(con,
+      sprintf("SELECT repo_id, owner, name FROM repos WHERE %s AND node_id IS NULL AND status = 'active'",
+              host_predicate(GITHUB_HOSTS)))
+    resolved_ids <- resolve_node_ids(io, needing)
+    update_repo_node_ids(con, resolved_ids)
+    n_id_resolved <- sum(resolved_ids$status == "active")
+    n_id_gone <- sum(resolved_ids$status == "gone")
+    n_id_deferred <- nrow(needing) - nrow(resolved_ids)
+    cat(sprintf("node ids: %d resolved, %d deferred, %d gone\n", n_id_resolved, n_id_deferred, n_id_gone))
+  }
+  # A GitLab path that does not resolve is never gone: path lookup does not follow renames,
+  # so it stays without an id and is asked again next run.
+  gl_needing <- DBI::dbGetQuery(con,
+    sprintf("SELECT repo_id, owner, name FROM repos WHERE %s AND node_id IS NULL AND status = 'active'
+      ORDER BY repo_id", host_predicate(GITLAB_HOSTS)))
+  gl_needing$domain <- sub("/.*$", "", gl_needing$repo_id)
+  gl_needing$path <- sub("^[^/]+/", "", gl_needing$repo_id)
+  gl_ids <- gl_resolve(io, gl_needing, gl_pace, log = gl_log)
+  update_repo_node_ids(con, gl_ids)
+  cat(sprintf("gitlab ids: %d resolved, %d not found or not asked\n", nrow(gl_ids), nrow(gl_needing) - nrow(gl_ids)))
 
-  # ---- Stage 3: forward gauge collection over active github repos -------
+  # ---- Stage 3: forward gauge collection over active GitHub and GitLab repos
+  # The GitHub map is read even when GitHub is skipped, so its repos count as
+  # not collected rather than gone from the owner table.
   repo_map <- DBI::dbGetQuery(con,
     sprintf("SELECT node_id, repo_id FROM repos WHERE %s AND status = 'active' AND node_id IS NOT NULL
       ORDER BY repo_id", host_predicate(GITHUB_HOSTS)))
   # A repo the deadline leaves out keeps its last values, as a deferred one does.
-  gauges <- collect_gauges(io, rotate_by_day(repo_map$node_id, today),
-                           deadline = started + 60 * deadline_min, now = now,
-                           log = function(m) cat("gauges:", m, "\n"))
-  snapshot_long <- gauges_to_long(gauges$snapshot, repo_map)
+  gauges <- list(snapshot = NULL, deferred = character(0), unresolvable = character(0), unreached = character(0))
+  if (github_ok)
+    gauges <- collect_gauges(io, rotate_by_day(repo_map$node_id, today),
+                             deadline = started + 60 * deadline_min, now = now,
+                             log = function(m) cat("gauges:", m, "\n"))
   n_gauges_collected <- if (!is.null(gauges$snapshot)) nrow(gauges$snapshot) else 0L
   cat(sprintf("gauges: collected %d repos, %d deferred\n", n_gauges_collected, length(gauges$deferred)))
   dead <- repoint_dead_node_ids(con, io, gauges$unresolvable, nrow(repo_map))
@@ -269,6 +286,23 @@ run_update <- function(io, out_dir, opts = list()) {
                dead$dead, dead$repointed,
                if (dead$skipped) " (over the cap, none looked up)" else "",
                length(gauges$unreached), format(deadline_min)))
+
+  # GitLab after GitHub, on the same deadline. A project left out of a clean answer is logged
+  # and keeps its id and values: it never goes to repoint_dead_node_ids, which asks GitHub.
+  gl_map <- DBI::dbGetQuery(con,
+    sprintf("SELECT node_id, repo_id FROM repos WHERE %s AND status = 'active' AND node_id IS NOT NULL
+      ORDER BY repo_id", host_predicate(GITLAB_HOSTS)))
+  gl <- gl_collect_gauges(io, gl_map, gl_pace, deadline = started + 60 * deadline_min, now = now, log = gl_log)
+  step(sprintf("gitlab gauges: collected %d repos, %d deferred, %d not in GitLab's answer, %d not reached",
+               if (is.null(gl$snapshot)) 0L else nrow(gl$snapshot), length(gl$deferred),
+               length(gl$unresolvable), length(gl$unreached)))
+  if (!is.null(gl$snapshot))
+    gauges$snapshot <- rbind(gauges$snapshot,
+                             gl$snapshot[, setdiff(names(gl$snapshot), c("full_path", "gl_id")), drop = FALSE])
+  gauges$deferred <- c(gauges$deferred, gl$deferred)
+  gauges$unreached <- c(gauges$unreached, gl$unreached)
+  repo_map <- rbind(repo_map, gl_map)
+  snapshot_long <- gauges_to_long(gauges$snapshot, repo_map)
   cut <- gauge_cut_verdict(length(gauges$unreached), nrow(repo_map))
   if (length(cut$lines)) cat(cut$lines, sep = "\n")
 
@@ -518,6 +552,7 @@ main <- function(out_dir, io = NULL) {
   if (is.null(io)) io <- list(
     acquire = function() rbind(acquire_cran(), acquire_bioc()),
     graphql = default_io(token)$graphql,
+    gl_graphql = gl_graphql,
     release_exists = function() gh_release_exists(RELEASE_REPO),
     generation = function() gh_release_generation(RELEASE_REPO),
     download = function(pattern, dir) gh_release_download(RELEASE_REPO, pattern, dir),

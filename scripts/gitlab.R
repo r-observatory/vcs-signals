@@ -18,6 +18,9 @@ gl_graphql <- function(domain, query, variables = NULL, run = system2) {
                token = gl_token(domain), run = run, timeout = HTTP_TIMEOUT_GITLAB_S)
 }
 
+# The pacer's key: the API base's host, so two domains served by one server share its budget.
+.gl_key <- function(domain) sub("^[a-z]+://([^/:]+).*$", "\\1", gl_api_base(domain))
+
 # One pacer per run, passed to both gl_resolve and gl_collect_gauges so the request cap covers both.
 gl_pacer <- function(now = function() as.numeric(Sys.time()), sleep = Sys.sleep) {
   host_pacer(min_interval = c(default = GITLAB_MIN_INTERVAL_S), run_budget = c(default = GITLAB_MAX_REQUESTS),
@@ -42,7 +45,7 @@ gl_projects_query <- function(by = c("paths", "ids")) {
       issueStatusCounts { closed }
       mrClosed: mergeRequests(state: closed) { count }
       mrMerged: mergeRequests(state: merged) { count }
-      releases(first: 1, sort: RELEASED_AT_DESC) { count nodes { tagName releasedAt } }
+      releases(first: 5, sort: RELEASED_AT_DESC) { count nodes { tagName releasedAt upcomingRelease } }
       repository { rootRef empty commitCount tree { lastCommit { committedDate } } }
     }
   }
@@ -76,19 +79,31 @@ gl_projects_query <- function(by = c("paths", "ids")) {
   if (is.na(t)) NA_character_ else format(t, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
 }
 
+# The newest release that is out. GitLab sorts upcoming (future-dated) releases first, and
+# GitHub's latestRelease is never one, so they are skipped; NULL when every one is upcoming.
+.gl_released <- function(nodes, now) {
+  for (r in if (is.list(nodes)) nodes) {
+    if (isTRUE(.gl_at(r, "upcomingRelease"))) next
+    at <- .gl_utc(.gl_at(r, "releasedAt"))
+    if (!is.na(at) && as.numeric(as.POSIXct(at, tz = "UTC", format = "%Y-%m-%dT%H:%M:%SZ")) > now) next
+    return(r)
+  }
+  NULL
+}
+
 .gl_nodes <- function(resp) {
   nodes <- .gl_at(resp, "data", "projects", "nodes")
   if (is.list(nodes)) nodes else NULL
 }
 
-.gl_row <- function(n, domain) {
+.gl_row <- function(n, domain, now) {
   gid <- .gl_chr(.gl_at(n, "id"))
   if (is.na(gid) || !grepl("^gid://gitlab/Project/[0-9]+$", gid)) return(NULL)
   # A disabled feature is unknown, not zero.
   issues <- !isFALSE(.gl_at(n, "issuesEnabled"))
   mrs <- !isFALSE(.gl_at(n, "mergeRequestsEnabled"))
   topics <- .gl_at(n, "topics")
-  release <- .gl_at(n, "releases", "nodes", 1L)
+  release <- .gl_released(.gl_at(n, "releases", "nodes"), now)
   data.frame(
     node_id = paste0("gitlab:", domain, ":", sub("^.*/", "", gid)),
     name_with_owner = .gl_chr(.gl_at(n, "fullPath")),
@@ -118,8 +133,9 @@ gl_projects_query <- function(by = c("paths", "ids")) {
 }
 
 # The gauge frame of an answer, plus full_path and gl_id (the GraphQL global id) for matching.
-gl_parse_projects <- function(resp, domain) {
-  rows <- Filter(Negate(is.null), lapply(.gl_nodes(resp), .gl_row, domain = domain))
+# `now` (seconds) is the run's time: a release dated after it is upcoming.
+gl_parse_projects <- function(resp, domain, now = as.numeric(Sys.time())) {
+  rows <- Filter(Negate(is.null), lapply(.gl_nodes(resp), .gl_row, domain = domain, now = now))
   if (length(rows)) return(do.call(rbind, rows))
   df <- rows_df_empty_gauges()
   df$full_path <- character()
@@ -136,25 +152,27 @@ gl_parse_projects <- function(resp, domain) {
   if (is.na(e)) "no projects in the answer" else substr(e, 1L, 200L)
 }
 
-# One request for one batch. state is "refused" when the pacer says no, "failed", or "ok" with
-# the parsed rows; clean is FALSE when an answer with data also carried errors.
-.gl_ask <- function(io, pacer, domain, by, keys, log) {
-  if (!isTRUE(pacer$before(domain))) return(list(state = "refused"))
+# One request for one batch, paced by the domain's server. state is "refused" when the pacer
+# says no, "failed", or "ok" with the parsed rows; clean is FALSE when an answer with data also
+# carried errors.
+.gl_ask <- function(io, pacer, domain, by, keys, log, now = as.numeric(Sys.time())) {
+  key <- .gl_key(domain)
+  if (!isTRUE(pacer$before(key))) return(list(state = "refused"))
   res <- tryCatch(io$gl_graphql(domain, gl_projects_query(by), list(keys = as.list(unname(keys)))),
                   error = function(e) list(error = conditionMessage(e)))
   e <- .gl_at(res, "error")
   ok <- is.list(res) && (is.null(e) || is.na(.gl_chr(e))) && !is.null(.gl_nodes(res))
-  pacer$after(domain, ok)
+  pacer$after(key, ok)
   if (!ok) {
     .gl_log(log, sprintf("GitLab %s: %d %s not read: %s", domain, length(keys),
                          if (by == "paths") "paths" else "projects", .gl_why(res)))
     return(list(state = "failed"))
   }
-  list(state = "ok", rows = gl_parse_projects(res, domain), clean = !length(.gl_at(res, "errors")))
+  list(state = "ok", rows = gl_parse_projects(res, domain, now), clean = !length(.gl_at(res, "errors")))
 }
 
 .gl_stop_note <- function(pacer, domain, left) {
-  why <- if (domain %in% pacer$deferred()) "deferred after repeated failures" else "out of requests for this run"
+  why <- if (.gl_key(domain) %in% pacer$deferred()) "deferred after repeated failures" else "out of requests for this run"
   sprintf("GitLab %s: %s, %d left for the next run", domain, why, left)
 }
 
@@ -195,24 +213,34 @@ gl_resolve <- function(io, repos, pacer, log = NULL) {
 
 # ---- daily gauges --------------------------------------------------------------
 .gl_gid <- function(node_ids) paste0("gid://gitlab/Project/", sub("^.*:", "", node_ids))
+.GL_NODE_RE <- "^gitlab:([^:]+):[0-9]+$"
 
 #' Daily gauges for resolved GitLab projects, `GITLAB_BATCH` ids per request, grouped by domain.
-#' `repo_map` has node_id, repo_id and domain. Returns collect_gauges' list: `snapshot` (the gauge
-#' frame plus full_path and gl_id, or NULL), `deferred` (a failed batch, or a host the pacer stopped),
-#' `unresolvable` (asked and left out of a clean answer) and `unreached` (not asked by `deadline`).
+#' `repo_map` has node_id and repo_id; each project's domain is read from its node id. Returns
+#' collect_gauges' list: `snapshot` (the gauge frame plus full_path and gl_id, or NULL), `deferred`
+#' (a failed batch, a host the pacer stopped, or an id that is not a GitLab node id), `unresolvable`
+#' (asked and left out of a clean answer) and `unreached` (not asked by `deadline`).
 gl_collect_gauges <- function(io, repo_map, pacer, deadline = Inf,
                               now = function() as.numeric(Sys.time()), log = NULL) {
   records <- list(); deferred <- character(0); unresolvable <- character(0); unreached <- character(0)
+  ids_all <- unique(repo_map$node_id)
+  odd <- ids_all[is.na(ids_all) | !grepl(.GL_NODE_RE, ids_all)]
+  if (length(odd)) {
+    .gl_log(log, sprintf("GitLab: %d ids are not GitLab node ids and were not asked", length(odd)))
+    deferred <- odd
+  }
+  ids_all <- setdiff(ids_all, odd)
+  dom <- sub(.GL_NODE_RE, "\\1", ids_all)
   batches <- list()
-  for (d in unique(repo_map$domain))
-    for (b in unname(chunk(unique(repo_map$node_id[repo_map$domain == d]), GITLAB_BATCH)))
+  for (d in unique(dom))
+    for (b in unname(chunk(ids_all[dom == d], GITLAB_BATCH)))
       batches[[length(batches) + 1L]] <- list(domain = d, ids = b)
   stopped <- character(0)
   for (i in seq_along(batches)) {
     d <- batches[[i]]$domain; ids <- batches[[i]]$ids
     if (d %in% stopped) { deferred <- c(deferred, ids); next }
     if (now() >= deadline) { unreached <- c(unreached, ids); next }
-    a <- .gl_ask(io, pacer, d, "ids", .gl_gid(ids), log)
+    a <- .gl_ask(io, pacer, d, "ids", .gl_gid(ids), log, now())
     if (a$state == "refused") {
       stopped <- c(stopped, d)
       left <- unlist(lapply(batches[i:length(batches)], function(x) if (x$domain == d) x$ids))

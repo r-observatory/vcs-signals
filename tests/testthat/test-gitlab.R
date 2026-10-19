@@ -69,7 +69,7 @@ test_that("the query asks by path or by id, 50 at a time, with the feature flags
               "issuesEnabled", "mergeRequestsEnabled", "openIssuesCount", "openMergeRequestsCount",
               "issueStatusCounts { closed }", "mrClosed: mergeRequests(state: closed) { count }",
               "mrMerged: mergeRequests(state: merged) { count }",
-              "releases(first: 1, sort: RELEASED_AT_DESC) { count nodes { tagName releasedAt } }",
+              "releases(first: 5, sort: RELEASED_AT_DESC) { count nodes { tagName releasedAt upcomingRelease } }",
               "tree { lastCommit { committedDate } }"))
     expect_match(qp, f, fixed = TRUE, info = f)
   expect_identical(gl_projects_query(), qp)
@@ -412,4 +412,96 @@ test_that("nothing to collect or resolve asks nothing", {
                              unreached = character(0)))
   expect_equal(nrow(gl_resolve(io, gl_repos(character(0)), fake_gl_pacer()$p)), 0L)
   expect_length(seen$calls, 0L)
+})
+
+test_that("forgemia.inra.fr and forge.inrae.fr are one server, so they share one interval and one budget", {
+  f <- fake_gl_pacer()
+  seen <- new.env()
+  io <- fake_gl_io(list(forgemia.inra.fr = gl_synthetic(1), forge.inrae.fr = gl_synthetic(1, 2L)), seen, clock = f$clock)
+  got <- gl_collect_gauges(io, gl_map(c("gitlab:forgemia.inra.fr:1", "gitlab:forge.inrae.fr:2")), f$p,
+                           now = function() f$clock$t)
+  expect_equal(nrow(got$snapshot), 2L)
+  # The io is still asked by the URL's domain; only the pacing is shared.
+  expect_identical(vapply(seen$calls, function(x) x$domain, ""), c("forgemia.inra.fr", "forge.inrae.fr"))
+  expect_equal(vapply(seen$calls, function(x) x$at, 0) - 3600 * 100, c(0, 2))
+  expect_equal(f$p$spent("forge.inrae.fr"), 2L)
+  expect_equal(f$p$spent("forgemia.inra.fr"), 0L)
+})
+
+test_that("failures on forgemia.inra.fr defer forge.inrae.fr too", {
+  f <- fake_gl_pacer()
+  seen <- new.env(); logged <- new.env(); logged$lines <- character()
+  slow <- list(data = NULL, errors = NULL, status = NA_integer_, error = "curl timed out (exit 28)")
+  io <- fake_gl_io(list(forge.inrae.fr = gl_synthetic(1, 7L)), seen,
+                   answer = function(domain, variables) if (domain == "forgemia.inra.fr") slow)
+  bad <- sprintf("gitlab:forgemia.inra.fr:%d", 101:250)
+  got <- gl_collect_gauges(io, gl_map(c(bad, "gitlab:forge.inrae.fr:7")), f$p, now = function() f$clock$t,
+                           log = function(m) logged$lines <- c(logged$lines, m))
+  expect_length(seen$calls, 3L)
+  expect_identical(f$p$deferred(), "forge.inrae.fr")
+  expect_identical(got$deferred, c(bad, "gitlab:forge.inrae.fr:7"))
+  expect_null(got$snapshot)
+  expect_true(any(grepl("forge.inrae.fr: deferred after repeated failures, 1 left", logged$lines, fixed = TRUE)))
+  expect_equal(nrow(gl_resolve(io, gl_repos("forge.inrae.fr/g/p7"), f$p)), 0L)
+  expect_length(seen$calls, 3L)
+})
+
+test_that("gl_collect_gauges asks each project's own host, read from its node id", {
+  seen <- new.env()
+  io <- fake_gl_io(list(code.usgs.gov = gl_pool_of("code_usgs_gov.json")), seen)
+  m <- gl_map("gitlab:code.usgs.gov:4520")
+  m$domain <- "gitlab.com"
+  got <- gl_collect_gauges(io, m, fake_gl_pacer()$p)
+  expect_identical(seen$calls[[1]]$domain, "code.usgs.gov")
+  expect_identical(got$snapshot$node_id, "gitlab:code.usgs.gov:4520")
+  expect_identical(got$unresolvable, character(0))
+  m$domain <- NULL
+  expect_identical(gl_collect_gauges(io, m, fake_gl_pacer()$p)$snapshot$node_id, "gitlab:code.usgs.gov:4520")
+  # An id that is not a GitLab node id is never asked and keeps its values.
+  n <- length(seen$calls)
+  odd <- gl_collect_gauges(io, data.frame(node_id = "R_abc", repo_id = "r1", stringsAsFactors = FALSE), fake_gl_pacer()$p)
+  expect_length(seen$calls, n)
+  expect_identical(odd$deferred, "R_abc")
+  expect_identical(odd$unresolvable, character(0))
+})
+
+# rurl with upcoming releases ahead of the ones that are out.
+gl_with_releases <- function(nodes, count = length(nodes)) {
+  n <- gl_pool_of("gitlab_com.json")[[1]]
+  n$releases <- list(count = count, nodes = nodes)
+  list(data = list(projects = list(nodes = list(n))))
+}
+gl_rel <- function(tag, at, upcoming = NULL) list(tagName = tag, releasedAt = at, upcomingRelease = upcoming)
+
+test_that("the last release is the newest one that is out, never an upcoming one", {
+  now <- as.numeric(as.POSIXct("2026-10-15 00:00:00", tz = "UTC"))
+  resp <- gl_with_releases(list(gl_rel("v4.0.0", "2027-03-01T00:00:00Z", TRUE),
+                                gl_rel("v3.2.0", "2026-10-20T00:00:00Z"),
+                                gl_rel("v3.1.0", "2026-10-02T15:39:10Z", FALSE),
+                                gl_rel("v3.0.1", "2026-09-09T16:00:01Z", FALSE)))
+  df <- gl_parse_projects(resp, "gitlab.com", now = now)
+  expect_identical(df$last_release_tag, "v3.1.0")
+  expect_identical(df$last_release_at, "2026-10-02T15:39:10Z")
+  expect_identical(df$releases_total, 4L)
+  # Flagged upcoming is skipped whatever the clock says.
+  flagged <- gl_with_releases(list(gl_rel("v3.2.0", "2026-10-01T00:00:00Z", TRUE), gl_rel("v3.1.0", "2026-09-02T00:00:00Z", FALSE)))
+  expect_identical(gl_parse_projects(flagged, "gitlab.com", now = now)$last_release_tag, "v3.1.0")
+  none <- gl_parse_projects(gl_with_releases(list(gl_rel("v9", "2027-01-01T00:00:00Z", TRUE),
+                                                  gl_rel("v8", "2026-12-01T00:00:00Z", TRUE))),
+                            "gitlab.com", now = now)
+  expect_identical(none$last_release_tag, NA_character_)
+  expect_identical(none$last_release_at, NA_character_)
+  expect_identical(none$releases_total, 2L)
+})
+
+test_that("gl_collect_gauges judges upcoming releases by its own clock", {
+  resp <- gl_with_releases(list(gl_rel("v3.2.0", "2026-10-20T00:00:00Z"), gl_rel("v3.1.0", "2026-10-02T15:39:10Z")))
+  io <- fake_gl_io(list(), answer = function(domain, variables) c(resp, list(status = 200L, error = NA_character_)))
+  at <- function(day) { t <- as.numeric(as.POSIXct(day, tz = "UTC")); function() t }
+  ids <- "gitlab:gitlab.com:85027322"
+  before <- gl_collect_gauges(io, gl_map(ids), fake_gl_pacer()$p, now = at("2026-10-15"))
+  expect_identical(before$snapshot$last_release_tag, "v3.1.0")
+  after <- gl_collect_gauges(io, gl_map(ids), fake_gl_pacer()$p, now = at("2026-10-21"))
+  expect_identical(after$snapshot$last_release_tag, "v3.2.0")
+  expect_identical(after$snapshot$last_release_at, "2026-10-20T00:00:00Z")
 })
