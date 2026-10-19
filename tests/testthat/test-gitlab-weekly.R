@@ -100,6 +100,25 @@ test_that("contributors: a spent hourly budget is a stopped call and failures co
   expect_identical(g$p$deferred(), "gitlab.com")
 })
 
+test_that("a 403, 404 or 410 is an answer about the project: NA values, not stopped, never a host failure", {
+  for (code in c(403L, 404L, 410L)) {
+    seen <- new.env()
+    io <- fake_rest_io(function(domain, path) gl_rest_answer(code), seen)
+    f <- fake_rest_pacer()
+    for (i in 1:6) {
+      expect_identical(gl_contributors(io, "gitlab.com", i, f$p), list(total = NA_integer_, top_commits = NA_integer_, stopped = FALSE))
+      expect_identical(gl_license(io, "gitlab.com", i, f$p), list(key = NA_character_, stopped = FALSE))
+    }
+    expect_identical(f$p$deferred(), character())
+    expect_length(seen$paths, 12L)
+  }
+  # Later projects on the same host are still read.
+  answer <- function(domain, path) if (grepl("/projects/1/", path, fixed = TRUE)) gl_rest_answer(404L) else contrib_answer("3", 8L)(domain, path)
+  f <- fake_rest_pacer()
+  for (i in c(1, 1, 1)) gl_contributors(fake_rest_io(answer), "gitlab.com", i, f$p)
+  expect_identical(gl_contributors(fake_rest_io(answer), "gitlab.com", 2, f$p), list(total = 3L, top_commits = 8L, stopped = FALSE))
+})
+
 test_that("the REST pacer budgets 45 for gitlab.com, 30 elsewhere and 500 with a token", {
   withr::local_envvar(GITLAB_TOKEN_GITLAB_COM = NA, GITLAB_TOKEN_CODE_USGS_GOV = "x")
   allowed <- function(p, host) { n <- 0L; while (isTRUE(p$before(host)) && n < 600L) n <- n + 1L; n }

@@ -369,7 +369,9 @@ gl_commit_counts <- function(io, repos, pacer) {
   r <- tryCatch(io$gl_rest(domain, path), error = function(e) list(status = NA_integer_, error = conditionMessage(e)))
   if (identical(r$status, 429L)) { pacer$set_hourly_budget(key, 0L); return(list(state = "stopped")) }
   ok <- is.list(r) && is.na(.gl_chr(r$error)) && !is.na(r$status) && r$status < 300L
-  pacer$after(key, ok)
+  # A 403, 404 or 410 is an answer about the project: the host is fine, the values are NA.
+  gone <- is.list(r) && !is.na(r$status) && r$status %in% c(403L, 404L, 410L)
+  pacer$after(key, ok || gone)
   if (!ok) return(list(state = "failed"))
   last <- identical(unname(r$headers["ratelimit-remaining"]), "0")
   if (last) pacer$set_hourly_budget(key, 0L)
