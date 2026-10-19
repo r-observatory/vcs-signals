@@ -80,6 +80,9 @@ GITLAB_BATCH          <- 50L  # projects per GraphQL request; projects(fullPaths
 GITLAB_MIN_INTERVAL_S <- 2    # seconds between two requests to one host
 GITLAB_MAX_REQUESTS   <- 30L  # GraphQL requests to one host per run, resolution and gauges together
 GITLAB_BREAKER_AFTER  <- 3L   # consecutive failures that defer a host for the rest of the run
+# GitLab REST requests per host per hour (gl_rest_pacer): anonymous, and with a GITLAB_TOKEN_<DOMAIN> set.
+GITLAB_REST_HOURLY       <- c(gitlab.com = 45L, default = 30L)
+GITLAB_REST_HOURLY_TOKEN <- 500L
 # GitLab runs after the GitHub gauge pass, until this many minutes past the later of that pass's
 # end and its deadline. update.yml caps the job at 170 minutes; the longest recent job took 136.
 GITLAB_DEADLINE_EXTRA_MIN <- 10
