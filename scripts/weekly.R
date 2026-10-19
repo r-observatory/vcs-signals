@@ -221,12 +221,22 @@ run_merge <- function(io, out_dir, parts_dir) {
                matrix(integer(0), nrow = 0, ncol = length(WEEKLY_METRICS)),
                stringsAsFactors = FALSE),
     c("repo_id", WEEKLY_METRICS))
-  snap_rows <- lapply(parts, function(p) {
+  read_part <- function(p) {
     pcon <- DBI::dbConnect(RSQLite::SQLite(), p)
     on.exit(DBI::dbDisconnect(pcon), add = TRUE)
-    if (!DBI::dbExistsTable(pcon, SNAPSHOT_TABLE)) return(empty_snapshot)
-    DBI::dbReadTable(pcon, SNAPSHOT_TABLE)
-  })
+    list(snapshot = if (DBI::dbExistsTable(pcon, SNAPSHOT_TABLE)) DBI::dbReadTable(pcon, SNAPSHOT_TABLE) else empty_snapshot,
+         license = if (DBI::dbExistsTable(pcon, "license")) DBI::dbReadTable(pcon, "license"))
+  }
+  # A fault in the GitLab shard skips that file, so the GitHub shards still merge and publish.
+  read_part_guarded <- function(p) {
+    if (basename(p) != GITLAB_SHARD_DB) return(read_part(p))
+    tryCatch(suppressWarnings(read_part(p)), error = function(e) {
+      message(sprintf("GitLab shard %s not read, skipped: %s", GITLAB_SHARD_DB, substr(conditionMessage(e), 1L, 200L)))
+      list(snapshot = empty_snapshot, license = NULL)
+    })
+  }
+  shard_reads <- lapply(parts, read_part_guarded)
+  snap_rows <- lapply(shard_reads, function(r) r$snapshot)
   snapshot <- if (length(snap_rows)) do.call(rbind, snap_rows) else empty_snapshot
   snapshot <- snapshot[!duplicated(snapshot$repo_id), , drop = FALSE]
 
@@ -269,11 +279,7 @@ run_merge <- function(io, out_dir, parts_dir) {
                    params = list(untyped))
 
   # The GitLab job's licence readings. A repository it did not read keeps its stored licence.
-  readings <- lapply(parts, function(p) {
-    pcon <- DBI::dbConnect(RSQLite::SQLite(), p)
-    on.exit(DBI::dbDisconnect(pcon), add = TRUE)
-    if (DBI::dbExistsTable(pcon, "license")) DBI::dbReadTable(pcon, "license")
-  })
+  readings <- lapply(shard_reads, function(r) r$license)
   n_licences <- upsert_gitlab_license(con, do.call(rbind, readings))
 
   # Rebuild the summary so commits_total/contributors_total populate. No
