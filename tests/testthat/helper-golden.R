@@ -11,11 +11,11 @@ GOLDEN_SHARDS <- 2L
 
 golden_paths <- function() c("daily", "weekly", "ai", "backfill")
 
-# The publishing workflows set VCS_SKIP_GOLDEN_PARITY=1: a scheduled run changes no code, so a
-# difference there could only come from a package release, which must not stop the day's data.
+# The publishing workflows set VCS_SKIP_GOLDEN_PARITY=1 on runs from main, whose code was checked
+# on push, so a package release cannot stop the day's data there.
 skip_golden_parity <- function()
   testthat::skip_if(identical(Sys.getenv("VCS_SKIP_GOLDEN_PARITY"), "1"),
-                    "VCS_SKIP_GOLDEN_PARITY is 1 (a publishing run, which changes no code)")
+                    "VCS_SKIP_GOLDEN_PARITY is 1 (a publishing run from main, checked on push)")
 
 # ---- the roster -------------------------------------------------------------
 # One acquisition. linelist is listed twice, on GitHub for CRAN and on a nested GitLab group for
