@@ -2,6 +2,6 @@ repo_id	commits_read_on	commits_read_through	commits_ruleset	commits_read	commit
 github.com/epiverse-trace/cfr	<DATE>	2026-03-18T09:27:20Z	2026-09-27	1	1	1	<DATE>	\N	1	<DATE>	\N	<DATE>	\N	\N
 github.com/epiverse-trace/linelist	<DATE>	2026-09-25T13:40:00Z	2026-09-27	1	1	1	<DATE>	2026-08-28T09:43:30Z	1	<DATE>	\N	<DATE>	\N	\N
 github.com/kvenkita/bqmm-r	<DATE>	\N	2026-09-27	0	1	1	<DATE>	\N	1	<DATE>	\N	<DATE>	\N	\N
-github.com/rdatatable/data.table	<DATE>	\N	2026-09-27	0	1	1	<DATE>	\N	1	<DATE>	\N	<DATE>	\N	\N
+github.com/rdatatable/data.table	<DATE>	\N	2026-09-27	0	1	1	<DATE>	\N	1	<DATE>	\N	\N	<DATE>	accounts: Something went wrong while executing your query. This may be the result of a timeout.
 github.com/ropensci-review-tools/goodpractice	<DATE>	2026-09-16T13:05:24Z	2026-09-27	1	1	0	<DATE>	2026-08-12T04:58:55Z	1	<DATE>	\N	<DATE>	\N	\N
 github.com/tidyverse/forcats	<DATE>	2025-10-05T05:49:23Z	2026-09-27	1	1	1	<DATE>	2026-03-11T08:43:55Z	1	<DATE>	\N	<DATE>	\N	\N

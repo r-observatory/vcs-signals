@@ -19,7 +19,8 @@ skip_golden_parity <- function()
 
 # ---- the roster -------------------------------------------------------------
 # One acquisition. linelist is listed twice, on GitHub for CRAN and on a nested GitLab group for
-# Bioc. cfr arrives on the recorded day, so that day's run resolves one repository.
+# Bioc. cfr arrives on the recorded day, so that day's run resolves one repository, which GitHub
+# answers under a new owner and name.
 .golden_acquire <- function(back = 0L) {
   df <- data.frame(
     package = c("forcats", "goodpractice", "bqmm", "ri2", "linelist", "linelist", "cfr", "usgspkg",
@@ -50,13 +51,13 @@ skip_golden_parity <- function()
 }
 
 # The GitHub repositories the roster names, as GitHub answers on the recorded day. asked is the
-# slug a package gives and nwo what GitHub answers, so bqmm-r was renamed and ri2 is gone;
-# bqmm is empty and cfr archived.
+# slug a package gives and nwo what GitHub answers, so bqmm-r and cfr were renamed and ri2 is
+# gone; bqmm is empty and cfr archived.
 .golden_gh <- data.frame(
   asked = c("tidyverse/forcats", "ropensci-review-tools/goodpractice", "kvenkita/bqmm-r", "acoppock/ri2",
             "epiverse-trace/linelist", "epiverse-trace/cfr", "Rdatatable/data.table"),
   nwo = c("tidyverse/forcats", "ropensci-review-tools/goodpractice", "kvenkita/bqmm", NA,
-          "epiverse-trace/linelist", "epiverse-trace/cfr", "Rdatatable/data.table"),
+          "epiverse-trace/linelist", "epiverse/cfr-estimates", "Rdatatable/data.table"),
   id = c("R_forcats", "R_goodpractice", "R_bqmm", NA, "R_linelist", "R_cfr", "R_datatable"),
   user = c(FALSE, FALSE, TRUE, NA, FALSE, FALSE, FALSE),
   created = c("2015-08-23T21:23:24Z", "2016-03-08T10:12:00Z", "2024-02-11T09:30:00Z", NA,
@@ -103,7 +104,7 @@ skip_golden_parity <- function()
     "ropensci-review-tools/goodpractice" = c("2017-04-01T00:00:00Z", "2025-12-24T12:00:00Z"),
     "kvenkita/bqmm" = c("2025-01-05T00:00:00Z"),
     "epiverse-trace/linelist" = c("2023-05-01T00:00:00Z", "2026-02-14T07:00:00Z"),
-    "epiverse-trace/cfr" = c("2023-02-01T00:00:00Z"),
+    "epiverse/cfr-estimates" = c("2023-02-01T00:00:00Z"),
     "Rdatatable/data.table" = c("2014-03-01T00:00:00Z", "2021-06-15T12:00:00Z")),
   forks = list(
     "tidyverse/forcats" = c("2016-06-01T00:00:00Z", "2022-08-08T08:08:08Z"),
@@ -111,7 +112,7 @@ skip_golden_parity <- function()
   releases_total = list(
     "tidyverse/forcats" = c("2016-08-29T00:00:00Z", "2023-01-29T00:00:00Z", "2025-09-03T10:00:00Z"),
     "ropensci-review-tools/goodpractice" = c("2025-02-17T12:00:00Z"),
-    "epiverse-trace/cfr" = c("2024-11-02T08:00:00Z")))
+    "epiverse/cfr-estimates" = c("2024-11-02T08:00:00Z")))
 
 # The repository a slug names, by the slug asked or the one GitHub answers, or NULL.
 .golden_row <- function(gh, owner, name) {
@@ -128,7 +129,10 @@ skip_golden_parity <- function()
              stringsAsFactors = FALSE)
 }
 
-# One answer per alias, and a NOT_FOUND for a repository GitHub does not have.
+# One answer per alias, a NOT_FOUND for a repository GitHub does not have, and an error for an
+# answer that is a .golden_failed().
+.golden_failed <- function(message) structure(list(message = message), class = "golden_failed")
+
 .golden_aliased <- function(q, gh, answer) {
   a <- .golden_aliases(q)
   data <- list(); errors <- list()
@@ -138,7 +142,13 @@ skip_golden_parity <- function()
       data[a$alias[k]] <- list(NULL)
       errors[[length(errors) + 1L]] <- list(type = "NOT_FOUND", path = list(a$alias[k]),
         message = sprintf("Could not resolve to a Repository with the name '%s/%s'.", a$owner[k], a$name[k]))
-    } else data[[a$alias[k]]] <- answer(r)
+    } else {
+      x <- answer(r)
+      if (inherits(x, "golden_failed")) {
+        data[a$alias[k]] <- list(NULL)
+        errors[[length(errors) + 1L]] <- list(path = list(a$alias[k]), message = x$message)
+      } else data[[a$alias[k]]] <- x
+    }
   }
   if (length(errors)) list(data = data, errors = errors) else list(data = data)
 }
@@ -185,9 +195,11 @@ skip_golden_parity <- function()
 # ignore line in goodpractice and a CodeRabbit config in linelist.
 .golden_contents <- function(r) {
   raw <- jsonlite::fromJSON(file.path("fixtures", "contents-2026-09.json"), simplifyVector = FALSE)$data
-  hit <- Filter(function(a) identical(tolower(a$nameWithOwner), tolower(r$nwo)), raw)
+  hit <- Filter(function(a) tolower(a$nameWithOwner) %in% tolower(c(r$nwo, r$asked)), raw)
   a <- if (length(hit)) hit[[1]] else list(nameWithOwner = r$nwo, isFork = FALSE, parent = NULL,
     rootTree = list(entries = list(list(name = "DESCRIPTION", type = "blob"))))
+  # A renamed repository answers under its new name.
+  if (!identical(tolower(a$nameWithOwner), tolower(r$nwo))) a$nameWithOwner <- r$nwo
   add <- function(a, entry) { a$rootTree$entries <- c(a$rootTree$entries, list(list(name = entry, type = "blob"))); a }
   if (identical(r$nwo, "tidyverse/forcats")) {
     a <- add(a, "CLAUDE.md")
@@ -210,7 +222,7 @@ skip_golden_parity <- function()
     "ropensci-review-tools/goodpractice" = list(prs = list(prs$r6$pullRequests$nodes[[1]]),
                                                 commits = list(.golden_commit_node("1a85ae819e"))),
     "epiverse-trace/linelist" = list(prs = list(prs$r4$pullRequests$nodes[[1]]), commits = list(plain)),
-    "epiverse-trace/cfr" = list(prs = list(), commits = list(.golden_commit_node("fe5c63c197"))),
+    "epiverse/cfr-estimates" = list(prs = list(), commits = list(.golden_commit_node("fe5c63c197"))),
     list(prs = list(), commits = list()))
   page <- list(endCursor = NULL, hasNextPage = FALSE)
   # goodpractice has more commits than one page, so its first read is not whole and its rules are searched.
@@ -219,7 +231,10 @@ skip_golden_parity <- function()
        defaultBranchRef = if (!is.na(r$head)) list(target = list(recent = list(pageInfo = more, nodes = s$commits))))
 }
 
+# data.table's read fails, so the AI merge stops after it publishes.
 .golden_accounts <- function(r) {
+  if (identical(r$id, "R_datatable"))
+    return(.golden_failed("Something went wrong while executing your query. This may be the result of a timeout."))
   counts <- if (identical(r$nwo, "tidyverse/forcats"))
     list(a_claude = list(totalCount = 2L, nodes = list(list(committedDate = "2025-10-05T05:49:23Z")))) else list()
   list(defaultBranchRef = if (!is.na(r$head)) list(target = counts))
@@ -486,7 +501,8 @@ skip_golden_parity <- function()
 
 #' Runs one path over a release the earlier daily runs built (the other paths also over the
 #' recorded day's daily run, plus .golden_other_hosts) and returns its tables, normalised, the
-#' requests and release calls it made, in order, and its manifest and release notes.
+#' requests and release calls it made, in order, its manifest and release notes, and the
+#' message it stopped with, if any.
 golden_run <- function(path, record_requests = TRUE) {
   stopifnot(length(path) == 1L, path %in% golden_paths())
   key <- paste(path, record_requests)
@@ -512,9 +528,14 @@ golden_run <- function(path, record_requests = TRUE) {
   log <- new.env(parent = emptyenv())
   log$requests <- character(0)
   jobs <- file.path(root, "jobs")
-  .golden_quiet(.golden_steps[[path]](fn(env), .golden_io(rel, if (record_requests) log), jobs, root))
+  # A path that stops keeps what its jobs left, and its message is recorded.
+  err <- tryCatch({
+    .golden_quiet(.golden_steps[[path]](fn(env), .golden_io(rel, if (record_requests) log), jobs, root))
+    NULL
+  }, error = function(e) conditionMessage(e))
   t1 <- Sys.time()
   run <- c(.golden_jobs_snapshot(jobs, GOLDEN_DAY, t0, t1), list(requests = log$requests))
+  if (!is.null(err)) run$files[["error.txt"]] <- .golden_normalise_text(err, GOLDEN_DAY, t0, t1)
   assign(key, run, envir = .golden_cache)
   run
 }
@@ -640,8 +661,8 @@ golden_normalise <- function(df, run_date, t0, t1) {
   paste(names(kv), kv, sep = "\t", collapse = "\n")
 }
 
-#' Each table as sorted TSV text, the requests one per line, and each job's manifest and
-#' release notes, by record file name.
+#' Each table as sorted TSV text, the requests one per line, each job's manifest and
+#' release notes, and the stop message, by record file name.
 golden_snapshot_text <- function(run) {
   tsv <- vapply(run$tables, .golden_tsv, character(1))
   names(tsv) <- paste0(sub("/", "__", names(run$tables), fixed = TRUE), ".tsv")

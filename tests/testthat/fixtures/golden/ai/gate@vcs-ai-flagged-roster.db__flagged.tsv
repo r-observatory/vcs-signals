@@ -1,4 +1,4 @@
 repo_id	owner	name	node_id	is_fork	parent	pr_onset_date
-github.com/epiverse-trace/cfr	epiverse-trace	cfr	R_cfr	0	\N	\N
+github.com/epiverse-trace/cfr	epiverse	cfr-estimates	R_cfr	0	\N	\N
 github.com/ropensci-review-tools/goodpractice	ropensci-review-tools	goodpractice	R_goodpractice	0	\N	2026-08-12T04:58:55Z
 github.com/tidyverse/forcats	tidyverse	forcats	R_forcats	0	\N	\N

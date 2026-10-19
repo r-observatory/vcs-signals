@@ -1,7 +1,7 @@
 node_id	episode_seq	name_with_owner	owner_node_id	first_seen	last_seen	first_seen_exact	ended_on
 R_bqmm	1	kvenkita/bqmm-r	U_kvenkita	2026-08-20	2026-09-10	0	<DATE>
 R_bqmm	2	kvenkita/bqmm	U_kvenkita	<DATE>	<DATE>	1	\N
-R_cfr	1	epiverse-trace/cfr	O_epiverse-trace	<DATE>	<DATE>	0	\N
+R_cfr	1	epiverse/cfr-estimates	O_epiverse	<DATE>	<DATE>	0	\N
 R_datatable	1	Rdatatable/data.table	O_Rdatatable	2026-08-20	<DATE>	0	\N
 R_forcats	1	tidyverse/forcats	O_tidyverse	2026-08-20	<DATE>	0	\N
 R_goodpractice	1	ropensci-review-tools/goodpractice	O_ropensci-review-tools	2026-08-20	<DATE>	0	\N

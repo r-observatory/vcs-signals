@@ -1,1 +1,2 @@
 repo_id	query	error	failed_at
+github.com/rdatatable/data.table	accounts	Something went wrong while executing your query. This may be the result of a timeout.	<TS:dddd-dd-ddTdd:dd:ddZ>

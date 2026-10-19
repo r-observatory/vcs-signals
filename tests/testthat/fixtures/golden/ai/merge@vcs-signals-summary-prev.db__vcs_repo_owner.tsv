@@ -1,5 +1,5 @@
 repo_id	node_id	owner_login_current	owner_type	owner_node_id	name_with_owner_current	observed_on
-github.com/epiverse-trace/cfr	R_cfr	epiverse-trace	Organization	O_epiverse-trace	epiverse-trace/cfr	<DATE>
+github.com/epiverse-trace/cfr	R_cfr	epiverse	Organization	O_epiverse	epiverse/cfr-estimates	<DATE>
 github.com/epiverse-trace/linelist	R_linelist	epiverse-trace	Organization	O_epiverse-trace	epiverse-trace/linelist	<DATE>
 github.com/kvenkita/bqmm-r	R_bqmm	kvenkita	User	U_kvenkita	kvenkita/bqmm	<DATE>
 github.com/rdatatable/data.table	R_datatable	Rdatatable	Organization	O_Rdatatable	Rdatatable/data.table	<DATE>
