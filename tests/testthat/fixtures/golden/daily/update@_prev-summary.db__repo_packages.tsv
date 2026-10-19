@@ -4,6 +4,7 @@ codeberg.org/someone/cbpkg	cbpkg	cran	url
 github.com/acoppock/ri2	ri2	cran	url
 github.com/epiverse-trace/linelist	linelist	cran	both
 github.com/kvenkita/bqmm-r	bqmm	cran	url
+github.com/rdatatable/data.table	data.table	cran	url
 github.com/ropensci-review-tools/goodpractice	goodpractice	cran	url
 github.com/tidyverse/forcats	forcats	cran	both
 gitlab.com/epiverse/outbreaks/linelist	linelist	bioc	url

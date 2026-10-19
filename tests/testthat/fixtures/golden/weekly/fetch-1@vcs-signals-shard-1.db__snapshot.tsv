@@ -1,3 +1,4 @@
 repo_id	commits_total	contributors_total	median_days_to_close_issue	median_days_to_close_pr	median_open_issue_age_days	top_contributor_commits	top_contributor_bot
 github.com/epiverse-trace/linelist	910	9	24	6	72	150	\N
-github.com/ropensci-review-tools/goodpractice	800	12	19	3	70	200	1
+github.com/rdatatable/data.table	5600	\N	26	8	73	\N	\N
+github.com/tidyverse/forcats	1210	45	18	2	70	310	0

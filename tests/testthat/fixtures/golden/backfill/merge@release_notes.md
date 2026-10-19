@@ -4,10 +4,10 @@ VCS social signals for CRAN and Bioconductor package repositories, refreshed dai
 
 ## Coverage
 
-- Packages: 10
-- Repositories: 10
+- Packages: 11
+- Repositories: 11
 - Data through: <DATE>
-- Years present: 2016 to 2026
+- Years present: 2014 to 2026
 - Metrics: stars, forks, open issues, open pull requests, releases; plus topics, license, and archived state
 
 ## Assets
@@ -23,7 +23,7 @@ VCS social signals for CRAN and Bioconductor package repositories, refreshed dai
 
 ## Most recent run
 
-- Changed shards: `vcs-signals-2023.db`, `vcs-signals-2025.db`, `vcs-signals-2016.db`, `vcs-signals-2018.db`, `vcs-signals-2020.db`, `vcs-signals-2024.db`, `vcs-signals-2026.db`, `vcs-signals-2022.db`, `vcs-signals-2017.db`, `vcs-signals-recent.db`, `vcs-signals-summary.db`
+- Changed shards: `vcs-signals-2023.db`, `vcs-signals-2025.db`, `vcs-signals-2017.db`, `vcs-signals-2024.db`, `vcs-signals-2026.db`, `vcs-signals-2014.db`, `vcs-signals-2021.db`, `vcs-signals-2016.db`, `vcs-signals-2018.db`, `vcs-signals-2020.db`, `vcs-signals-2022.db`, `vcs-signals-recent.db`, `vcs-signals-summary.db`
 
 ## Access
 

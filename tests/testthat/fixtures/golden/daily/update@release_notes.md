@@ -4,8 +4,8 @@ VCS social signals for CRAN and Bioconductor package repositories, refreshed dai
 
 ## Coverage
 
-- Packages: 10
-- Repositories: 10
+- Packages: 11
+- Repositories: 11
 - Data through: <DATE>
 - Years present: 2026 to 2026
 - Metrics: stars, forks, open issues, open pull requests, releases; plus topics, license, and archived state

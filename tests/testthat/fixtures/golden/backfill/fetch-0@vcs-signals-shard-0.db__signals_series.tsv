@@ -2,13 +2,6 @@ repo_id	date	metric	value
 github.com/epiverse-trace/cfr	2023-02-01	stars	1
 github.com/epiverse-trace/cfr	2024-11-02	releases_total	1
 github.com/kvenkita/bqmm-r	2025-01-05	stars	1
-github.com/tidyverse/forcats	2016-01-10	stars	1
-github.com/tidyverse/forcats	2016-06-01	forks	1
-github.com/tidyverse/forcats	2016-08-29	releases_total	1
-github.com/tidyverse/forcats	2018-05-02	stars	2
-github.com/tidyverse/forcats	2020-03-03	stars	3
-github.com/tidyverse/forcats	2022-08-08	forks	2
-github.com/tidyverse/forcats	2023-01-29	releases_total	2
-github.com/tidyverse/forcats	2024-11-20	stars	4
-github.com/tidyverse/forcats	2025-09-03	releases_total	3
-github.com/tidyverse/forcats	2026-09-30	stars	5
+github.com/ropensci-review-tools/goodpractice	2017-04-01	stars	1
+github.com/ropensci-review-tools/goodpractice	2025-02-17	releases_total	1
+github.com/ropensci-review-tools/goodpractice	2025-12-24	stars	2

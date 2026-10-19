@@ -29,6 +29,16 @@ github.com/kvenkita/bqmm-r	releases_total	0
 github.com/kvenkita/bqmm-r	size_kb	220
 github.com/kvenkita/bqmm-r	stars	3
 github.com/kvenkita/bqmm-r	watchers	0
+github.com/rdatatable/data.table	forks	960
+github.com/rdatatable/data.table	issues_closed	8000
+github.com/rdatatable/data.table	issues_open	800
+github.com/rdatatable/data.table	prs_closed	41
+github.com/rdatatable/data.table	prs_merged	280
+github.com/rdatatable/data.table	prs_open	40
+github.com/rdatatable/data.table	releases_total	9
+github.com/rdatatable/data.table	size_kb	136100
+github.com/rdatatable/data.table	stars	3400
+github.com/rdatatable/data.table	watchers	340
 github.com/ropensci-review-tools/goodpractice	forks	37
 github.com/ropensci-review-tools/goodpractice	issues_closed	140
 github.com/ropensci-review-tools/goodpractice	issues_open	14

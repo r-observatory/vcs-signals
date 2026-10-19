@@ -1,5 +1,4 @@
 repo_id	tool	tier	marker	agnostic	role	rule_key	onset	onset_censored	newest_at
-github.com/epiverse-trace/cfr	cursor	B	msg.cursor.made-with	0	authoring	msg.cursor.made-with	2026-03-18T09:27:20Z	0	2026-03-18T09:27:20Z
 github.com/tidyverse/forcats	claude	A	A	0	authoring	\N	2025-10-05T05:49:23Z	1	2025-10-05T05:49:23Z
 github.com/tidyverse/forcats	claude	B	msg.claude.address	0	authoring	msg.claude.address	2025-10-05T05:49:23Z	0	2025-10-05T05:49:23Z
 github.com/tidyverse/forcats	claude	D	CLAUDE.md	0	authoring	\N	2026-10-04T23:59:59Z	1	\N

@@ -1,6 +1,3 @@
 repo_id	tool	first_seen_date	first_seen_censored	evidence_tiers	markers	authored	authored_commits	assisted_commits	last_confirmed_date	authored_measured_on	assisted_measured_on
-github.com/ropensci-review-tools/goodpractice	agents-md	2026-10-04T23:59:59Z	1	D	AGENT.md	0	\N	\N	<DATE>	\N	\N
-github.com/ropensci-review-tools/goodpractice	claude	2026-02-02T11:00:00Z	0	B,D	gitignore:.claude,msg.claude.coauthor	0	\N	\N	<DATE>	\N	\N
-github.com/ropensci-review-tools/goodpractice	copilot	2026-09-16T13:05:24Z	1	B	msg.copilot.cli	0	\N	\N	<DATE>	\N	\N
-github.com/ropensci-review-tools/goodpractice	devin	2026-08-12T04:58:55Z	0	PB	pr.devin.session	0	\N	\N	<DATE>	\N	\N
+github.com/epiverse-trace/cfr	cursor	2026-03-18T09:27:20Z	0	B	msg.cursor.made-with	0	\N	\N	<DATE>	\N	\N
 github.com/tidyverse/forcats	claude	2025-06-12T08:00:00Z	0	A,B,D	A,CLAUDE.md,msg.claude.address	1	\N	\N	<DATE>	\N	\N

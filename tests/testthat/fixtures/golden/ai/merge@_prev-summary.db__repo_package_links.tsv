@@ -6,6 +6,7 @@ github.com/epiverse-trace/cfr	cfr	bioc	<DATE>	<DATE>
 github.com/epiverse-trace/linelist	linelist	cran	2026-08-20	<DATE>
 github.com/kvenkita/bqmm-r	bqmm	cran	2026-08-20	<DATE>
 github.com/old-owner/forcats	forcats	cran	2026-08-01	2026-09-15
+github.com/rdatatable/data.table	data.table	cran	2026-08-20	<DATE>
 github.com/ropensci-review-tools/goodpractice	goodpractice	cran	2026-08-20	<DATE>
 github.com/tidyverse/forcats	forcats	cran	2026-08-20	<DATE>
 gitlab.com/epiverse/outbreaks/linelist	linelist	bioc	2026-08-20	<DATE>
