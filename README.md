@@ -50,6 +50,12 @@ The weekly AI and repository scan (`ai-weekly.yml`) starts with `Rscript scripts
 
 To investigate, run `Rscript scripts/ai_backfill.R canary` with `VCS_SIGNALS_TOKEN` set and read each candidate's value in the message. If GitHub changed, fix the query or the parser before the next pass. If the candidates changed their own files, replace them in `TREE_QUERY_CANARY` with repositories that meet the floor today and re-run the enumerate job.
 
+## Hosts
+
+GitHub is the only host collected today. `supported_host_predicate()` in `scripts/hosts.R` decides which hosts count, driven by `SUPPORTED_HOSTS` in `scripts/config.R`. A repository on any other host keeps NULL signals until its host is supported. GitLab collection is being built on `scripts/http.R` (requests) and `scripts/pacing.R` (per-host pacing).
+
+A golden record under `tests/testthat/fixtures/golden/` holds the published values for a fixed set of inputs, and `test-golden-parity.R` checks that the scripts still produce them. The publishing workflows skip it (`VCS_SKIP_GOLDEN_PARITY=1`); push and pull request runs check it. To re-record, commit your `scripts/` changes and run `Rscript tests/golden/record.R`, which refuses uncommitted changes under `scripts/`. The commit message of a re-record must name the published value it means to change.
+
 ## Caveats
 
 Star history is reconstructed from the GraphQL `stargazers` connection timestamps back to each repository's creation, then maintained forward daily; only the REST list-stargazers endpoint is restricted, not the GraphQL connection. Figures are best-effort, not absolute.
