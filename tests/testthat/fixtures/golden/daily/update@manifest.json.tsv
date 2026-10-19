@@ -15,6 +15,7 @@ summary.previous_summary.bytes	<MASKED>
 db_filename	vcs-signals-summary.db
 db_bytes	<MASKED>
 db_sha256	<MASKED>
+tables.gitlab_license	0
 tables.pipeline_state	0
 tables.repo_package_links	13
 tables.repo_packages	11

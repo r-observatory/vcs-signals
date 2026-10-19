@@ -17,6 +17,7 @@ index	sqlite_autoindex_vcs_ai_models_1	vcs_ai_models	\N
 index	sqlite_autoindex_vcs_ai_signals_1	vcs_ai_signals	\N
 index	sqlite_autoindex_vcs_signals_summary_1	vcs_signals_summary	\N
 index	ux_vrnh_open	vcs_repo_name_history	CREATE UNIQUE INDEX ux_vrnh_open\n    ON vcs_repo_name_history(node_id) WHERE ended_on IS NULL
+table	gitlab_license	gitlab_license	CREATE TABLE gitlab_license (\n    repo_id TEXT PRIMARY KEY, license TEXT, read_on TEXT NOT NULL) WITHOUT ROWID
 table	pipeline_state	pipeline_state	CREATE TABLE pipeline_state (key TEXT PRIMARY KEY, value TEXT)
 table	repo_package_links	repo_package_links	CREATE TABLE repo_package_links (\n    repo_id TEXT NOT NULL, package TEXT NOT NULL, origin TEXT NOT NULL,\n    first_seen TEXT NOT NULL, last_seen TEXT NOT NULL,\n    PRIMARY KEY (repo_id, package, origin))
 table	repo_packages	repo_packages	CREATE TABLE repo_packages (\n    repo_id TEXT NOT NULL, package TEXT NOT NULL, origin TEXT NOT NULL, resolved_from TEXT NOT NULL,\n    PRIMARY KEY (repo_id, package, origin))
