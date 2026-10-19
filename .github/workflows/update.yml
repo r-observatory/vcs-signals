@@ -89,9 +89,11 @@ jobs:
       group: vcs-signals-publish
       queue: max
     runs-on: ubuntu-latest
-    # update.R stops the gauge pass GAUGE_DEADLINE_MIN (100) minutes in and
-    # publishes, so the job ends well inside this cap.
-    timeout-minutes: 150
+    # In minutes: update.R stops the GitHub gauge pass at GAUGE_DEADLINE_MIN
+    # (100), GitLab may add GITLAB_DEADLINE_EXTRA_MIN (10) plus one 30 s
+    # request, and setup, tests and the stages through the publish took up to
+    # 36 more (longest recent job 136). That is about 147, so 170 leaves ~23.
+    timeout-minutes: 170
     steps:
       - uses: actions/checkout@v7
       - uses: r-lib/actions/setup-r@v2
