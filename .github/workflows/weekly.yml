@@ -48,7 +48,9 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: roster
-          path: out/vcs-signals-roster.db
+          path: |
+            out/vcs-signals-roster.db
+            out/vcs-signals-roster-gitlab.db
 
   fetch:
     needs: enumerate
@@ -93,8 +95,51 @@ jobs:
           path: out/vcs-signals-shard-*.db
           if-no-files-found: ignore
 
+  fetch-gitlab:
+    needs: enumerate
+    runs-on: ubuntu-latest
+    # The REST pass stops itself at 200 minutes (GITLAB_WEEKLY_DEADLINE_MIN), so the shard and the
+    # cursor state are written inside this cap.
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: |
+            any::DBI
+            any::RSQLite
+            any::jsonlite
+            any::testthat
+      - uses: actions/download-artifact@v8
+        with:
+          name: roster
+          path: roster
+      - name: Collect GitLab commits, contributors and licences
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Only this job reads the GitLab token; an unset secret is an empty string, read as no token.
+          GITLAB_TOKEN_GITLAB_COM: ${{ secrets.GITLAB_TOKEN_GITLAB_COM }}
+          VCS_OUT: out
+          VCS_ROSTER: roster
+        run: Rscript scripts/weekly.R fetch-gitlab
+      - uses: actions/upload-artifact@v7
+        with:
+          name: shard-gitlab
+          path: out/vcs-signals-shard-gitlab.db
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v7
+        with:
+          name: gitlab-state
+          path: out/vcs-signals-gitlab-state.db
+          if-no-files-found: ignore
+
   merge:
-    needs: fetch
+    needs: [fetch, fetch-gitlab]
+    # A failed or cancelled GitLab job never holds back the GitHub publish.
+    if: ${{ !cancelled() && needs.fetch.result == 'success' }}
     # One lock for every job that seeds from release "current" and later
     # uploads whole tables back over it: update, and the merge in weekly,
     # ai-weekly, ai-merge-rerun, backfill and ai-backfill. The workflow-level
@@ -134,6 +179,12 @@ jobs:
           path: parts
           pattern: shard-*
           merge-multiple: true
+      # The GitLab cursors, uploaded after the publish; without them the merge uploads none.
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: gitlab-state
+          path: parts
       - name: Merge and publish
         env:
           VCS_SIGNALS_TOKEN: ${{ secrets.VCS_SIGNALS_TOKEN }}

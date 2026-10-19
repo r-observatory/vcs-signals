@@ -49,5 +49,5 @@ host_pacer <- function(min_interval = c(default = 1), hourly_budget = c(default 
   spent <- function(host) spent_in_hour(get_host(host))
 
   list(before = before, after = after, deferred = deferred, spent = spent,
-       set_hourly_budget = set_hourly_budget)
+       hourly_budget = hourly_limit, set_hourly_budget = set_hourly_budget)
 }

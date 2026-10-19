@@ -361,8 +361,9 @@ gl_commit_counts <- function(io, repos, pacer) {
 }
 
 # One paced REST GET. state is "stopped" (budget spent, or the host said 429 or ratelimit-remaining 0
-# earlier), "failed" or "ok". `last` is TRUE when this answer says no more requests this run: the host
-# is then closed for the run by setting its budget to 0. Neither case counts toward the breaker.
+# earlier), "gone" (a 403, 404 or 410), "failed" or "ok". `last` is TRUE when this answer says no more
+# requests this run: the host is then closed for the run by setting its budget to 0. Neither case
+# counts toward the breaker.
 .gl_rest_get <- function(io, pacer, domain, path) {
   key <- .gl_key(domain)
   if (!isTRUE(pacer$before(key))) return(list(state = "stopped"))
@@ -372,6 +373,7 @@ gl_commit_counts <- function(io, repos, pacer) {
   # A 403, 404 or 410 is an answer about the project: the host is fine, the values are NA.
   gone <- is.list(r) && !is.na(r$status) && r$status %in% c(403L, 404L, 410L)
   pacer$after(key, ok || gone)
+  if (gone) return(list(state = "gone"))
   if (!ok) return(list(state = "failed"))
   last <- identical(unname(r$headers["ratelimit-remaining"]), "0")
   if (last) pacer$set_hourly_budget(key, 0L)
@@ -381,30 +383,32 @@ gl_commit_counts <- function(io, repos, pacer) {
 .gl_body <- function(r) tryCatch(jsonlite::fromJSON(r$body, simplifyVector = FALSE), error = function(e) NULL)
 
 #' Contributor count (x-total) and the top contributor's commits for one project, two REST GETs.
-#' No name or email is read from the rows. stopped is TRUE when the host's REST calls ended this run.
+#' No name or email is read from the rows. stopped is TRUE when the host's REST calls ended this run,
+#' read when every call was answered, a 403, 404 or 410 included.
 gl_contributors <- function(io, domain, project_id, pacer) {
-  out <- list(total = NA_integer_, top_commits = NA_integer_, stopped = FALSE)
+  out <- list(total = NA_integer_, top_commits = NA_integer_, stopped = FALSE, read = FALSE)
   base <- sprintf("/projects/%s/repository/contributors", format(project_id, scientific = FALSE, trim = TRUE))
   a <- .gl_rest_get(io, pacer, domain, paste0(base, "?per_page=1"))
   if (a$state == "stopped") { out$stopped <- TRUE; return(out) }
-  if (a$state == "failed") return(out)
+  if (a$state != "ok") { out$read <- a$state == "gone"; return(out) }
   out$total <- suppressWarnings(as.integer(unname(a$res$headers["x-total"])))
   if (a$last) { out$stopped <- TRUE; return(out) }
   b <- .gl_rest_get(io, pacer, domain, paste0(base, "?order_by=commits&sort=desc&per_page=1"))
   if (b$state == "stopped") { out$stopped <- TRUE; return(out) }
-  if (b$state == "failed") return(out)
+  out$read <- b$state != "failed"
+  if (b$state != "ok") return(out)
   body <- .gl_body(b$res)
   out$top_commits <- .gl_int(.gl_at(body, 1L, "commits"))
   out$stopped <- b$last
   out
 }
 
-#' The licence key of one project (license.key, NA when none), one REST GET.
+#' The licence key of one project (license.key, NA when none), one REST GET. read as for gl_contributors.
 gl_license <- function(io, domain, project_id, pacer) {
   a <- .gl_rest_get(io, pacer, domain, sprintf("/projects/%s?license=true", format(project_id, scientific = FALSE, trim = TRUE)))
-  if (a$state == "stopped") return(list(key = NA_character_, stopped = TRUE))
-  if (a$state == "failed") return(list(key = NA_character_, stopped = FALSE))
-  list(key = .gl_chr(.gl_at(.gl_body(a$res), "license", "key")), stopped = a$last)
+  if (a$state == "stopped") return(list(key = NA_character_, stopped = TRUE, read = FALSE))
+  if (a$state != "ok") return(list(key = NA_character_, stopped = FALSE, read = a$state == "gone"))
+  list(key = .gl_chr(.gl_at(.gl_body(a$res), "license", "key")), stopped = a$last, read = TRUE)
 }
 
 # GitLab licence keys to the SPDX ids GitHub reports; any other key is NA.

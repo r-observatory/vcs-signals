@@ -83,6 +83,10 @@ GITLAB_BREAKER_AFTER  <- 3L   # consecutive failures that defer a host for the r
 # GitLab REST requests per host per hour (gl_rest_pacer): anonymous, and with a GITLAB_TOKEN_<DOMAIN> set.
 GITLAB_REST_HOURLY       <- c(gitlab.com = 45L, default = 30L)
 GITLAB_REST_HOURLY_TOKEN <- 500L
+# The weekly REST pass (weekly.R fetch-gitlab) stops at this deadline, inside the job's 240-minute cap.
+GITLAB_WEEKLY_DEADLINE_MIN <- 200
+# REST calls one repository costs weekly: two for contributors, one for the licence.
+GITLAB_REST_CALLS_PER_REPO <- 3L
 # GitLab runs after the GitHub gauge pass, until this many minutes past the later of that pass's
 # end and its deadline. update.yml caps the job at 170 minutes; the longest recent job took 136.
 GITLAB_DEADLINE_EXTRA_MIN <- 10

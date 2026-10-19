@@ -98,3 +98,12 @@ test_that("a host's hourly budget can be changed mid-run and other hosts keep th
   f$p$set_hourly_budget("b", 6L)
   expect_true(f$p$before("b"))
 })
+
+test_that("the hourly budget in force reads back per host, after a mid-run change too", {
+  f <- fake_pacer(min_interval = c(default = 0), hourly_budget = c(default = 30, a = 45))
+  expect_equal(f$p$hourly_budget("a"), 45)
+  expect_equal(f$p$hourly_budget("b"), 30)
+  f$p$set_hourly_budget("a", 0L)
+  expect_equal(f$p$hourly_budget("a"), 0)
+  expect_equal(f$p$hourly_budget("b"), 30)
+})

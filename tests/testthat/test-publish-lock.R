@@ -26,7 +26,7 @@
 # io$upload. A new mode or a new script counts as publishing until it is listed
 # here, which is the moment to check that it never uploads.
 .READ_ONLY_MODES <- list(
-  "weekly.R"      = c("enumerate", "fetch"),
+  "weekly.R"      = c("enumerate", "fetch", "fetch-gitlab"),
   "backfill.R"    = c("enumerate", "fetch"),
   "ai_backfill.R" = c("enumerate", "cheap", "gate", "gate-incremental", "deep"))
 
