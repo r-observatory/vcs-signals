@@ -1,0 +1,3 @@
+type	name	tbl_name	sql
+index	sqlite_autoindex_roster_1	roster	\N
+table	roster	roster	CREATE TABLE roster (\n    repo_id TEXT PRIMARY KEY, owner TEXT NOT NULL, name TEXT NOT NULL,\n    stars INTEGER NOT NULL, done INTEGER NOT NULL DEFAULT 0)

@@ -1,0 +1,5 @@
+repo_id	package	cran_version
+github.com/epiverse-trace/linelist	linelist	1.2.0
+github.com/kvenkita/bqmm-r	bqmm	0.1.0
+github.com/ropensci-review-tools/goodpractice	goodpractice	1.0.5
+github.com/tidyverse/forcats	forcats	1.0.1

@@ -1,0 +1,19 @@
+generation
+download	vcs-signals-recent.db
+acquire
+graphql	query { rateLimit { remaining resetAt } }
+graphql	query { r0: repository(owner: "epiverse-trace", name: "cfr", followRenames: true) { id nameWithOwner isArchived isFork isMirror isDisabled createdAt } }
+graphql	query { nodes(ids: ["R_cfr", "R_linelist", "R_bqmm", "R_datatable", "R_goodpractice", "R_forcats"]) { ... on Repository {\n    id nameWithOwner stargazerCount forkCount\n    owner { __typename login id }\n    watchers { totalCount }\n    issues_open: issues(states: OPEN) { totalCount }\n    issues_closed: issues(states: CLOSED) { totalCount }\n    prs_open: pullRequests(states: OPEN) { totalCount }\n    prs_closed: pullRequests(states: CLOSED) { totalCount }\n    mergedPRs: pullRequests(states: MERGED) { totalCount }\n    releases { totalCount }\n    latestRelease { tagName publishedAt isPrerelease }\n    defaultBranchRef { target { ... on Commit { committedDate } } }\n    licenseInfo { spdxId }\n    repositoryTopics(first: 20) { nodes { topic { name } } }\n    isArchived isFork isMirror isDisabled\n    createdAt pushedAt updatedAt diskUsage\n    primaryLanguage { name }\n  } } }
+release_exists
+download	manifest.json
+download	vcs-signals-recent.db
+download	vcs-signals-2026.db
+download	vcs-signals-summary.db
+generation
+generation
+upload	vcs-signals-summary-prev.db
+upload	vcs-signals-2026.db
+upload	vcs-signals-recent.db
+upload	vcs-signals-summary.db
+upload	manifest.json
+generation

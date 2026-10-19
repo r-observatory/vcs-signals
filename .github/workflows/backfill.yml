@@ -34,6 +34,9 @@ jobs:
             any::jsonlite
             any::testthat
       - name: Run tests
+        # Runs from main skip the golden parity check, since main's code was checked on push; a dispatch from another branch still checks it.
+        env:
+          VCS_SKIP_GOLDEN_PARITY: ${{ github.ref == 'refs/heads/main' && '1' || '' }}
         run: Rscript tests/testthat.R
       - name: Ensure current release exists
         env:

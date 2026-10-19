@@ -16,6 +16,9 @@
 #   merge     -> reconcile node_id identity, reduce prior+incoming onsets, rebuild the
 #                summary rollups, and republish (one job)
 if (!exists("STARGAZER_PAGE"))       source("scripts/config.R")
+if (!exists("host_predicate"))   source("scripts/hosts.R")
+if (!exists("http_request"))   source("scripts/http.R")
+if (!exists("host_pacer"))     source("scripts/pacing.R")
 if (!exists("ensure_series_schema")) source("scripts/helpers.R")
 if (!exists("build_tree_query"))     source("scripts/github.R")
 if (!exists("gh_release_exists"))    source("scripts/update.R")   # default_io, gh_release_*, seed_working_db
@@ -279,7 +282,8 @@ run_enumerate_ai <- function(io, out_dir) {
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   .ai_state_guard(con, .ai_read_pipeline_state(io, file.path(out_dir, "_state")))
   rows <- DBI::dbGetQuery(con,
-    "SELECT repo_id, owner, name, node_id FROM repos WHERE host = 'github' AND status = 'active'")
+    sprintf("SELECT repo_id, owner, name, node_id FROM repos WHERE %s AND status = 'active'",
+            host_predicate(GITHUB_HOSTS)))
   roster <- data.frame(repo_id = rows$repo_id, owner = rows$owner, name = rows$name,
                        node_id = rows$node_id, done = 0L, stringsAsFactors = FALSE)
 
@@ -1088,7 +1092,8 @@ run_merge <- function(io, out_dir, parts_dir) {
   fail_list <- lapply(dev_parts, read_scan_failures)
   fails <- if (length(fail_list)) do.call(rbind, fail_list) else .fetch_failed_frame()
   active_n <- tryCatch(DBI::dbGetQuery(con,
-    "SELECT COUNT(*) n FROM repos WHERE host = 'github' AND status = 'active'")$n[1],
+    sprintf("SELECT COUNT(*) n FROM repos WHERE %s AND status = 'active'",
+            host_predicate(GITHUB_HOSTS)))$n[1],
     error = function(e) NA_integer_)
   per_doc <- function(q) length(unique(fails$repo_id[fails$query == q]))
   message(sprintf(paste0("ai merge: %d repositories failed a read this week (contents %d, activity %d, ",

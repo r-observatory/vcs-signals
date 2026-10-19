@@ -1,0 +1,38 @@
+download	vcs-signals-summary.db
+graphql	query { r0: repository(owner: "epiverse-trace", name: "cfr") {\n      stargazers(first: 100, orderBy: {field: STARRED_AT, direction: ASC}) {\n        pageInfo { endCursor hasNextPage }\n        edges { starredAt }\n      }\n    }\nr1: repository(owner: "kvenkita", name: "bqmm-r") {\n      stargazers(first: 100, orderBy: {field: STARRED_AT, direction: ASC}) {\n        pageInfo { endCursor hasNextPage }\n        edges { starredAt }\n      }\n    }\nr2: repository(owner: "ropensci-review-tools", name: "goodpractice") {\n      stargazers(first: 100, orderBy: {field: STARRED_AT, direction: ASC}) {\n        pageInfo { endCursor hasNextPage }\n        edges { starredAt }\n      }\n    } }
+graphql	query { r0: repository(owner: "epiverse-trace", name: "cfr") {\n      forks(first: 100, orderBy: {field: CREATED_AT, direction: ASC}) {\n        pageInfo { endCursor hasNextPage }\n        nodes { createdAt }\n      }\n    }\nr1: repository(owner: "kvenkita", name: "bqmm-r") {\n      forks(first: 100, orderBy: {field: CREATED_AT, direction: ASC}) {\n        pageInfo { endCursor hasNextPage }\n        nodes { createdAt }\n      }\n    }\nr2: repository(owner: "ropensci-review-tools", name: "goodpractice") {\n      forks(first: 100, orderBy: {field: CREATED_AT, direction: ASC}) {\n        pageInfo { endCursor hasNextPage }\n        nodes { createdAt }\n      }\n    } }
+graphql	query { r0: repository(owner: "epiverse-trace", name: "cfr") {\n      releases(first: 100, orderBy: {field: CREATED_AT, direction: ASC}) {\n        pageInfo { endCursor hasNextPage }\n        nodes { createdAt }\n      }\n    }\nr1: repository(owner: "kvenkita", name: "bqmm-r") {\n      releases(first: 100, orderBy: {field: CREATED_AT, direction: ASC}) {\n        pageInfo { endCursor hasNextPage }\n        nodes { createdAt }\n      }\n    }\nr2: repository(owner: "ropensci-review-tools", name: "goodpractice") {\n      releases(first: 100, orderBy: {field: CREATED_AT, direction: ASC}) {\n        pageInfo { endCursor hasNextPage }\n        nodes { createdAt }\n      }\n    } }
+graphql	query { r0: repository(owner: "epiverse-trace", name: "linelist") {\n      stargazers(first: 100, orderBy: {field: STARRED_AT, direction: ASC}) {\n        pageInfo { endCursor hasNextPage }\n        edges { starredAt }\n      }\n    }\nr1: repository(owner: "rdatatable", name: "data.table") {\n      stargazers(first: 100, orderBy: {field: STARRED_AT, direction: ASC}) {\n        pageInfo { endCursor hasNextPage }\n        edges { starredAt }\n      }\n    }\nr2: repository(owner: "tidyverse", name: "forcats") {\n      stargazers(first: 100, orderBy: {field: STARRED_AT, direction: ASC}) {\n        pageInfo { endCursor hasNextPage }\n        edges { starredAt }\n      }\n    } }
+graphql	query { repository(owner: "tidyverse", name: "forcats") {\n    stargazers(first: 100, orderBy: {field: STARRED_AT, direction: ASC}, after: "c3") {\n      pageInfo { endCursor hasNextPage }\n      edges { starredAt }\n    }\n  } }
+graphql	query { r0: repository(owner: "epiverse-trace", name: "linelist") {\n      forks(first: 100, orderBy: {field: CREATED_AT, direction: ASC}) {\n        pageInfo { endCursor hasNextPage }\n        nodes { createdAt }\n      }\n    }\nr1: repository(owner: "rdatatable", name: "data.table") {\n      forks(first: 100, orderBy: {field: CREATED_AT, direction: ASC}) {\n        pageInfo { endCursor hasNextPage }\n        nodes { createdAt }\n      }\n    }\nr2: repository(owner: "tidyverse", name: "forcats") {\n      forks(first: 100, orderBy: {field: CREATED_AT, direction: ASC}) {\n        pageInfo { endCursor hasNextPage }\n        nodes { createdAt }\n      }\n    } }
+graphql	query { r0: repository(owner: "epiverse-trace", name: "linelist") {\n      releases(first: 100, orderBy: {field: CREATED_AT, direction: ASC}) {\n        pageInfo { endCursor hasNextPage }\n        nodes { createdAt }\n      }\n    }\nr1: repository(owner: "rdatatable", name: "data.table") {\n      releases(first: 100, orderBy: {field: CREATED_AT, direction: ASC}) {\n        pageInfo { endCursor hasNextPage }\n        nodes { createdAt }\n      }\n    }\nr2: repository(owner: "tidyverse", name: "forcats") {\n      releases(first: 100, orderBy: {field: CREATED_AT, direction: ASC}) {\n        pageInfo { endCursor hasNextPage }\n        nodes { createdAt }\n      }\n    } }
+generation
+download	vcs-signals-recent.db
+release_exists
+download	manifest.json
+download	vcs-signals-recent.db
+download	vcs-signals-2026.db
+download	vcs-signals-summary.db
+release_exists
+download	manifest.json
+download	vcs-signals-recent.db
+download	vcs-signals-2026.db
+download	vcs-signals-summary.db
+generation
+generation
+upload	vcs-signals-summary-prev.db
+upload	vcs-signals-2023.db
+upload	vcs-signals-2025.db
+upload	vcs-signals-2017.db
+upload	vcs-signals-2024.db
+upload	vcs-signals-2026.db
+upload	vcs-signals-2014.db
+upload	vcs-signals-2021.db
+upload	vcs-signals-2016.db
+upload	vcs-signals-2018.db
+upload	vcs-signals-2020.db
+upload	vcs-signals-2022.db
+upload	vcs-signals-recent.db
+upload	vcs-signals-summary.db
+upload	manifest.json
+generation

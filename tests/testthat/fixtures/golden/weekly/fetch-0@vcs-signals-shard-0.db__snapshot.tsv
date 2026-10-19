@@ -1,0 +1,4 @@
+repo_id	commits_total	contributors_total	median_days_to_close_issue	median_days_to_close_pr	median_open_issue_age_days	top_contributor_commits	top_contributor_bot
+github.com/epiverse-trace/cfr	640	\N	25	7	72	\N	\N
+github.com/kvenkita/bqmm-r	\N	1	\N	\N	\N	\N	\N
+github.com/ropensci-review-tools/goodpractice	800	12	19	3	70	200	1

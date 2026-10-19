@@ -1,0 +1,2 @@
+repo_id	tool	provider	family	version	context_window	commits	first_seen	last_seen	window_complete
+github.com/ropensci-review-tools/goodpractice	claude	\N	Sonnet	4.5	\N	1	2026-02-02T11:00:00Z	2026-02-02T11:00:00Z	1

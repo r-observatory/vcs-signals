@@ -1,0 +1,5 @@
+type	name	tbl_name	sql
+index	sqlite_autoindex_roster_1	roster	\N
+index	sqlite_autoindex_roster_cran_1	roster_cran	\N
+table	roster	roster	CREATE TABLE roster (\n    repo_id TEXT PRIMARY KEY, owner TEXT NOT NULL, name TEXT NOT NULL,\n    node_id TEXT, done INTEGER NOT NULL DEFAULT 0,\n    commits_read_on TEXT, commits_read_through TEXT, commits_ruleset TEXT,\n    commits_history_complete INTEGER, prs_newest_created_at TEXT, prs_walk_complete INTEGER,\n    prs_walk_started_on TEXT, prs_walk_cursor TEXT)
+table	roster_cran	roster_cran	CREATE TABLE roster_cran (repo_id TEXT NOT NULL, package TEXT NOT NULL,\n    cran_version TEXT NOT NULL, PRIMARY KEY (repo_id, package))

@@ -47,8 +47,10 @@ PAGES_SUFFIX <- ".github.io"
 MIRROR_GITHUB_OWNERS <- c("cran", "bioc")   # exact github.com owner match
 MIRROR_DOMAINS       <- c("git.bioconductor.org")
 
-# Hosts we have an adapter for in v1.
+# Hosts we have an adapter for in v1. This sets repos.supported and routes nothing.
 SUPPORTED_HOSTS <- c("github")
+# Hosts whose repositories go to the GitHub collectors (resolve, gauges, weekly, backfill, AI).
+GITHUB_HOSTS <- c("github")
 
 # ---- GitHub forward-gauge collection + publishing ----
 GRAPHQL_ENDPOINT <- "https://api.github.com/graphql"
@@ -957,3 +959,6 @@ AI_DEEP_BUDGET_S <- 3.25 * 3600
 # The order the search pass works through each week, most urgent first.
 AI_WORK_PRIORITY <- c(onset = 1L, `account-count` = 2L, `window-hit` = 3L, `count-refresh` = 4L,
                       `re-ask` = 5L, campaign = 6L, `rule-new` = 7L, `never-asked` = 8L)
+
+# Seconds before curl gives up on one request (the GitLab transport, scripts/http.R).
+HTTP_TIMEOUT_S <- 20

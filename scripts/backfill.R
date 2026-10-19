@@ -16,6 +16,9 @@
 # below touch the network or disk, behind an injected io, mirroring
 # scripts/update.R's run_update().
 if (!exists("STARGAZER_PAGE"))      source("scripts/config.R")
+if (!exists("host_predicate"))   source("scripts/hosts.R")
+if (!exists("http_request"))   source("scripts/http.R")
+if (!exists("host_pacer"))     source("scripts/pacing.R")
 if (!exists("ensure_series_schema")) source("scripts/helpers.R")
 if (!exists("build_gauge_query"))    source("scripts/github.R")
 if (!exists("gh_release_exists"))    source("scripts/update.R")  # default_io, gh_release_*, seed_working_db
@@ -46,10 +49,9 @@ load_roster <- function(path) {
 
 # ---- enumerate ----------------------------------------------------------------
 #' Build the GitHub repo roster from the published summary shard: every
-#' repo_id with at least one star, restricted to github.com (the only host
-#' this backfill supports). owner/name are derived by splitting repo_id
-#' (host_domain/owner/name) rather than re-resolving, since the summary
-#' shard already carries a validated github.com repo_id.
+#' repo_id with at least one star, fork or release, on a GitHub host. owner/name
+#' are derived by splitting repo_id (host_domain/owner/name), never taken from
+#' repos, where a rename writes GitHub's new answer. GitLab gets no backfill.
 run_enumerate <- function(io, out_dir) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   if (!isTRUE(io$download("vcs-signals-summary.db", out_dir)))
@@ -59,9 +61,12 @@ run_enumerate <- function(io, out_dir) {
   con <- DBI::dbConnect(RSQLite::SQLite(), summary_path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
   rows <- DBI::dbGetQuery(con,
-    "SELECT repo_id, MAX(stars) AS stars FROM vcs_signals_summary
-      WHERE repo_id LIKE 'github.com/%'
-        AND (stars > 0 OR forks > 0 OR releases_total > 0) GROUP BY repo_id")
+    # The join only filters on host; a summary row always has its repos row in the shard.
+    sprintf("SELECT s.repo_id, MAX(s.stars) AS stars
+        FROM vcs_signals_summary s JOIN repos r ON r.repo_id = s.repo_id
+      WHERE %s
+        AND (s.stars > 0 OR s.forks > 0 OR s.releases_total > 0) GROUP BY s.repo_id",
+      host_predicate(GITHUB_HOSTS, "r.host")))
 
   parts <- strsplit(rows$repo_id, "/", fixed = TRUE)
   roster <- data.frame(
