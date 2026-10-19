@@ -13,6 +13,13 @@ test_that("weekly.R computes release facts from full history", {
   expect_true(any(grepl("compute_release_facts\\s*=\\s*TRUE", readLines(file.path(.scripts_dir, "weekly.R")))))
 })
 
+test_that("all three summary builders take a GitLab repository's licence from gitlab_license", {
+  for (f in c("update.R", "weekly.R", "ai_backfill.R")) {
+    src <- readLines(file.path(.scripts_dir, f))
+    expect_true(any(grepl("repo_attrs <- apply_gitlab_license(con, repo_attrs)", src, fixed = TRUE)), info = f)
+  }
+})
+
 test_that("the weekly and AI merges read the carried values through prior_repo_attrs", {
   for (f in c("weekly.R", "ai_backfill.R")) {
     src <- readLines(file.path(.scripts_dir, f))

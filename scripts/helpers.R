@@ -873,6 +873,10 @@ ensure_series_schema <- function(con) {
     CHECK (ended_on IS NULL OR ended_on >= last_seen)) WITHOUT ROWID")
   DBI::dbExecute(con, "CREATE UNIQUE INDEX IF NOT EXISTS ux_vrnh_open
     ON vcs_repo_name_history(node_id) WHERE ended_on IS NULL")
+  # Each GitLab repository's licence as the weekly job last read it, NULL where GitLab
+  # named none. GitLab's gauge query has no licence, so a summary's GitLab rows read it here.
+  DBI::dbExecute(con, "CREATE TABLE IF NOT EXISTS gitlab_license (
+    repo_id TEXT PRIMARY KEY, license TEXT, read_on TEXT NOT NULL) WITHOUT ROWID")
   # Dev-tooling presence snapshot, one wide row per repo. WITHOUT ROWID is deliberate (see
   # dev_tooling_create_sql): a repo_id point lookup is a single covering seek. The DDL is
   # config-derived so it cannot drift from classify_dev_tooling.
@@ -1112,6 +1116,28 @@ carry_repo_attrs <- function(fresh, prior, reset = FALSE) {
   out <- rbind(fresh, kept)
   rownames(out) <- NULL
   out
+}
+
+#' Store the weekly job's licence readings (repo_id, license, read_on). A reading replaces the
+#' stored licence, NA included, unless it is older than the stored one; a repository not read
+#' keeps its row.
+upsert_gitlab_license <- function(con, readings) {
+  if (is.null(readings) || !nrow(readings)) return(invisible(0L))
+  DBI::dbExecute(con, "INSERT INTO gitlab_license (repo_id, license, read_on) VALUES (?, ?, ?)
+    ON CONFLICT (repo_id) DO UPDATE SET license = excluded.license, read_on = excluded.read_on
+    WHERE excluded.read_on >= gitlab_license.read_on",
+    params = list(readings$repo_id, as.character(readings$license), readings$read_on))
+  invisible(nrow(readings))
+}
+
+#' `attrs` with each GitLab repository's licence from gitlab_license, NA where none was read.
+#' Every other row keeps its own.
+apply_gitlab_license <- function(con, attrs) {
+  gl <- DBI::dbGetQuery(con, sprintf("SELECT repo_id FROM repos WHERE %s", host_predicate(GITLAB_HOSTS)))$repo_id
+  lic <- DBI::dbGetQuery(con, "SELECT repo_id, license FROM gitlab_license")
+  on <- attrs$repo_id %in% gl
+  attrs$license[on] <- as.character(lic$license[match(attrs$repo_id[on], lic$repo_id)])
+  attrs
 }
 
 gauges_to_long <- function(snapshot, repo_map) {
@@ -2211,6 +2237,26 @@ build_release_notes <- function(summary, changed_shards, tag) {
   out
 }
 
+#' The rule for gitlab_license, which the weekly merge adds to and updates: a licence may change,
+#' but a row may leave only once its repository is no longer active.
+.regress_gitlab_license <- function(pc, nc) {
+  t <- "gitlab_license"
+  need <- c("repo_id", "license")
+  prev <- .gate_rows(pc, t); nxt <- .gate_rows(nc, t)
+  if (is.null(prev) || nrow(prev) == 0 || !all(need %in% names(prev))) return(character(0))
+  if (is.null(nxt) || !all(need %in% names(nxt)))
+    return(sprintf("%s: published without %s, so the gate cannot tell which licences were kept",
+                   t, paste(setdiff(need, names(nxt)), collapse = ", ")))
+  # A repos table the gate cannot read explains nothing.
+  repos <- .gate_rows(nc, "repos")
+  active <- if (is.null(repos) || !all(c("repo_id", "status") %in% names(repos))) rep(TRUE, nrow(prev)) else
+    prev$repo_id %in% repos$repo_id[repos$status %in% "active"]
+  lost <- !(prev$repo_id %in% nxt$repo_id) & active
+  if (!any(lost)) return(character(0))
+  sprintf("%s: %d row(s) are gone while the repository is still active: %s",
+          t, sum(lost), .gate_show(prev$repo_id[lost]))
+}
+
 #' Refuse to publish a summary that lost ground against the one already out.
 #'
 #' The published summary is a single asset, uploaded with --clobber, so a bad
@@ -2264,6 +2310,7 @@ summary_regressions <- function(prev_path, next_path, tol = 0.02) {
       vcs_dev_tooling_rules  = character(0),
       vcs_repo_owner         = .regress_repo_owner(pc, nc),
       vcs_repo_name_history  = .regress_repo_name_history(pc, nc),
+      gitlab_license         = .regress_gitlab_license(pc, nc),
       .regress_row_count(t, pc, nc, tol)))
   }
 

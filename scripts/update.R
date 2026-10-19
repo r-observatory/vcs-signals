@@ -393,6 +393,8 @@ run_update <- function(io, out_dir, opts = list()) {
     repo_attrs <- merge(repos_all[, c("repo_id", "first_seen", "last_seen")],
                         carry_repo_attrs(fresh, prior_repo_attrs(con), reset = reset),
                         by = "repo_id", all.x = TRUE)
+    # GitLab's gauges have no licence; the weekly job's reading stands.
+    repo_attrs <- apply_gitlab_license(con, repo_attrs)
 
     # Built from the FULL post-upsert series_latest (every repo, including
     # ones deferred this run), not just this run's snapshot, so a deferred

@@ -42,6 +42,7 @@ test_that("summary_integrity_core reports filename, bytes, sha256, tables, compl
   # tables maps EVERY user table (populated and empty schema tables alike) to
   # its row count, ordered by name, excluding sqlite_% internals.
   expect_equal(core$tables, list(
+    gitlab_license      = 0L,
     pipeline_state      = 0L,
     repo_package_links  = 0L,
     repo_packages       = 3L,
@@ -195,6 +196,7 @@ test_that("every table the pipeline writes reaches the published summary with it
     VALUES ('github.com/o/r', 'R_1', 'o', 'Organization', 'O_1', 'o/r', '2026-09-25')")
   DBI::dbExecute(con, "INSERT INTO vcs_repo_name_history VALUES
     ('R_1', 1, 'o/r', 'O_1', '2026-09-25', '2026-09-25', 0, NULL)")
+  DBI::dbExecute(con, "INSERT INTO gitlab_license VALUES ('gitlab.com/g/p', 'MIT', '2026-10-18')")
 
   out <- tempfile("pub_"); dir.create(out)
   rel <- tempfile("rel_"); dir.create(rel)
@@ -903,6 +905,7 @@ test_that("a publish and a reseed keep the extra tables, both ways round", {
     VALUES ('github.com/o/r', 'R_1', 'o', 'Organization', 'O_1', 'o/r', '2026-09-25')")
   DBI::dbExecute(con, "INSERT INTO vcs_repo_name_history VALUES
     ('R_1', 1, 'o/r', 'O_1', '2026-09-25', '2026-09-25', 0, NULL)")
+  DBI::dbExecute(con, "INSERT INTO gitlab_license VALUES ('gitlab.com/g/p', 'MIT', '2026-10-18')")
 
   io <- local_release_io(remote)
   publish(io, con, out, "v1", "live", force_full = TRUE, base_generation = "")

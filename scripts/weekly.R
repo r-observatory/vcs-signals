@@ -183,8 +183,9 @@ run_weekly_enumerate <- function(io, out_dir) {
 #' never be clobbered or spuriously re-emitted by this pass; snapshot_long is
 #' likewise built from WEEKLY_METRICS alone. A repo unchanged since the last
 #' weekly run contributes no new signals_series row for that metric. The GitLab
-#' cursor state in parts_dir, when fetch-gitlab supplied it, is uploaded after
-#' the publish.
+#' shard's licence readings go into gitlab_license, which every summary build
+#' reads for GitLab rows. The GitLab cursor state in parts_dir, when
+#' fetch-gitlab supplied it, is uploaded after the publish.
 run_merge <- function(io, out_dir, parts_dir) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   working_path <- file.path(out_dir, "_weekly_working.db")
@@ -267,15 +268,25 @@ run_merge <- function(io, out_dir, parts_dir) {
     DBI::dbExecute(con, "DELETE FROM series_latest WHERE metric = 'top_contributor_bot' AND repo_id = ?",
                    params = list(untyped))
 
+  # The GitLab job's licence readings. A repository it did not read keeps its stored licence.
+  readings <- lapply(parts, function(p) {
+    pcon <- DBI::dbConnect(RSQLite::SQLite(), p)
+    on.exit(DBI::dbDisconnect(pcon), add = TRUE)
+    if (DBI::dbExistsTable(pcon, "license")) DBI::dbReadTable(pcon, "license")
+  })
+  n_licences <- upsert_gitlab_license(con, do.call(rbind, readings))
+
   # Rebuild the summary so commits_total/contributors_total populate. No
   # repository is gauged this run, so every REPO_ATTR_COLS value is carried
-  # forward from the prior summary row, as run_update does for one it did not reach.
+  # forward from the prior summary row, as run_update does for one it did not reach,
+  # except a GitLab row's licence, which comes from gitlab_license.
   repos_all <- DBI::dbReadTable(con, "repos")
   rp_all <- DBI::dbReadTable(con, "repo_packages")
   series_all <- DBI::dbGetQuery(con, "SELECT repo_id, date, metric, value FROM signals_series")
   latest_all <- DBI::dbGetQuery(con, "SELECT repo_id, metric, value FROM series_latest")
   repo_attrs <- merge(repos_all[, c("repo_id", "first_seen", "last_seen")], prior_repo_attrs(con),
                       by = "repo_id", all.x = TRUE)
+  repo_attrs <- apply_gitlab_license(con, repo_attrs)
 
   ai_all <- if (DBI::dbExistsTable(con, "vcs_ai_signals")) DBI::dbReadTable(con, "vcs_ai_signals") else NULL
   go_live <- DBI::dbGetQuery(con, "SELECT value FROM pipeline_state WHERE key = 'go_live'")$value
@@ -288,8 +299,8 @@ run_merge <- function(io, out_dir, parts_dir) {
   if (nrow(summary_df) > 0) DBI::dbWriteTable(con, "vcs_signals_summary", summary_df, append = TRUE)
 
   touched_years <- unique(substr(mat$series_rows$date, 1, 4))
-  message(sprintf("weekly merge: %d shard partials, %d repos snapshotted, %d changed rows, %d year(s) touched",
-                  length(parts), nrow(snapshot), n_inserted, length(touched_years)))
+  message(sprintf("weekly merge: %d shard partials, %d repos snapshotted, %d changed rows, %d year(s) touched, %d GitLab licence(s) read",
+                  length(parts), nrow(snapshot), n_inserted, length(touched_years), n_licences))
 
   res <- publish(io, con, out_dir, tag = "current", source_kind = "live", touched_years = touched_years,
                  base_generation = attr(seed, "generation"))

@@ -957,6 +957,8 @@ PB,amazonq,genuine,"No pull request opened by a maintainer from a branch Amazon 
 # seeded, and once a package has left CRAN or moved its URL it is the only record
 # anywhere of which repository the package was. A path that dropped it would
 # lose those links for good, because nothing resolves a delisted package again.
+# gitlab_license is written only by the weekly merge, and every other publish
+# carries it so a GitLab licence outlives the daily runs.
 # vcs_repo_owner stays the last entry; tables added later go before it.
 SUMMARY_EXTRA_TABLES <- c("vcs_ai_models", "vcs_ai_rule_inventory",
                           "vcs_ai_silent_channels", "repo_package_links",
@@ -964,7 +966,7 @@ SUMMARY_EXTRA_TABLES <- c("vcs_ai_models", "vcs_ai_rule_inventory",
                           "vcs_ai_repo_reads", "vcs_ai_account_counts", "vcs_ai_search_log",
                           "vcs_ai_search_coverage", "vcs_ai_review_signals",
                           "vcs_ai_outside_prs", "vcs_ai_ruleset_history",
-                          "vcs_repo_name_history", "vcs_repo_owner")
+                          "vcs_repo_name_history", "gitlab_license", "vcs_repo_owner")
 
 # Package-to-repository links this pipeline published before it kept them. Built
 # from every surviving copy of what it published: the vcs_signals_summary in a
