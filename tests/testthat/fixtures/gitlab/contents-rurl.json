@@ -1,0 +1,325 @@
+{
+  "data": {
+    "projects": {
+      "nodes": [
+        {
+          "id": "gid://gitlab/Project/85027322",
+          "fullPath": "bart-turczynski/rurl",
+          "isForked": false,
+          "forkedFrom": null,
+          "ciConfigPathOrDefault": ".gitlab-ci.yml",
+          "pagesDeployments": {
+            "count": 1
+          },
+          "repository": {
+            "rootRef": "main",
+            "empty": false,
+            "root": {
+              "trees": {
+                "nodes": [
+                  {
+                    "name": ".fossa"
+                  },
+                  {
+                    "name": ".github"
+                  },
+                  {
+                    "name": ".gitlab"
+                  },
+                  {
+                    "name": ".oss-scanner"
+                  },
+                  {
+                    "name": "R"
+                  },
+                  {
+                    "name": "analysis"
+                  },
+                  {
+                    "name": "design"
+                  },
+                  {
+                    "name": "inst"
+                  },
+                  {
+                    "name": "man"
+                  },
+                  {
+                    "name": "pkgdown"
+                  },
+                  {
+                    "name": "scripts"
+                  },
+                  {
+                    "name": "tests"
+                  },
+                  {
+                    "name": "tools"
+                  },
+                  {
+                    "name": "vignettes"
+                  }
+                ]
+              },
+              "blobs": {
+                "nodes": [
+                  {
+                    "name": ".Rbuildignore"
+                  },
+                  {
+                    "name": ".bestpractices.json"
+                  },
+                  {
+                    "name": ".fossa.yml"
+                  },
+                  {
+                    "name": ".gitignore"
+                  },
+                  {
+                    "name": ".gitlab-ci.yml"
+                  },
+                  {
+                    "name": ".lintr"
+                  },
+                  {
+                    "name": ".pre-commit-config.yaml"
+                  },
+                  {
+                    "name": ".zenodo.json"
+                  },
+                  {
+                    "name": "ACKNOWLEDGMENTS.md"
+                  },
+                  {
+                    "name": "AGENTS.md"
+                  },
+                  {
+                    "name": "ARCHITECTURE.md"
+                  },
+                  {
+                    "name": "CITATION.cff"
+                  },
+                  {
+                    "name": "CLAUDE.md"
+                  },
+                  {
+                    "name": "CODE_OF_CONDUCT.md"
+                  },
+                  {
+                    "name": "CONTRIBUTING.md"
+                  },
+                  {
+                    "name": "CRAN-SUBMISSION"
+                  },
+                  {
+                    "name": "DESCRIPTION"
+                  },
+                  {
+                    "name": "LICENSE"
+                  },
+                  {
+                    "name": "LICENSE.md"
+                  },
+                  {
+                    "name": "LICENSE.note"
+                  },
+                  {
+                    "name": "NAMESPACE"
+                  },
+                  {
+                    "name": "NEWS.md"
+                  },
+                  {
+                    "name": "README.Rmd"
+                  },
+                  {
+                    "name": "README.md"
+                  },
+                  {
+                    "name": "RELEASE_NOTES_v1.md"
+                  },
+                  {
+                    "name": "SECURITY-INSIGHTS.yml"
+                  },
+                  {
+                    "name": "SECURITY.md"
+                  },
+                  {
+                    "name": "_pkgdown.yml"
+                  },
+                  {
+                    "name": "codemeta.json"
+                  },
+                  {
+                    "name": "cran-comments.md"
+                  },
+                  {
+                    "name": "rurl.Rproj"
+                  }
+                ]
+              }
+            },
+            "github": {
+              "trees": {
+                "nodes": [
+                  {
+                    "name": "ISSUE_TEMPLATE"
+                  }
+                ]
+              },
+              "blobs": {
+                "nodes": [
+                  {
+                    "name": "pull_request_template.md"
+                  }
+                ]
+              }
+            },
+            "workflows": {
+              "trees": {
+                "nodes": []
+              },
+              "blobs": {
+                "nodes": []
+              }
+            },
+            "githubAgents": {
+              "trees": {
+                "nodes": []
+              },
+              "blobs": {
+                "nodes": []
+              }
+            },
+            "claude": {
+              "trees": {
+                "nodes": []
+              },
+              "blobs": {
+                "nodes": []
+              }
+            },
+            "agents": {
+              "trees": {
+                "nodes": []
+              },
+              "blobs": {
+                "nodes": []
+              }
+            },
+            "inst": {
+              "trees": {
+                "nodes": [
+                  {
+                    "name": "bench"
+                  },
+                  {
+                    "name": "examples"
+                  }
+                ]
+              },
+              "blobs": {
+                "nodes": [
+                  {
+                    "name": "CITATION"
+                  },
+                  {
+                    "name": "LICENSE.psl"
+                  },
+                  {
+                    "name": "WORDLIST"
+                  }
+                ]
+              }
+            },
+            "vignettes": {
+              "trees": {
+                "nodes": []
+              },
+              "blobs": {
+                "nodes": [
+                  {
+                    "name": ".gitignore"
+                  },
+                  {
+                    "name": "getting-started.Rmd"
+                  },
+                  {
+                    "name": "url-standard.Rmd"
+                  }
+                ]
+              }
+            },
+            "site": {
+              "trees": {
+                "nodes": []
+              },
+              "blobs": {
+                "nodes": []
+              }
+            },
+            "posit": {
+              "trees": {
+                "nodes": []
+              },
+              "blobs": {
+                "nodes": []
+              }
+            },
+            "positai": {
+              "trees": {
+                "nodes": []
+              },
+              "blobs": {
+                "nodes": []
+              }
+            },
+            "gemini": {
+              "trees": {
+                "nodes": []
+              },
+              "blobs": {
+                "nodes": []
+              }
+            },
+            "gitlab": {
+              "trees": {
+                "nodes": [
+                  {
+                    "name": "issue_templates"
+                  },
+                  {
+                    "name": "merge_request_templates"
+                  }
+                ]
+              },
+              "blobs": {
+                "nodes": []
+              }
+            },
+            "blobs": {
+              "nodes": [
+                {
+                  "path": "DESCRIPTION",
+                  "rawTextBlob": "Package: rurl\nType: Package\nTitle: Parse, Clean, and Normalize URLs\nVersion: 3.1.0.9000\nLanguage: en-US\nAuthors@R:\n    person(\"Bart\", \"Turczynski\", email = \"<email>\", role = c(\"aut\", \"cre\", \"cph\"),\n           comment = c(ORCID = \"0000-0002-8788-7980\"))\nDescription: A lightweight toolkit for extracting structured information from URLs.\n    Includes functions for parsing, normalizing protocols, extracting domains, and constructing clean URLs.\n    Domain and public-suffix extraction is delegated to the 'pslr' package,\n    which implements the Public Suffix List from <https://publicsuffix.org>.\n    Punycode and IDNA encoding is handled by the 'punycoder' package,\n    and IP address facts by the 'raddr' package.\nLicense: MIT + file LICENSE\nEncoding: UTF-8\nRoxygen: list(markdown = TRUE)\nCollate:\n    'rurl-package.R'\n    'status-constants.R'\n    'utils.R'\n    'percent-coding.R'\n    'parse-state.R'\n    'query-denylist.R'\n    'domain.R'\n    'path-query.R'\n    'parse-web.R'\n    'parse-phases.R'\n    'parse.R'\n    'verdicts.R'\n    'profiles.R'\n    'diagnostics.R'\n    'accessors.R'\n    'email-diagnostics.R'\n    'host-policy.R'\n    'scheme-policy.R'\n    'canonical_join.R'\n    'resolve.R'\n    'serialize.R'\n    'format.R'\n    'url-key.R'\n    'url-join.R'\n    'zzz.R'\nImports:\n    utils,\n    stringi,\n    punycoder (>= 1.2.1),\n    pslr (>= 1.1.1),\n    raddr (>= 0.1.2)\nURL: https://bart-turczynski.gitlab.io/rurl/,\n    https://gitlab.com/bart-turczynski/rurl,\n    https://bart-turczynski.r-universe.dev/rurl,\n    https://CRAN.R-project.org/package=rurl\nBugReports: https://gitlab.com/bart-turczynski/rurl/-/issues\nX-schema.org-keywords: url-parsing, url-parser, url-normalization,\n    url-cleaning, url-cleaner, url-checker, domain-extraction,\n    domain-name-detection, domain-name-checker, public-suffix, tld, tlds,\n    tld-extraction, tld-checker, tld-verification, idna, punycode, uri, url,\n    seo, web-scraping\nSuggests:\n    testthat (>= 3.0.0),\n    knitr,\n    rmarkdown,\n    withr,\n    pkgdown,\n    oysteR,\n    rosv,\n    jsonlite\nConfig/testthat/edition: 3\nDepends:\n    R (>= 4.1.0)\nVignetteBuilder: knitr\nConfig/roxygen2/version: 8.0.0\n"
+                },
+                {
+                  "path": ".gitignore",
+                  "rawTextBlob": "# macOS system files\n.DS_Store\n\n# Quarto project files\n.quarto\n\n# R history and session data\n.Rhistory\n.RData\n.Ruserdata\n\n# RStudio project files and user settings\n.Rproj.user/\n*.Rproj\n\n# OAuth credentials (e.g., for API access)\n.httr-oauth\n\n# Build artifacts created by R CMD check\n*.tar.gz\n*.Rcheck/\n.tmp/\ntmp/\n_scratch/\nworklog/\ncovr_report.html\ncoverage.html\ncovr_zero.rds\n\n# R package build ignore file\n.Rbuildignore\n*.pdf\n\n# Revdep\nrevdep/\n\n# Github\n# .github/\n.Rproj.user\n.Rdata\ninst/doc\n/doc/\n/Meta/\n# Ignore everything in doc/\ndoc/*\n\n# But do NOT ignore the vignette source\n!doc/getting-started.Rmd\n\n# cran-comments.md is deliberately TRACKED. It is excluded from the built\n# tarball by .Rbuildignore, so tracking it cannot reach CRAN; what it buys is a\n# diff, a history, and a copy on the backup mirror. Untracked, it drifted eleven\n# releases without anyone seeing it happen (RURL-ladruqhn).\nreport.html\nLOCAL_WORKFLOW_NOTES.md\n\n# HTML widget assets (generated; excluded from package build via .Rbuildignore)\n/lib/\n\n# pkgdown site (generated). _pkgdown.yml sets no `destination:`, so a local\n# build_site() writes here. Nothing needs the built site in git: it is\n# published from a build, never from a committed directory. Hand-written\n# docs live in design/ -- never put a file you want to keep under docs/,\n# because a clean build_site() deletes it (design/README.md says the same).\n/docs/\n\n# Fiberplane local issue tracking\n.fp/\n.positai\n"
+                },
+                {
+                  "path": ".Rbuildignore",
+                  "rawTextBlob": "^.*\\.Rproj$\n^\\.Rproj\\.user$\n^LICENSE\\.md$\n^README\\.Rmd$\n^README\\.md$\n^README\\.html$\n^data-raw$\n^_pkgdown\\.yml$\n^pkgdown$\n^docs$\n^\\.github$\n^\\.gitlab$\n^\\.git$\n^doc$\n^Meta$\n^cran-comments\\.md$\n^CRAN-SUBMISSION$\n^CLAUDE\\.md$\n^AGENTS\\.md$\n^ARCHITECTURE\\.md$\n^design$\n^\\.claude$\n^\\.fp$\n^lib$\n^RELEASE_NOTES_v1\\.md$\n^report\\.html$\n^LOCAL_WORKFLOW_NOTES\\.md$\n^\\.lintr$\n^\\.tmp$\n^tmp$\n^\\.Rhistory$\n^\\.DS_Store$\n^CONTRIBUTING\\.md$\n^CODE_OF_CONDUCT\\.md$\n^\\.pre-commit-config\\.yaml$\n^\\.gitlab-ci\\.yml$\n^_scratch$\n^analysis$\n^inst/bench/rfc3986-probes\\.csv$\n^inst/bench/make-wpt-fixture\\.py$\n^worklog$\n^.*coverage\\.html$\n^tools/coverage-report\\.R$\n^\\.positai$\n^codemeta\\.json$\n^CITATION\\.cff$\n^ACKNOWLEDGMENTS\\.md$\n^\\.zenodo\\.json$\n^\\.fossa\\.yml$\n^\\.fossa$\n^\\.bestpractices\\.json$\n^\\.oss-scanner$\n^SECURITY\\.md$\n^SECURITY-INSIGHTS\\.yml$\n^tools/determinism$\n^tools/verify-manifest\\.yml$\n^tools/oracle-audit-rfc3986\\.R$\n^tools/oracle-provenance-gate\\.R$\n^tools/cache-doc-consistency\\.R$\n^tools/release-rule-check\\.R$\n^tools/status-doc-consistency\\.R$\n^tools/diagnostics-doc-consistency\\.R$\n^tools/deferral-gate\\.R$\n^tools/curl-zero-gate\\.R$\n^tools/pin-pages-md-filter\\.R$\n^tools/build-favicons\\.sh$\n# The citation gate ported from seor (design/adr/0002 there). Not part\n# of the installable package; without this, --as-cran reports it as a\n# non-standard top-level directory.\n^scripts$\n# The deep-check CI library. The .rocker template points R_LIBS_USER here\n# and caches it, so R CMD build packed every installed dependency into the\n# tarball and --as-cran failed on their executables: deep-check pipeline\n# 2909433500, SEOR-nxycpzlk. punycoder carries the same entry. Keep these\n# lines free of unbalanced brackets: R 4.1 reads comment lines as patterns.\n^\\.Rlibs$\n"
+                },
+                {
+                  "path": ".gitlab-ci.yml",
+                  "rawTextBlob": "# GitLab CI — the server-side gate.\n#\n# WHY THIS EXISTS. Every gate this repository owns ran in one place, GitHub\n# Actions, and when `origin` moved to GitLab none of them ran anywhere. The local\n# pre-push hook was the only enforcement left, and a hook is opt-in per clone\n# (`pre-commit install`) — so \"the history is green\" meant nothing about whether\n# anything had checked it.\n#\n# THE JOB LIST IS NOT WRITTEN HERE, DELIBERATELY. The `gates` and `check` jobs\n# below shell out to `tools/verify.R`, which derives the gate list from\n# `tools/verify-manifest.yml` at run time. Transcribing the gates into this\n# file would create exactly the drift that script exists to prevent: add a\n# gate to the manifest and a hand-maintained copy is silently incomplete from\n# that moment. The manifest therefore stays the single source of truth for\n# WHAT the gates are, regardless of which forge runs them -- it is\n# forge-neutral (RURL-vunvxusf moved it out of `.github/workflows/`), and this\n# file consumes it by running the script, never by copying it.\n#\n# WHAT RUNS WHEN (the fleet standard, seor design/fleet-standard.md):\n#   every pipeline the `workflow:` block admits (a push to `main`, a tag, a\n#   hand-started pipeline, a schedule):\n#     gates            -- `tools/verify.R --gates` and the news-version gate.\n#     citation-version -- CITATION.cff/.zenodo.json and the BugReports split.\n#     check            -- `tools/verify.R`, the whole local gate: the gates,\n#                         lint, spelling, `R CMD check --as-cran` through\n#                         rcmdcheck, failing on a WARNING, and the test\n#                         suite under LC_ALL=C. Not its docs stage, which\n#                         `docs-drift` runs.\n#     docs-drift       -- man/, NAMESPACE and DESCRIPTION against the pinned\n#                         roxygen2.\n#     coverage         -- covr: the badge regex, a cobertura report, and a\n#                         failure below 95%.\n#   `main` only:\n#     pages            -- the pkgdown site, once `check` has passed.\n#     fossa            -- `fossa analyze` (push only), the FOSSA scan.\n#   the `deep-check` schedule only:\n#     full-check       -- R release, oldrel and devel on rocker/r-ver.\n#     floor-check      -- the declared R floor, from a dated snapshot.\n#   the `dependency-audit` schedule only:\n#     osv-audit, security-audit.\n#\n# `check` and `pages` used to run only on a tag or a hand-started pipeline,\n# because GitLab.com's shared-runner minutes ran out (RURL-psqmlgjf). The fleet\n# now runs on its own self-hosted runners (seor\n# design/adr/0003-fleet-ci-runs-on-self-hosted-runners.md), and the fleet\n# standard puts `R CMD check --as-cran`, coverage and the Pages deploy on every\n# push to `main`.\n#\n# NOT COVERED HERE, so nobody reads a green pipeline as more than it is: the\n# cross-platform matrix, rhub and the determinism matrix. Their GitHub\n# workflows were deleted (RURL-vunvxusf); the determinism matrix is kept as a\n# record under `tools/determinism/gha/`, and none of them runs anywhere.\n\n# Before pushing a change to this file, run `glab ci lint .gitlab-ci.yml`. An\n# unquoted `key: value` inside a script entry makes YAML read the `: ` as a\n# mapping and GitLab rejects the whole config, creating ZERO jobs — which\n# surfaces in the REST API as a bare \"failed\" pipeline with `yaml_errors: null`\n# and no failure reason. Only GraphQL `failureReason` names it.\n\n# PAUSED 2026-08-08 (RURL-psqmlgjf), RE-ENABLED 2026-09-03 (RURL-utsbwfvc).\n# The pause was for GitLab.com's free-tier compute allowance, which no longer\n# limits this project: every job runs on the fleet's self-hosted runners\n# (`tags: [local-docker]` under `default:` below; SEOR-gpafxhua,\n# SEOR-hhtzaknn). The `workflow:` block below limits how many pipelines fire,\n# not compute (SEOR-bmgkzhvy).\n#\n# `tools/local-ci.sh` still runs these jobs in this image against a clean clone\n# on demand (`--all origin/main` after a merge); it is the pull-based fallback,\n# not a replacement for the per-push server-side run.\n\n# ONE PIPELINE PER MERGE, NOT THREE (SEOR-bmgkzhvy). A branch pipeline and a\n# merge-request pipeline used to fire alongside the pipeline on `main` for\n# every slice -- three pipelines testing at most two distinct trees, on a\n# fleet whose CI runs on self-hosted Docker runners on one Mac, not GitLab.com\n# shared runners: `concurrent = 4` in `~/.gitlab-runner/config.toml`, a number\n# this fleet owns and can change, not a platform limit (SEOR-gpafxhua;\n# verified live and recorded in seor's\n# design/adr/0003-fleet-ci-runs-on-self-hosted-runners.md). The branch\n# pipeline is worse than redundant: the standing slice flow (agent-workflow skill)\n# deletes the branch at merge before the runner starts it, so it dies at\n# `get_sources` with exit 128 and leaves a red mark that represents nothing.\n# The merge-request pipeline is worse than that: it can outlive its own MR and\n# hold the runner's only slot for a full check run, blocking the `main`\n# pipeline that actually matters. Neither pipeline ever gated a merge here --\n# `only_allow_merge_if_pipeline_succeeds` is false on this project, and `main`\n# is a protected branch (Maintainer-only push/merge) regardless of CI status --\n# so dropping both costs no verification.\n#\n# COST, STATED PLAINLY: a feature-branch push now gets no CI at all, and\n# neither does an API-triggered pipeline started against a non-default branch\n# -- both fall through to the final `when: never` below. rurl had no job keyed\n# on `merge_request_event` before this change, so no job's own `rules:` needed\n# to move -- only which pushes get a pipeline at all changed.\n#\n# THE ONE EXCEPTION is a `web` pipeline, i.e. one a human started from Build >\n# Pipelines > Run pipeline against a ref of their choosing. That is the escape\n# hatch for getting a server-side answer about a branch BEFORE merging it, and\n# it is safe to admit precisely because it cannot fire on its own: the problem\n# above was entirely push- and merge-request-driven. It reaches `gates`,\n# `citation-version` and `check`; `pages` is pinned to the default branch, so\n# the hatch can verify a branch but never publish one (SEOR-bmgkzhvy).\nworkflow:\n  rules:\n    - if: $CI_PIPELINE_SOURCE == \"merge_request_event\"\n      when: never\n    - if: $CI_COMMIT_TAG\n    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH\n    - if: $CI_PIPELINE_SOURCE == \"web\"\n    - when: never\n\nstages:\n  - gates\n  - check\n  - deploy\n  - audit\n\n# Every job names the runner pool it depends on: the fleet's self-hosted\n# Docker runners all carry `local-docker` (with run_untagged still true), so a\n# job never falls back to a GitLab.com shared runner (SEOR-hhtzaknn).\ndefault:\n  image: r-base:latest\n  interruptible: true\n  tags: [local-docker]\n\n# Debian's r-cran-* packages install in about a second; install.packages() would\n# compile and cost minutes. Only what the gates actually need.\n.gate_deps: &gate_deps\n  - apt-get update -qq\n  - apt-get install -y --no-install-recommends r-cran-yaml r-cran-digest r-cran-jsonlite\n\n# The check stage needs the package's real dependency tree. Everything except\n# the two siblings ships as a Debian binary, so this stays apt-fast instead of\n# compiling stringi from source. Verified present in r-base:latest, not assumed.\n#\n# THE ASSERTION AT THE END IS LOAD-BEARING, so do not drop it as belt-and-braces.\n# `install.packages()` reports a failed install as a WARNING and exits 0. The\n# first run of this stage therefore installed NOTHING, exited clean, and let\n# verify.R run against an empty library -- which reported three failures\n# (lintr, R CMD build, testthat) that had nothing to do with the code. The\n# job must die where the dependency is missing, not later wearing the costume\n# of a product defect.\n#\n# knitr and rmarkdown were absent from the original list entirely, which is its\n# own lesson: DESCRIPTION declares `VignetteBuilder: knitr`, and `R CMD build`\n# re-renders both vignettes, so the build cannot even start without them.\n.check_deps: &check_deps\n  - apt-get update -qq\n  - 'apt-get install -y --no-install-recommends\n     r-cran-yaml r-cran-digest r-cran-jsonlite r-cran-curl r-cran-stringi\n     r-cran-testthat r-cran-pkgload r-cran-lintr r-cran-rcmdcheck\n     r-cran-knitr r-cran-rmarkdown r-cran-pkgdown r-cran-withr r-cran-spelling\n     r-cran-rcpp pandoc qpdf'\n  # hunspell from CRAN, over the r-cran-hunspell that r-cran-spelling pulls in\n  # (RURL-czvqosis). Debian's build is +dfsg: it drops the bundled dictionaries\n  # and reads the system en_US.aff, whose `WORDCHARS 0123456789` keeps digits\n  # inside a token -- so \"PV1\" and \"sha256\" were checked whole here but as \"PV\"\n  # and \"sha\" everywhere else, and 61 words passed locally and failed here. The\n  # CRAN build ships the dictionaries every other machine checks against, and\n  # installs into /usr/local/lib/R/site-library, which comes first on\n  # .libPaths(). A failed install leaves Debian's build and the spelling step\n  # red, never green by accident. r-cran-rcpp above spares compiling Rcpp.\n  - 'Rscript -e ''install.packages(\"hunspell\")'''\n  # Not packaged by Debian, all on CRAN. oysteR and rosv are audit-only tools\n  # that nothing here calls -- but `R CMD check` treats a missing Suggests as an\n  # ERROR (\"the suggested packages are required for a complete check\"), and they\n  # cost 27s together. Installing them keeps the check at full strength, which\n  # is worth more than the seconds saved by _R_CHECK_FORCE_SUGGESTS_=false.\n  # rlang and vctrs are named although Debian ships them: raddr needs rlang\n  # >= 1.1.7 and vctrs >= 0.7.0, and install.packages() does not upgrade an\n  # installed dependency that is too old, so the CRAN copies must be asked for.\n  - 'Rscript -e ''install.packages(c(\"rlang\", \"vctrs\", \"raddr\", \"punycoder\", \"pslr\", \"oysteR\", \"rosv\"))'''\n  # DERIVED FROM DESCRIPTION, not transcribed -- same reason the gate list is.\n  # A hand-copied dependency list is one more thing to forget: add a Suggests\n  # and `R CMD check` starts ERRORing in CI with a hand-copy that is silently\n  # incomplete from that moment. Reading Imports + Suggests means a new\n  # dependency fails here, loudly, NAMING itself -- which tells whoever added it\n  # exactly what to put in the apt line above (the only half that must stay\n  # hand-written, because Debian's package names are not derivable from CRAN's).\n  #\n  # The version-bound stripper is spelled \"[(].*\" rather than an escaped paren\n  # on purpose: a backslash here crosses YAML *and* the shell before R sees it,\n  # and loses a level on the way. A character class needs no escaping in any of\n  # the three.\n  - 'Rscript -e ''d <- read.dcf(\"DESCRIPTION\", c(\"Imports\", \"Suggests\")); p <- trimws(sub(\"[(].*\", \"\", unlist(strsplit(d[!is.na(d)], \",\")))); p <- unique(c(p[nzchar(p)], \"pkgload\", \"lintr\", \"rcmdcheck\", \"spelling\")); m <- p[!vapply(p, requireNamespace, logical(1), quietly = TRUE)]; if (length(m)) stop(\"missing dependencies: \", paste(m, collapse = \", \")); cat(\"all\", length(p), \"dependencies present\\n\")'''\n\n# pandoc is PINNED in every job that runs R, as the fleet standard requires\n# (seor design/fleet-standard.md, \"CI on every push to `main`\"; SEOR-egfbijyi,\n# SEOR-dpjdwhbi). Its markdown writer reflows text and pads tables differently\n# between versions, so README.md is byte-stable only under the pandoc that knit\n# it, and the vignettes and the pkgdown site render with it too. `gates`,\n# `check`, `coverage`, `pages` and `full-check` splice this list into their\n# script AFTER their apt install, never before it: r-base:latest's Debian\n# pandoc is 3.11 (2026-10-04), and installing it after the pin would fail on\n# the hold below (it would replace the pin without one). `dpkg -i` downgrades\n# over it cleanly.\n#\n# AN ANCHORED LIST, NOT A TEMPLATE, and the pin a shell assignment, not a\n# `variables:` entry: tools/local-ci-plan.R follows neither `extends:` nor\n# `variables:`, so either would leave a local run on an unpinned pandoc. A\n# plain anchor also suits the pre-commit `check-yaml` hook, which cannot\n# construct GitLab's `!reference` tag. scripts/check-toolchain.R reads the\n# PANDOC_VERSION line below and fails the pre-push gate when the local pandoc\n# differs; seor's scripts/check-fleet-standard.py checks it against the\n# fleet's version. A bump moves these together, in one change: this\n# PANDOC_VERSION, both sha256 digests (the release's own published values),\n# and README.md, re-knit under the new pandoc.\n#\n# r-base has no curl, hence the apt line. A failed or mismatched download\n# only warns, and the job then runs on whatever pandoc it has: Debian's, from\n# `.check_deps`, or none in `gates`, which renders nothing. Nothing unverified\n# is ever installed. The download retries and has a ceiling: --max-time bounds\n# each attempt and --retry-max-time the retries, so a stalled CDN reaches the\n# warning in minutes instead of hanging the job. The architecture comes from\n# `dpkg --print-architecture`, because the runner is arm64.\n.pandoc_install: &pandoc_install\n  - PANDOC_VERSION=\"3.10\"\n  - apt-get update -qq && apt-get install -y --no-install-recommends curl ca-certificates\n  # `apt-mark hold pandoc`, only after a successful `dpkg -i`: no later apt\n  # step replaces the pin. An upgrade leaves it, and an install that needs\n  # another pandoc fails loudly. Where apt's pandoc is older than the pin, as\n  # on rocker images, apt would not replace it anyway; the hold is the fleet's\n  # canonical shape. A failed hold only warns, so it never stops a gate (seor\n  # design/fleet-standard.md; SEOR-vzupmeqj).\n  - |\n    ARCH=$(dpkg --print-architecture)\n    case \"$ARCH\" in\n      amd64) PANDOC_SHA256=d502599878eb29af3ae5f0cb5d559134df96534125d452c7a0674a5bad2c5ecf ;;\n      arm64) PANDOC_SHA256=b651c8bfd5a0a2f6650d6c0830131747ef67a1d9c0475b1399626611419e2205 ;;\n      *) PANDOC_SHA256=unknown ;;\n    esac\n    if curl -fsSL --retry 3 --retry-delay 5 --retry-max-time 300 --connect-timeout 20 --max-time 120 \\\n      -o /tmp/pandoc.deb \"https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-1-${ARCH}.deb\" \\\n      && echo \"${PANDOC_SHA256}  /tmp/pandoc.deb\" | sha256sum -c - \\\n      && dpkg -i /tmp/pandoc.deb; then\n      apt-mark hold pandoc || echo \"WARNING: pandoc ${PANDOC_VERSION} installed but not held; a later apt step may replace it\"\n      echo \"pandoc ${PANDOC_VERSION} installed\"\n    else\n      echo \"WARNING: pandoc ${PANDOC_VERSION} not installed; this job runs on the image's or Debian's pandoc\"\n    fi\n    if command -v pandoc >/dev/null 2>&1; then pandoc --version | sed -n 1p; else echo \"no pandoc on PATH yet\"; fi\n\n# news-version (the fleet standard's cheap gates): the top NEWS.md heading is\n# either \"(development version)\" or exactly DESCRIPTION's Version, which\n# catches a stale heading left in at release. Ported from seor's\n# `news-version` job, with the heading level rurl's NEWS.md uses (`## rurl\n# ...`). Pure shell, so it rides in this job instead of taking a runner slot.\ngates:\n  stage: gates\n  script:\n    - *gate_deps\n    - *pandoc_install\n    - 'Rscript tools/verify.R --gates'\n    - |\n      version=\"$(grep -E '^Version:' DESCRIPTION | head -n1 | sed -E 's/^Version:[[:space:]]*//')\"\n      heading=\"$(grep -m1 -E '^##? ' NEWS.md | sed -E 's/^##?[[:space:]]+(rurl[[:space:]]+)?//')\"\n      echo \"DESCRIPTION Version : '$version'\"\n      echo \"Top NEWS heading    : '$heading'\"\n      if [ \"$heading\" = \"(development version)\" ] || [ \"$heading\" = \"$version\" ]; then\n        echo \"OK: NEWS heading and version are consistent.\"\n      else\n        echo \"Top NEWS.md heading ('$heading') is neither '(development version)' nor the DESCRIPTION Version ('$version'). Update NEWS.md before release.\"\n        exit 1\n      fi\n\n# CITATION.cff `version:` and .zenodo.json `\"version\"` must name the release\n# DESCRIPTION's Version names (X.Y.Z.9000 -> X.Y.Z), and every URL those two\n# files declare must also appear in DESCRIPTION's URL: field. Ported from\n# seor's `citation-version` job (seor design/adr/0001). No `rules:` here,\n# deliberately mirroring `gates` above rather than seor's `.on-mr-and-main`\n# anchor, which this file has no equivalent of: `gates` runs on every push the\n# top-level `workflow:` block admits (`main` and tags) by omitting `rules:`\n# entirely, and this job rides the same default.\n#\n# `check-bugreports.py` rides along here rather than getting a job of its own\n# (SEOR-ocbtrrnl, as in pagerankr): it is stdlib-only, offline and instant,\n# with the same shape as check-citation.py, so it belongs in the job that\n# already has a python3. A separate job would pay the runner-pickup cost for\n# about a second of work.\ncitation-version:\n  stage: gates\n  image: python:3.14-alpine\n  script:\n    - python3 scripts/check-citation.py --self-test\n    - python3 scripts/check-citation.py\n    - python3 scripts/check-bugreports.py --self-test\n    - python3 scripts/check-bugreports.py\n\n# The whole local gate, on every pipeline: `tools/verify.R` runs the manifest\n# gates, lint, spelling, `R CMD check --as-cran` through rcmdcheck, failing on\n# a WARNING (CRAN incoming feasibility on), and the test suite under LC_ALL=C\n# (fleet standard, \"CI on every push to main\").\n#\n# ON A TAG, CRAN's version comparison is skipped, and only that. A release tag\n# is pushed after CRAN accepts the version, so incoming feasibility then\n# compares the tarball against itself on CRAN and reports \"Insufficient package\n# version\" as a WARNING: the v3.1.0 tag pipeline (#209, 2026-10-02) went red\n# for exactly that. `_R_CHECK_CRAN_INCOMING_SKIP_VERSIONS_` turns off that one\n# comparison; every other incoming check still runs (ADR 0004 in seor).\ncheck:\n  stage: check\n  rules:\n    - if: $CI_COMMIT_TAG\n      variables:\n        _R_CHECK_CRAN_INCOMING_SKIP_VERSIONS_: \"true\"\n    - when: on_success\n  script:\n    # punycoder's configure enables libidn2 when pkg-config finds it, as on\n    # CRAN's Debian flavors; its Windows flavors build without it. The two\n    # builds can decode differently, and rurl 3.1.0's first upload failed\n    # CRAN's Debian pre-test on a probe test that only the libidn2 build broke\n    # (RURL-woljcpfu). So this job builds punycoder with libidn2 and says so\n    # before the suite runs, and `coverage` asserts the build without it\n    # (SEOR-hxxxkmws). r-base ships pkg-config but not libidn2-dev.\n    - apt-get update -qq && apt-get install -y --no-install-recommends libidn2-dev\n    - *check_deps\n    - *pandoc_install\n    - 'Rscript -e ''b <- punycoder:::.backend_info(); print(b); if (!isTRUE(b$has_libidn2)) stop(\"punycoder was built without libidn2, so this job is not the libidn2 cell (SEOR-hxxxkmws)\", call. = FALSE)'''\n    # VERIFY_SKIP_DOCS drops verify.R's docs stage here, and only that stage:\n    # the `docs-drift` job below runs it instead. The stage needs the roxygen2\n    # DESCRIPTION pins, which Debian does not package, and installing it here\n    # would pull roxygen2's whole dependency tree from CRAN as source builds\n    # into the library this check runs against, shadowing the Debian binaries\n    # `.check_deps` installs (SEOR-nwfmerhu). Set inline, not under\n    # `variables:`, which tools/local-ci-plan.R does not follow.\n    - 'VERIFY_SKIP_DOCS=docs-drift-job Rscript tools/verify.R'\n\n# Generated-docs drift, on every pipeline (SEOR-nwfmerhu): man/ and NAMESPACE\n# must match what the roxygen2 that DESCRIPTION pins in\n# Config/roxygen2/version regenerates from R/. scripts/check-docs-drift.R\n# refuses any other roxygen2, because its output changes between releases,\n# and its header says why the check exists at all.\n#\n# Its own job, not a stage of `check`, because the pinned roxygen2 is\n# usually not the current CRAN release and never a Debian package. Here, on\n# rocker/r-ver, pak resolves from Posit Package Manager, which serves archived\n# versions as binaries too (measured 2026-10-05 in rocker/r-ver:latest on\n# arm64: roxygen2 8.0.0 and its whole tree arrived built, nothing compiled,\n# in under 30s), into a library no other job uses. The script regenerates in place, which is safe in\n# this job's throwaway clone. git is only for the diff it prints on drift.\n#\n# Self-contained rather than `extends: .rocker`: tools/local-ci-plan.R follows\n# no `extends:`, so a template's image and before_script would vanish from a\n# local run.\ndocs-drift:\n  stage: check\n  needs: []\n  image: rocker/r-ver:latest\n  script:\n    # Every job that runs R on a push installs the pinned pandoc (fleet\n    # standard), this one included, though roxygen2 does not call it.\n    - *pandoc_install\n    - apt-get install -y --no-install-recommends git\n    - >\n      Rscript -e 'if (!requireNamespace(\"pak\", quietly = TRUE))\n      install.packages(\"pak\", repos = sprintf(\n      \"https://r-lib.github.io/p/pak/stable/%s/%s/%s\",\n      .Platform$pkgType, R.Version()$os, R.Version()$arch))'\n    - Rscript -e 'pak::pkg_install(c(\"deps::.\", paste0(\"roxygen2@\", read.dcf(\"DESCRIPTION\", \"Config/roxygen2/version\")[[1]])))'\n    - Rscript scripts/check-docs-drift.R\n\n# Coverage, on every pipeline (fleet standard; ADR 0007 in seor). `coverage:`\n# feeds the GitLab badge, the cobertura report feeds the merge request diff\n# annotations, and the job fails below 95% total coverage. It writes\n# cobertura.xml first, so a failing run still annotates. The threshold is\n# never lowered: a package under it adds tests. Debian ships covr and xml2 as\n# binaries, so the install stays apt-fast like `.check_deps`.\ncoverage:\n  stage: check\n  needs: []\n  script:\n    - *check_deps\n    - 'apt-get install -y --no-install-recommends r-cran-covr r-cran-xml2'\n    - *pandoc_install\n    # The punycoder build without libidn2, as on CRAN's Windows flavors; `check`\n    # runs the libidn2 build (SEOR-hxxxkmws).\n    - 'Rscript -e ''b <- punycoder:::.backend_info(); print(b); if (!identical(b$has_libidn2, FALSE)) stop(\"punycoder was built with libidn2, so this job is not the cell without it (SEOR-hxxxkmws)\", call. = FALSE)'''\n    - >\n      Rscript -e 'cov <- covr::package_coverage(quiet = FALSE);\n      print(cov);\n      covr::to_cobertura(cov);\n      pct <- covr::percent_coverage(cov);\n      if (pct < 95) stop(sprintf(\"total coverage %.2f%% is below the fleet minimum of 95%%; add tests, never lower the threshold\", pct), call. = FALSE)'\n  coverage: '/^rurl Coverage: \\d+\\.\\d+\\%/'\n  artifacts:\n    when: always\n    expire_in: 1 week\n    reports:\n      coverage_report:\n        coverage_format: cobertura\n        path: cobertura.xml\n\n# The documentation site. Published at https://bart-turczynski.gitlab.io/rurl/,\n# which `_pkgdown.yml` names and DESCRIPTION's `URL:` declares first. Copied\n# from pslr's `pages` job (RURL-vkltgopc), with the dependency install swapped\n# for this file's apt-based `.check_deps`, which already carries r-cran-pkgdown\n# and pandoc.\n#\n# Every pipeline on `main` deploys it, once `check` has passed (fleet\n# standard, \"CI on every push to main\"), so the site documents `main`. It used\n# to deploy only on a tag or a hand-started pipeline, while CI minutes were\n# rationed.\n#\n# The job MUST be named `pages` -- that name is what makes GitLab publish the\n# `public/` artifact -- and `tools/local-ci-plan.R` therefore does not treat\n# `pages` as a reserved top-level key, so `tools/local-ci.sh --list` shows it.\npages:\n  stage: deploy\n  needs: [\"check\"]\n  rules:\n    # Pinned to the default branch, and that pin is load-bearing. This job\n    # does not report on a tree, it PUBLISHES one to\n    # <https://bart-turczynski.gitlab.io/rurl/> for a package that is on CRAN.\n    # The `workflow:` block admits a web pipeline on any branch; without the\n    # pin, one click on a feature branch would serve unmerged code from the\n    # live site with nothing on the page saying so (SEOR-bmgkzhvy).\n    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH\n  script:\n    - *check_deps\n    - *pandoc_install\n    # `build_site(install = FALSE)` runs the examples against the INSTALLED\n    # package, so install first. This is the same code the tarball would carry.\n    - 'R CMD INSTALL --no-multiarch .'\n    # pkgdown renders every root-level .md that is not README/NEWS/LICENSE/\n    # cran-comments: pkgdown:::package_mds() hardcodes that skip list, so\n    # _pkgdown.yml has no setting that can exclude a file. Left alone it\n    # publishes whatever top-level .md files exist and folds their text into\n    # search.json, where it can outrank real documentation on ordinary\n    # queries.\n    #\n    # KEEP-LIST, NOT DENY-LIST (SEOR-wqxhftpv). This used to name only\n    # AGENTS.md and CLAUDE.md and move those two out, leaving every other\n    # top-level .md file -- named or not -- in place to be published. That is\n    # allow-by-default: a new agent-tooling file under any other name (a\n    # GEMINI.md, a fresh internal contract) would survive and get published\n    # with nothing here noticing, which is how the AGENTS.html/CLAUDE.html\n    # leak this job exists to fix reached four sibling repos after being\n    # fixed in one. Inverted below: only files on the keep list stay, so an\n    # unknown file stays private by default instead of public by default.\n    #\n    # Keep-list, and why each name is on it:\n    #   README.md, NEWS.md, LICENSE.md, cran-comments.md -- pkgdown's own\n    #     hardcoded skip list, named here too so this list is a complete,\n    #     self-contained claim rather than half of one split between this\n    #     file and pkgdown internals.\n    #   CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md -- ordinary\n    #     user-facing repository docs pkgdown renders as articles.\n    #   ACKNOWLEDGMENTS.md -- the one per-repo addition: _pkgdown.yml's\n    #     navbar names it explicitly (the `acknowledgments` component).\n    #   THIRD_PARTY_NOTICES.md -- not present in this repo today; kept on the\n    #     list so adding one later needs no edit here.\n    #   ARCHITECTURE.md, RELEASE_NOTES_v1.md -- GRANDFATHERED, deliberately,\n    #     not an oversight. Both are already live and indexed --\n    #     bart-turczynski.gitlab.io/rurl/{ARCHITECTURE,RELEASE_NOTES_v1}.html\n    #     return 200 today and both appear in the published search.json.\n    #     SEOR-wqxhftpv exists to stop an UNKNOWN, NEW file from leaking;\n    #     retiring a page that is already live and linked is a separate\n    #     editorial call, not a side effect of this hygiene fix. Drop them\n    #     from this list only as its own deliberate change.\n    #\n    # Everything else at the top level -- AGENTS.md, CLAUDE.md, and any file\n    # added later under any other name -- is moved out, unnamed included.\n    #\n    # Move rather than delete, still: deleting leaves the search index\n    # pointing at pages that 404. This runs after the install so the\n    # installed package is byte-identical to a normal build, and the CI\n    # checkout is disposable, so nothing is restored after.\n    #\n    # FAIL LOUD, both directions. README.md, NEWS.md and LICENSE.md are the\n    # three pkgdown cannot build a sane site without (no home page, no\n    # changelog, a broken license link), so this deliberately fails the job\n    # if any of them is missing rather than quietly shipping a half-built\n    # site -- the same property the old two-name deny-list had, carried over\n    # so a keep-list cannot silently tolerate a vanished README. The other\n    # keep-list names are optional: their absence is fine, they simply have\n    # nothing to keep.\n    #\n    # tools/pin-pages-md-filter.R extracts and runs the block between the\n    # markers below verbatim against this repo's tracked top-level .md files,\n    # so keep the markers on their own lines and keep everything the filter\n    # needs (including `set -e` and the mkdir) inside them.\n    - |\n      # --- agent-md-filter:start ---\n      set -e\n      mkdir -p /tmp/agent-md\n      for req in README.md NEWS.md LICENSE.md; do\n        test -f \"$req\" || { echo \"keep-list file missing: $req\" >&2; exit 1; }\n      done\n      for f in *.md; do\n        case \"$f\" in\n          README.md|NEWS.md|LICENSE.md|CONTRIBUTING.md|SECURITY.md|CODE_OF_CONDUCT.md|THIRD_PARTY_NOTICES.md|ACKNOWLEDGMENTS.md|cran-comments.md|ARCHITECTURE.md|RELEASE_NOTES_v1.md)\n            ;;\n          *)\n            mv \"$f\" /tmp/agent-md/\n            ;;\n        esac\n      done\n      # --- agent-md-filter:end ---\n    # FAVICONS ARE COMMITTED (RURL-ujczpkqm). With a logo in man/figures/ and\n    # no pkgdown/favicon/, pkgdown's init_site() calls build_favicons(), which\n    # uploads the logo to realfavicongenerator.net -- but only when the CI env\n    # var is unset. Here GitLab sets CI=true, so the call was skipped and the\n    # site shipped without favicons; `tools/local-ci.sh` sets no CI, so its\n    # replay of this job called the API and failed whenever the API did. With\n    # pkgdown/favicon/ committed, neither calls out. tools/build-favicons.sh\n    # regenerates the set offline after a logo change.\n    - 'Rscript -e ''pkgdown::build_site(new_process = FALSE, install = FALSE)'''\n    # GitLab Pages publishes `public/`; _pkgdown.yml sets no `destination:`, so\n    # the site lands in `docs/` (which .gitignore already covers for local\n    # builds). Rename rather than configure, so a local build_site() keeps\n    # writing where .gitignore and design/README.md say it does.\n    - 'mv docs public'\n    - 'test -f public/index.html'\n  artifacts:\n    paths:\n      - public\n\n# ---------------------------------------------------------------------------\n# deep-check -- R release, oldrel, devel and the declared floor, on the weekly\n# `deep-check` schedule ONLY (fleet standard, \"Scheduled pipelines\"; schedule\n# 4472809 sets SCHEDULE_KIND=deep-check). Both rules halves are required, as\n# for the audits below: a job keyed on `$CI_PIPELINE_SOURCE == \"schedule\"`\n# alone would also fire on the dependency-audit schedule (seor\n# design/fleet.md). Schedule-only also keeps `tools/local-ci.sh --all` from\n# running them (tools/local-ci-plan.R, schedule_only()).\n#\n# Copied from punycoder's `full-check` and `floor-check`, the fleet's model:\n# rocker/r-ver images, which resolve Posit Package Manager binaries, with\n# {pak} installing the dependency tree and its system requirements. The\n# `.rocker` template carries punycoder's reasoning in short; read its\n# .gitlab-ci.yml for the measurements behind each line. `full-check` installs\n# the pinned pandoc from `.pandoc_install`, as the push jobs do.\n# ---------------------------------------------------------------------------\n.rocker:\n  image: rocker/r-ver:latest\n  interruptible: true\n  variables:\n    R_LIBS_USER: \"$CI_PROJECT_DIR/.Rlibs\"\n    R_KEEP_PKG_SOURCE: \"yes\"\n    # `--as-cran`'s \"checking CRAN incoming feasibility\" reads CRAN metadata\n    # from the repos option, which rocker points at p3m, and p3m serves none\n    # of it: for a package already on CRAN the check halts there and rcmdcheck\n    # reads the cut-off log as 0/0/0 (SEOR-ygzjighu). These move only that\n    # step to CRAN itself; installs still come from p3m.\n    R_CRAN_SRC: \"https://cloud.r-project.org\"\n    R_CRAN_WEB: \"https://cloud.r-project.org\"\n  cache:\n    key: \"rlibs-$CI_JOB_NAME_SLUG\"\n    paths:\n      - .Rlibs/\n  before_script:\n    - mkdir -p \"$R_LIBS_USER\"\n    # pak from r-lib's own binary repository: rocker/r-ver:devel has no p3m\n    # binaries, and a CRAN source build of pak fails there.\n    - >\n      Rscript -e 'if (!requireNamespace(\"pak\", quietly = TRUE))\n      install.packages(\"pak\", repos = sprintf(\n      \"https://r-lib.github.io/p/pak/stable/%s/%s/%s\",\n      .Platform$pkgType, R.Version()$os, R.Version()$arch))'\n    # rocker's Renviron.site sets R_LIBS, which wins over R_LIBS_USER, so the\n    # cache directory is put first on .libPaths() here (SEOR-dyzgzyot).\n    - echo '.libPaths(c(Sys.getenv(\"R_LIBS_USER\"), .libPaths()))' >> \"${R_HOME}/etc/Rprofile.site\"\n    - Rscript -e 'cat(\"Library paths:\\n\"); print(.libPaths())'\n\n# R release (`latest`), oldrel (pin the tag to the previous minor when a new R\n# minor ships) and devel, each a full `R CMD check --as-cran` with vignettes.\nfull-check:\n  extends: .rocker\n  stage: check\n  needs: []\n  image: $R_IMAGE\n  rules:\n    - if: $CI_PIPELINE_SOURCE == \"schedule\" && $SCHEDULE_KIND == \"deep-check\"\n  parallel:\n    matrix:\n      - R_IMAGE:\n          - \"rocker/r-ver:latest\"\n          - \"rocker/r-ver:4.5\"\n          - \"rocker/r-ver:devel\"\n  script:\n    # The three images point `repos` at three shapes: `latest` at p3m\n    # `latest`, `4.5` at a FROZEN p3m snapshot (2026-04-23, older than the\n    # punycoder and pslr releases DESCRIPTION requires, so pak failed with\n    # \"Can't find package called punycoder, pslr\"; deep-check pipeline\n    # 2909433500), and `devel` at cloud.r-project.org. A user .Rprofile, read\n    # after Rprofile.site, rewrites a trailing snapshot date to `latest` and\n    # puts CRAN itself behind it as a source fallback, because p3m `latest`\n    # lags a new CRAN release by up to a day. Testing old R against CURRENT\n    # packages is also what CRAN does. Copied from pagerankr's full-check.\n    - |\n      Rscript -e '\n      current <- getOption(\"repos\")[[\"CRAN\"]]\n      if (is.null(current) || !nzchar(current) || identical(current, \"@CRAN@\")) {\n        stop(\"Expected a repo in Rprofile.site, found: \", current, call. = FALSE)\n      }\n      p3m <- sub(\"/[0-9]{4}-[0-9]{2}-[0-9]{2}$\", \"/latest\", current)\n      writeLines(sprintf(\"options(repos = c(P3M = %s, CRAN = %s))\",\n                         dQuote(p3m, FALSE),\n                         dQuote(\"https://cloud.r-project.org\", FALSE)),\n                 file.path(Sys.getenv(\"HOME\"), \".Rprofile\"))\n      cat(\"Image pins:\", current, \"\\n  using:\", p3m,\n          \"\\n  with CRAN appended as fallback\\n\")'\n    - Rscript -e 'cat(\"Effective repos:\\n\"); print(getOption(\"repos\"))'\n    - apt-get update -qq && apt-get install -y --no-install-recommends qpdf ghostscript\n    - *pandoc_install\n    - Rscript -e 'pak::pak(\"deps::.\", dependencies = TRUE); pak::pak(\"any::rcmdcheck\")'\n    # rcmdcheck reads a check that halted partway as 0/0/0 and returns normally,\n    # so error_on never fires; the guard also fails on R CMD check's own exit\n    # status (SEOR-maavnxdm).\n    - >\n      Rscript -e 'res <- rcmdcheck::rcmdcheck(args = c(\"--no-manual\", \"--as-cran\"),\n      build_args = c(\"--no-manual\", \"--compact-vignettes=gs+qpdf\"),\n      error_on = \"warning\", check_dir = \"check\");\n      if (!identical(as.integer(res$status), 0L)) stop(\"R CMD check exited with status \", res$status, \"; the run did not complete.\", call. = FALSE)'\n  artifacts:\n    when: always\n    expire_in: 1 week\n    paths:\n      - check/\n\n# The leg at the declared R floor, `Depends: R (>= 4.1.0)`. 4.1 is also the\n# oldest minor with an arm64 rocker/r-ver image, which the runner needs.\n# punycoder's design:\n#\n# - Packages come from one dated Posit Package Manager snapshot,\n#   FLOOR_SNAPSHOT, used in this job alone, so it cannot conflict with what\n#   full-check installs. 2025-04-10 is the day before R 4.5.0, when R 4.1 was\n#   still inside every dependency's support window.\n# - EXCEPT punycoder, pslr and raddr, which first reached CRAN in 2026, after\n#   the snapshot, and the rlang (>= 1.1.7) and vctrs (>= 0.7.0) raddr needs,\n#   newer than the snapshot's. They come from CRAN itself, as source, with\n#   dependencies = FALSE: their own dependencies (Rcpp, cpp11, digest, cli,\n#   glue, lifecycle) are already in from the snapshot, so nothing else moves\n#   past it. All five declare R >= 4.1 or lower.\n# - Only what the check needs: the hard dependencies, the test and vignette\n#   Suggests, and rcmdcheck. pkgdown, oysteR and rosv serve the site and the\n#   scheduled audits only; the audit tests skip without them, so\n#   _R_CHECK_FORCE_SUGGESTS_=false lets --as-cran report them as a NOTE.\n# - Vignettes are neither built nor checked: no pandoc here, and the tests\n#   exercise the same functions.\nfloor-check:\n  extends: .rocker\n  stage: check\n  needs: []\n  image: rocker/r-ver:4.1.3\n  variables:\n    FLOOR_SNAPSHOT: \"https://packagemanager.posit.co/cran/2025-04-10\"\n    _R_CHECK_FORCE_SUGGESTS_: \"false\"\n  rules:\n    - if: $CI_PIPELINE_SOURCE == \"schedule\" && $SCHEDULE_KIND == \"deep-check\"\n  script:\n    - apt-get update -qq && apt-get install -y --no-install-recommends pkg-config libcurl4-openssl-dev libssl-dev libicu-dev\n    - >\n      Rscript -e 'install.packages(c(\"Rcpp\", \"cpp11\", \"digest\", \"cli\", \"glue\", \"lifecycle\", \"stringi\", \"testthat\", \"withr\", \"jsonlite\", \"knitr\", \"rmarkdown\", \"rcmdcheck\"),\n      repos = Sys.getenv(\"FLOOR_SNAPSHOT\"), Ncpus = 4L);\n      install.packages(c(\"rlang\", \"vctrs\", \"raddr\", \"punycoder\", \"pslr\"), repos = \"https://cloud.r-project.org\", dependencies = FALSE);\n      stopifnot(all(vapply(c(\"stringi\", \"punycoder\", \"pslr\", \"raddr\", \"testthat\", \"withr\", \"rcmdcheck\"), requireNamespace, NA, quietly = TRUE)));\n      print(R.version.string)'\n    # rcmdcheck reads a check that halted partway as 0/0/0 and returns normally,\n    # so error_on never fires; the guard also fails on R CMD check's own exit\n    # status (SEOR-maavnxdm).\n    - >\n      Rscript -e 'res <- rcmdcheck::rcmdcheck(args = c(\"--no-manual\", \"--as-cran\", \"--ignore-vignettes\"),\n      build_args = c(\"--no-manual\", \"--no-build-vignettes\"),\n      error_on = \"warning\", check_dir = \"check\");\n      if (!identical(as.integer(res$status), 0L)) stop(\"R CMD check exited with status \", res$status, \"; the run did not complete.\", call. = FALSE)'\n  artifacts:\n    when: always\n    expire_in: 1 week\n    paths:\n      - check/\n\n# ---------------------------------------------------------------------------\n# fossa -- the FOSSA license and security scan, on every push to `main`\n# (fleet standard, \"FOSSA\": rurl holds one of the five free-plan slots).\n#\n# `fossa analyze` uploads to the project `.fossa.yml` names,\n# git+gitlab.com/bart-turczynski/rurl; the first run creates it, and the README's\n# FOSSA badges read \"not found\" until then. It reads `FOSSA_API_KEY`, a masked\n# CI/CD variable only the owner can set. The CLI comes from FOSSA's official\n# install script, which picks the linux/arm64 build on this runner. Plain and\n# blocking, like every other job: an unreachable FOSSA turns the pipeline red.\n# Push only, so a schedule or a hand-started pipeline does not re-upload.\n# ---------------------------------------------------------------------------\nfossa:\n  stage: audit\n  image: debian:stable-slim\n  needs: []\n  rules:\n    - if: $CI_PIPELINE_SOURCE == \"push\" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH\n  script:\n    - apt-get update -qq && apt-get install -y --no-install-recommends curl ca-certificates git\n    - 'curl -fsSL -H \"Cache-Control: no-cache\" https://raw.githubusercontent.com/fossas/fossa-cli/master/install-latest.sh | bash'\n    - fossa analyze\n\n# ---------------------------------------------------------------------------\n# audit -- the two dependency-vulnerability audits, UNATTENDED, and nothing else\n# (SEOR-fftbjnpl).\n#\n# WHY THEY ARE HERE. tests/testthat/test-osv.R (OSV via {rosv}) and\n# test-security.R (Sonatype OSS Index via {oysteR}) are advisory audits: their\n# answer is a fact about the world, not about the tree, so they were taken out\n# of the pre-push gate's test cell (tools/verify.R filters `security|osv` out\n# of its test_local() run; leave that filter alone). That left nothing running\n# them at all: the GitHub workflows that did were deleted with RURL-vunvxusf,\n# and `check`'s own test run never reached them either (R CMD check leaves\n# NOT_CRAN unset, so both skip_on_cran()). These two jobs are the unattended\n# run.\n#\n# ONLY A PIPELINE SCHEDULE CARRYING THE SELECTOR STARTS THEM. The rule needs\n# both `$CI_PIPELINE_SOURCE == \"schedule\"` and `$SCHEDULE_KIND ==\n# \"dependency-audit\"`, then `when: never`, so a push to `main`, a tag, a\n# hand-started pipeline and any other schedule never pay for them. The\n# `workflow:` block above admits a scheduled pipeline because a schedule runs\n# on `main` and `$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH` holds there; the\n# jobs without `rules:` (`gates`, `citation-version`, `check`, `coverage`) and\n# `pages` ride along in that pipeline too.\n#\n# OWNER GATE, not settable from a merge request: create the schedule under\n# Build > Pipeline schedules, target `main`, with the variable\n# SCHEDULE_KIND=dependency-audit; and set the OSS Index CI/CD variables\n#   OSSINDEX_USER   - the literal placeholder `x`, NOT the account email\n#   OSSINDEX_TOKEN  - a Sonatype Guide personal access token (masked)\n# Until the schedule exists neither job runs.\n#\n# OSS Index moved to Sonatype Guide, whose help says the basic-auth username is\n# ignored for a PAT. It is not: with the account email as username a valid PAT\n# returns HTTP 401, and with `x` the same token returns 200 (measured in\n# pagerankr 2026-07-25 by changing only OSSINDEX_USER). A local\n# `curl -u \"x:$PAT\"` that succeeds while `security-audit` 401s is this, not a\n# bad token. A legacy OSS Index API token, if one is ever rotated back in, is\n# the case that takes the email.\n#\n# BOTH INSTALL rurl FIRST, and that is load-bearing. test-osv.R resolves\n# rurl's runtime closure from installed.packages(); against an uninstalled\n# rurl the closure is empty and the test skips \"no resolvable runtime\n# dependencies\" -- a green job that audited nothing. test-security.R audits\n# the DESCRIPTION that system.file() resolves. Installing makes both read what\n# a user installs.\n#\n# The dependency install mirrors `.check_deps`: Debian binaries where they\n# exist, CRAN for the rest, then an assertion, because install.packages()\n# reports a failed install as a warning and exits 0.\n#\n# `tools/local-ci-plan.R --all` deliberately leaves these two out: they need\n# the network and forge-held credentials, and a post-merge local run is not\n# the place a new upstream advisory should turn red.\n.audit_deps: &audit_deps\n  - apt-get update -qq\n  - 'apt-get install -y --no-install-recommends\n     r-cran-stringi r-cran-testthat r-cran-pkgload r-cran-withr r-cran-jsonlite\n     r-cran-curl r-cran-httr'\n  - 'Rscript -e ''install.packages(c(\"rlang\", \"vctrs\", \"raddr\", \"punycoder\", \"pslr\", \"rosv\", \"oysteR\"))'''\n  - 'Rscript -e ''p <- c(\"raddr\", \"punycoder\", \"pslr\", \"testthat\", \"pkgload\", \"rosv\", \"oysteR\"); m <- p[!vapply(p, requireNamespace, logical(1), quietly = TRUE)]; if (length(m)) stop(\"missing dependencies: \", paste(m, collapse = \", \"))'''\n  - 'R CMD INSTALL --no-multiarch .'\n\nosv-audit:\n  stage: audit\n  needs: []\n  rules:\n    - if: $CI_PIPELINE_SOURCE == \"schedule\" && $SCHEDULE_KIND == \"dependency-audit\"\n    - when: never\n  variables:\n    # testthat::test_local() sets NOT_CRAN=true itself; explicit anyway, so\n    # skip_on_cran() cannot silently turn the audit into a skip.\n    NOT_CRAN: \"true\"\n  script:\n    - *audit_deps\n    - 'Rscript -e ''testthat::test_local(filter = \"^osv$\", stop_on_failure = TRUE)'''\n\n# OSSINDEX_AUDIT_REQUIRED turns every missing precondition in\n# test-security.R (oysteR absent, OSSINDEX_USER / OSSINDEX_TOKEN absent) into\n# a failure instead of a skip. It is set here and nowhere else, so local runs\n# and `R CMD check` still skip.\nsecurity-audit:\n  stage: audit\n  needs: []\n  rules:\n    - if: $CI_PIPELINE_SOURCE == \"schedule\" && $SCHEDULE_KIND == \"dependency-audit\"\n    - when: never\n  variables:\n    NOT_CRAN: \"true\"\n    OSSINDEX_AUDIT_REQUIRED: \"true\"\n  script:\n    - *audit_deps\n    - 'Rscript -e ''testthat::test_local(filter = \"^security$\", stop_on_failure = TRUE)'''\n"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

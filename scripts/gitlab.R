@@ -64,8 +64,8 @@ gl_rest <- function(domain, path, run = system2, state = NULL) {
 .gl_key <- function(domain) sub("^[a-z]+://([^/:]+).*$", "\\1", gl_api_base(domain))
 
 # One pacer per run, passed to both gl_resolve and gl_collect_gauges so the request cap covers both.
-gl_pacer <- function(now = function() as.numeric(Sys.time()), sleep = Sys.sleep) {
-  host_pacer(min_interval = c(default = GITLAB_MIN_INTERVAL_S), run_budget = c(default = GITLAB_MAX_REQUESTS),
+gl_pacer <- function(now = function() as.numeric(Sys.time()), sleep = Sys.sleep, run_budget = GITLAB_MAX_REQUESTS) {
+  host_pacer(min_interval = c(default = GITLAB_MIN_INTERVAL_S), run_budget = c(default = run_budget),
              breaker_after = GITLAB_BREAKER_AFTER, now = now, sleep = sleep)
 }
 
