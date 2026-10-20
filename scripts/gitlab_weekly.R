@@ -53,13 +53,13 @@ gitlab_rotation <- function(ids, cursor = NA_character_) {
   c(ids[seq_along(ids) > k], ids[seq_len(k)])
 }
 
-# Why a host can take no further repository now: "closed" by a 429 or ratelimit-remaining 0,
-# "deferred" by the breaker, "hour" when this hour's budget cannot cover one more, or NA.
-.gl_rest_block <- function(pacer, key) {
+# Why a host can take no further work now: "closed" by a 429 or ratelimit-remaining 0, "deferred" by
+# the breaker, "hour" when this hour's budget cannot cover `need` more requests, or NA.
+.gl_rest_block <- function(pacer, key, need = GITLAB_REST_CALLS_PER_REPO) {
   if (key %in% pacer$deferred()) return("deferred")
   limit <- pacer$hourly_budget(key)
   if (limit <= 0) return("closed")
-  if (limit - pacer$spent(key) < min(GITLAB_REST_CALLS_PER_REPO, limit)) return("hour")
+  if (limit - pacer$spent(key) < min(need, limit)) return("hour")
   NA_character_
 }
 

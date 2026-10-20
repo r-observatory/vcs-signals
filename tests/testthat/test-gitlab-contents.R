@@ -467,3 +467,52 @@ test_that("a project whose commits come back null, whose next page has no cursor
   expect_length(got$reads, 0L)
   expect_identical(got$failed$error, "request cap"); expect_identical(got$failed$query, "gitlab-messages")
 })
+
+# ---- onset dating over REST ----------------------------------------------------
+test_that("a GitLab file is dated by its oldest commit, without following renames", {
+  f <- fake_gitlab(rest = function(domain, path)
+    if (grepl("[?&]page=1(&|$)", path)) rest_ok(commits_body("s2", "2026-03-01T10:00:00.000+01:00"), "2")
+    else rest_ok(commits_body("s1", "2026-01-24T13:59:09.000+01:00")))
+  got <- gl_file_onset(f$io, "gitlab.com", 85027322, ".claude/skills", free_rest_pacer())
+  expect_identical(got, list(date = "2026-01-24T12:59:09Z", stopped = FALSE))
+  expect_true(all(grepl("follow=false", f$calls$rest, fixed = TRUE)))
+  expect_true(all(grepl("path=.claude%2Fskills", f$calls$rest, fixed = TRUE)))
+  bad <- fake_gitlab(rest = function(domain, path) if (grepl("[?&]page=1(&|$)", path))
+    rest_ok(commits_body("s2", "2026-03-01T10:00:00Z"), "2") else list(status = 502L, error = "HTTP 502"))
+  expect_identical(gl_file_onset(bad$io, "gitlab.com", 1, "CLAUDE.md", free_rest_pacer()),
+                   list(date = NA_character_, stopped = FALSE))
+  p <- free_rest_pacer(); p$set_hourly_budget("gitlab.com", 0L)
+  expect_identical(gl_file_onset(f$io, "gitlab.com", 1, "CLAUDE.md", p), list(date = NA_character_, stopped = TRUE))
+})
+
+test_that("an ignore line on GitLab is dated by bisecting the file's revisions", {
+  hist <- commits_body(c("g3", "g2", "g1"), c("2026-05-03T00:00:00Z", "2026-05-02T00:00:00Z", "2026-05-01T00:00:00Z"))
+  fake <- function(has) fake_gitlab(rest = function(domain, path) {
+    if (grepl("/repository/commits", path, fixed = TRUE)) return(rest_ok(hist))
+    sha <- sub("^.*ref=", "", path)
+    rest_ok(if (sha %in% has) "*.o\n.claude\n" else "*.o\n")
+  })
+  expect_identical(gl_ignore_line_onset(fake(c("g2", "g3"))$io, "code.usgs.gov", 4711, ".gitignore", ".claude", free_rest_pacer()),
+                   list(date = "2026-05-02T00:00:00Z", exact = TRUE, stopped = FALSE))
+  expect_false(gl_ignore_line_onset(fake(c("g1", "g2", "g3"))$io, "code.usgs.gov", 4711, ".gitignore", ".claude",
+                                    free_rest_pacer())$exact)
+})
+
+test_that("a history past the page cap or a failed revision read gives no date, and a host that stops answering stops the item", {
+  endless <- fake_gitlab(rest = function(domain, path) rest_ok(commits_body("s1", "2026-01-01T00:00:00Z"), "9"))
+  expect_identical(gl_file_onset(endless$io, "gitlab.com", 1, "CLAUDE.md", free_rest_pacer()),
+                   list(date = NA_character_, stopped = FALSE))
+  expect_length(endless$calls$rest, GITLAB_ONSET_PAGE_CAP)
+  limited <- fake_gitlab(rest = function(domain, path) list(status = 429L, error = "HTTP 429", headers = character(), body = ""))
+  expect_identical(gl_file_onset(limited$io, "gitlab.com", 1, "CLAUDE.md", free_rest_pacer()),
+                   list(date = NA_character_, stopped = TRUE))
+  last <- fake_gitlab(rest = function(domain, path) {
+    r <- rest_ok(commits_body("s1", "2026-01-01T00:00:00Z")); r$headers <- c(r$headers, `ratelimit-remaining` = "0"); r })
+  expect_true(gl_file_onset(last$io, "gitlab.com", 1, "CLAUDE.md", free_rest_pacer())$stopped)
+  hist <- commits_body(c("g2", "g1"), c("2026-05-02T00:00:00Z", "2026-05-01T00:00:00Z"))
+  broken <- fake_gitlab(rest = function(domain, path)
+    if (grepl("/repository/commits", path, fixed = TRUE)) rest_ok(hist) else list(status = 502L, error = "HTTP 502"))
+  expect_identical(gl_ignore_line_onset(broken$io, "gitlab.com", 1, ".Rbuildignore", "CLAUDE.md", free_rest_pacer()),
+                   list(date = NA_character_, exact = FALSE, stopped = FALSE))
+  expect_true(any(grepl("/repository/files/.Rbuildignore/raw?ref=g", broken$calls$rest, fixed = TRUE)))
+})

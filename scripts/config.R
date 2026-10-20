@@ -888,6 +888,10 @@ GITLAB_CANARY_MIN_ASKED <- 20L
 # A repository with hundreds of commits crediting Claude (247 on 2026-10-20) on a host with the message
 # search. A search there that finds none stops the run, so a change in GitLab's matching never writes none.
 GITLAB_MESSAGE_CANARY <- "gitlab.com/bart-turczynski/punycoder"
+# The GitLab dating pass (ai_backfill.R gitlab-onsets): its deadline in minutes, and the pages of 100
+# commits read for one path before it gives up on that path's date.
+GITLAB_ONSET_DEADLINE_MIN <- 130
+GITLAB_ONSET_PAGE_CAP     <- 20L
 # The contents query canary: one floor per set, met when any one candidate meets it.
 TREE_QUERY_CANARY <- list(
   own_community = c("tidyverse/forcats", "tidyverse/dplyr", "r-lib/usethis", "easystats/insight"),

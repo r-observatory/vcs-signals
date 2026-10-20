@@ -565,3 +565,193 @@ test_that("after the merge a repository on a host without the message search rea
   expect_identical(cov$repos_asked[cov$rule_key == "msg.claude.coauthor"], 1L)
   expect_setequal(gla_pub(io, "vcs_dev_tooling")$repo_id, c("github.com/o/r", "gitlab.com/o/a", "git.sc.uni-leipzig.de/o/b"))
 })
+
+# ---- dating GitLab findings over REST ---------------------------------------------
+# A flagged roster of GitLab repositories with these node ids, each with CLAUDE.md, and one dating item each.
+gla_flagged <- function(dir, repo_ids, node_ids) {
+  path <- file.path(dir, "vcs-ai-flagged-roster.db")
+  write_flagged_partial(path,
+    data.frame(repo_id = repo_ids, owner = "o", name = sub("^.*/", "", repo_ids), node_id = node_ids, is_fork = 0L,
+               parent = NA_character_, pr_onset_date = NA_character_, stringsAsFactors = FALSE),
+    cbind(repo_id = repo_ids, .ai_found("claude", "D", "CLAUDE.md")),
+    work = data.frame(repo_id = repo_ids, tool = "claude", rule_key = NA_character_, reason = "onset", priority = 1L,
+                      stringsAsFactors = FALSE))
+  path
+}
+gla_onset_rows <- function(out) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-ai-shard-gitlab.db"))
+  on.exit(DBI::dbDisconnect(con))
+  DBI::dbReadTable(con, "vcs_ai_signals")
+}
+
+test_that("GitLab dating writes exact file dates, keeps commit-credit dates, and censors a fork", {
+  dir <- withr::local_tempdir(); parts <- file.path(dir, "parts"); gate <- file.path(dir, "gate")
+  ids <- c(a = "gitlab.com/o/a", b = "code.usgs.gov/o/b", f = "gitlab.com/o/f")
+  nodes <- c(a = "gitlab:gitlab.com:1", b = "gitlab:code.usgs.gov:2", f = "gitlab:gitlab.com:3")
+  gid <- stats::setNames(.gl_gid(nodes), names(nodes))
+  roster_path <- gla_roster(dir, unname(ids), unname(nodes))
+  # a: CLAUDE.md and a commit crediting Cursor; b: a .claude line in .gitignore; f: a fork with CLAUDE.md.
+  g <- fake_gitlab(function(domain, query, variables) {
+    gids <- unlist(variables$ids)
+    if (!is.null(variables$re)) return(gl_ok(lapply(gids, function(x) gla_commits(x, if (x == gid[["a"]])
+      list(list(sha = "a1", committedDate = "2026-03-02T09:00:00Z", message = "x\n\nMade-with: Cursor")) else list()))))
+    gl_ok(lapply(gids, function(x) {
+      if (x == gid[["b"]]) {
+        n <- gla_node(x)
+        n$repository$blobs$nodes <- c(n$repository$blobs$nodes, list(list(path = ".gitignore", rawTextBlob = "*.o\n.claude\n")))
+        return(n)
+      }
+      n <- gla_node(x, root = "CLAUDE.md")
+      if (x == gid[["f"]]) { n$isForked <- TRUE; n$forkedFrom <- list(fullPath = "up/f") }
+      n
+    }))
+  })
+  clock <- gla_clock()
+  run_gitlab_contents(g$io, parts, roster_path, now = clock$now, sleep = clock$sleep, log = function(...) NULL)
+  suppressMessages(run_gate(list(download = function(pattern, dir) FALSE, release_exists = function() FALSE), gate, parts,
+                            full = FALSE))
+  work <- read_flagged(file.path(gate, "vcs-ai-flagged-roster.db"))$work
+  expect_setequal(paste(work$repo_id, work$tool, work$reason),
+                  paste(c(ids[["a"]], ids[["a"]], ids[["b"]], ids[["f"]]), c("claude", "cursor", "claude", "claude"), "onset"))
+  r <- fake_gitlab(rest = function(domain, path) {
+    if (grepl("/repository/files/", path, fixed = TRUE))
+      return(rest_ok(if (sub("^.*ref=", "", path) %in% c("g2", "g3")) "*.o\n.claude\n" else "*.o\n"))
+    if (startsWith(path, "/projects/2/"))
+      return(rest_ok(commits_body(c("g3", "g2", "g1"), c("2026-05-03T00:00:00Z", "2026-05-02T00:00:00Z", "2026-05-01T00:00:00Z"))))
+    if (startsWith(path, "/projects/3/")) return(rest_ok(commits_body("f1", "2025-11-30T08:00:00Z")))
+    if (grepl("[?&]page=1(&|$)", path)) rest_ok(commits_body("a2", "2026-03-01T10:00:00.000+01:00"), "2")
+    else rest_ok(commits_body("a1", "2026-01-24T13:59:09.000+01:00"))
+  })
+  out <- file.path(dir, "onsets")
+  run_gitlab_onsets(r$io, out, file.path(gate, "vcs-ai-flagged-roster.db"), now = clock$now, sleep = clock$sleep,
+                    rest_pacer = gl_rest_pacer(clock$now, clock$sleep), log = function(...) NULL)
+  sig <- gla_onset_rows(out)
+  at <- function(id, tool) { s <- sig[sig$repo_id == id & sig$tool == tool, ]; list(s$first_seen_date, s$first_seen_censored) }
+  expect_identical(at(ids[["a"]], "claude"), list("2026-01-24T12:59:09Z", 0L))
+  expect_identical(at(ids[["a"]], "cursor"), list("2026-03-02T09:00:00Z", 0L))
+  expect_identical(at(ids[["b"]], "claude"), list("2026-05-02T00:00:00Z", 0L))
+  expect_identical(at(ids[["f"]], "claude"), list("2025-11-30T08:00:00Z", 1L))
+  # The Cursor credit needed no request: project 1 was asked for CLAUDE.md's two pages only.
+  on_a <- grep("^gitlab.com /projects/1/", r$calls$rest, value = TRUE)
+  expect_length(on_a, 2L)
+  expect_true(all(grepl("path=CLAUDE.md&follow=false", on_a, fixed = TRUE)))
+  gla_expect_no_email(out)
+})
+
+test_that("GitLab dating waits for the next hour when the budget runs out, and gives up at the deadline", {
+  ids <- sprintf("gitlab.com/o/p%d", 1:3)
+  dating <- function(deadline_min) {
+    dir <- tempfile("gl_onsets_"); dir.create(dir)
+    path <- gla_flagged(dir, ids, sprintf("gitlab:gitlab.com:%d", 1:3))
+    f <- fake_gitlab(rest = function(domain, path) rest_ok(commits_body("s1", "2026-01-24T12:59:09Z")))
+    clock <- gla_clock(); lg <- gla_log()
+    naps <- new.env(); naps$s <- numeric(0)
+    sleep <- function(s) { naps$s <- c(naps$s, s); clock$sleep(s) }
+    p <- gl_rest_pacer(clock$now, sleep); p$set_hourly_budget("gitlab.com", 2L)
+    run_gitlab_onsets(f$io, file.path(dir, "out"), path, now = clock$now, sleep = sleep, rest_pacer = p,
+                      deadline_min = deadline_min, log = lg$log)
+    list(sig = gla_onset_rows(file.path(dir, "out")), naps = naps$s, t = clock$now(), log = lg$lines(),
+         asked = length(f$calls$rest))
+  }
+  long <- dating(130)
+  expect_setequal(long$sig$repo_id, ids)
+  expect_true(all(long$sig$first_seen_date == "2026-01-24T12:59:09Z" & long$sig$first_seen_censored == 0L))
+  expect_identical(sum(long$naps >= 60), 1L)
+  expect_gt(long$t, 3600)
+  expect_identical(long$asked, 3L)
+  short <- dating(5)
+  expect_setequal(short$sig$repo_id, ids[1:2])
+  expect_identical(sum(short$naps >= 60), 0L)
+  expect_identical(short$asked, 2L)
+  expect_true(any(grepl("gitlab.com/o/p3 claude", short$log, fixed = TRUE)))
+  expect_false(any(grepl("gitlab.com/o/p[12] claude", short$log)))
+})
+
+test_that("a host that answers 429 keeps its items undated, and a history GitLab cannot read leaves its finding undated", {
+  dir <- withr::local_tempdir()
+  ids <- c("gitlab.com/o/p1", "gitlab.com/o/p2", "code.usgs.gov/o/q1", "code.usgs.gov/o/q2")
+  path <- gla_flagged(dir, ids, c("gitlab:gitlab.com:1", "gitlab:gitlab.com:2", "gitlab:code.usgs.gov:3",
+                                  "gitlab:code.usgs.gov:4"))
+  f <- fake_gitlab(rest = function(domain, path) {
+    if (domain == "gitlab.com") return(list(status = 429L, error = "HTTP 429", headers = character(), body = ""))
+    if (startsWith(path, "/projects/4/")) return(list(status = 502L, error = "HTTP 502", headers = character(), body = ""))
+    rest_ok(commits_body("s1", "2026-01-24T12:59:09Z"))
+  })
+  clock <- gla_clock(); lg <- gla_log()
+  run_gitlab_onsets(f$io, file.path(dir, "out"), path, now = clock$now, sleep = clock$sleep,
+                    rest_pacer = gl_rest_pacer(clock$now, clock$sleep), log = lg$log)
+  sig <- gla_onset_rows(file.path(dir, "out"))
+  expect_setequal(sig$repo_id, c("code.usgs.gov/o/q1", "code.usgs.gov/o/q2"))
+  expect_identical(sig$first_seen_date[sig$repo_id == "code.usgs.gov/o/q1"], "2026-01-24T12:59:09Z")
+  # The finding stays, with the date the read gave it (none here), never one made up.
+  q2 <- sig[sig$repo_id == "code.usgs.gov/o/q2", ]
+  expect_true(is.na(q2$first_seen_date)); expect_identical(q2$markers, "CLAUDE.md")
+  expect_identical(sum(startsWith(f$calls$rest, "gitlab.com ")), 1L)
+  expect_true(any(grepl("gitlab.com/o/p1 claude, gitlab.com/o/p2 claude", lg$lines(), fixed = TRUE)))
+})
+
+test_that("main runs the GitLab dating over the flagged roster VCS_FLAGGED names", {
+  dir <- withr::local_tempdir()
+  gla_flagged(dir, "gitlab.com/o/a", "gitlab:gitlab.com:1")
+  withr::local_envvar(VCS_FLAGGED = dir)
+  f <- fake_gitlab(rest = function(domain, path) rest_ok(commits_body("s1", "2026-01-24T12:59:09Z")))
+  out <- file.path(dir, "out")
+  suppressMessages(main("gitlab-onsets", out, io = f$io))
+  sig <- gla_onset_rows(out)
+  expect_identical(list(sig$repo_id, sig$first_seen_date), list("gitlab.com/o/a", "2026-01-24T12:59:09Z"))
+})
+
+test_that("the GitLab dating sends the gitlab.com token in a header file, and a 401 drops it and lowers the budget", {
+  withr::local_envvar(GITLAB_TOKEN_GITLAB_COM = "not-a-real-token")
+  clock <- gla_clock(); lg <- gla_log()
+  p <- gl_rest_pacer(clock$now, clock$sleep)
+  seen <- new.env(); seen$args <- character(0); seen$sent <- character(0)
+  # A fake curl: 401 to a request carrying a header file, one page of commits to one without.
+  run <- function(cmd, args, stdout = TRUE, ...) {
+    plain <- gsub("^'|'$", "", args)
+    seen$args <- c(seen$args, plain)
+    tok <- any(grepl("^@", plain[which(plain == "-H") + 1L]))
+    seen$sent <- c(seen$sent, if (tok) "token" else "anon")
+    status <- if (tok) 401L else 200L
+    writeLines(c(sprintf("HTTP/2 %d", status), "x-next-page: ", ""), plain[match("-D", plain) + 1L])
+    writeLines(if (tok) "{}" else commits_body("s1", "2026-01-24T12:59:09Z"), plain[match("-o", plain) + 1L], sep = "")
+    as.character(status)
+  }
+  expect_identical(p$hourly_budget("gitlab.com"), GITLAB_REST_HOURLY_TOKEN)
+  got <- gl_file_onset(gitlab_onsets_io(p, run = run, log = lg$log), "gitlab.com", 1, "CLAUDE.md", p)
+  expect_identical(got, list(date = "2026-01-24T12:59:09Z", stopped = FALSE))
+  expect_identical(seen$sent, c("token", "anon"))
+  expect_identical(p$hourly_budget("gitlab.com"), GITLAB_REST_HOURLY[["gitlab.com"]])
+  expect_false(any(grepl("not-a-real-token", c(seen$args, lg$lines()), fixed = TRUE)))
+})
+
+test_that("the script on its own loads every helper the GitLab dating calls", {
+  probe <- paste0("suppressMessages(source('scripts/ai_backfill.R')); ",
+                  "cat(all(vapply(c('.gl_rest_block', '.gl_redact', 'gl_file_onset', 'gl_ignore_line_onset', ",
+                  "'gl_rest_pacer', 'run_gitlab_onsets'), exists, NA)))")
+  got <- withr::with_dir(.repo_root, system2(file.path(R.home("bin"), "Rscript"), c("-e", shQuote(probe)),
+                                             stdout = TRUE, stderr = FALSE))
+  expect_identical(utils::tail(got, 1L), "TRUE")
+})
+
+test_that("an item the hour's budget cuts off part way goes to the back of its queue and is read again from its first page", {
+  dir <- withr::local_tempdir()
+  ids <- c("gitlab.com/o/p1", "gitlab.com/o/p2", "gitlab.com/o/p3")
+  path <- gla_flagged(dir, ids, sprintf("gitlab:gitlab.com:%d", 1:3))
+  # p1 and p2 take two pages each, p3 one.
+  f <- fake_gitlab(rest = function(domain, path) {
+    if (startsWith(path, "/projects/3/")) return(rest_ok(commits_body("c1", "2026-03-03T00:00:00Z")))
+    if (grepl("[?&]page=1(&|$)", path)) rest_ok(commits_body("s2", "2026-02-01T00:00:00Z"), "2")
+    else rest_ok(commits_body("s1", "2026-01-24T12:59:09Z"))
+  })
+  clock <- gla_clock(); lg <- gla_log()
+  p <- gl_rest_pacer(clock$now, clock$sleep); p$set_hourly_budget("gitlab.com", 3L)
+  run_gitlab_onsets(f$io, file.path(dir, "out"), path, now = clock$now, sleep = clock$sleep, rest_pacer = p, log = lg$log)
+  sig <- gla_onset_rows(file.path(dir, "out"))
+  expect_identical(sig$first_seen_date[match(ids, sig$repo_id)],
+                   c("2026-01-24T12:59:09Z", "2026-01-24T12:59:09Z", "2026-03-03T00:00:00Z"))
+  # Hour one: p1's two pages and p2's first; hour two: p3, then p2 from its first page again.
+  expect_identical(sub("^gitlab.com /projects/([0-9]+)/.*page=([0-9]+)$", "\\1.\\2", f$calls$rest),
+                   c("1.1", "1.2", "2.1", "3.1", "2.1", "2.2"))
+  expect_true(any(grepl("gitlab.com, 3 of 3 item(s) done", lg$lines(), fixed = TRUE)))
+})

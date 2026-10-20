@@ -1,5 +1,6 @@
 # scripts/gitlab_contents.R - GitLab repository contents: one batched GraphQL read per host, parsed
-# into the element shape parse_tree_markers gives GitHub repositories. Pure over an injected io.
+# into the element shape parse_tree_markers gives GitHub repositories, the commit-message search, and
+# the REST reads that date files and ignore lines. Pure over an injected io.
 
 GITLAB_CONTENTS_BATCH <- 20L  # projects per contents request; projects(ids:) is capped by query complexity
 # Project fields an older host may lack; a rejected one is left out of that host's later asks.
@@ -413,4 +414,72 @@ gl_message_log_rows <- function(hits, repo_id, today, complete) {
   if (!complete) out <- out[n > 0L, , drop = FALSE]
   rownames(out) <- NULL
   out
+}
+
+# ---- onset dating over REST ------------------------------------------------------
+# One path's commits on the default branch, newest first, as id and UTC date. follow=false: GitLab follows
+# renames and copies by default, which put a moved file's date before GitHub's. commits is NULL when a
+# page failed, the cap was reached or the host stopped answering (stopped TRUE).
+.gl_path_commits <- function(io, domain, project_id, path, pacer) {
+  lost <- function(stopped = FALSE) list(commits = NULL, stopped = stopped)
+  base <- sprintf("/projects/%s/repository/commits?path=%s&follow=false&per_page=100",
+                  format(project_id, scientific = FALSE, trim = TRUE), utils::URLencode(path, reserved = TRUE))
+  pages <- list()
+  for (k in seq_len(GITLAB_ONSET_PAGE_CAP)) {
+    a <- .gl_rest_get(io, pacer, domain, paste0(base, "&page=", k))
+    if (a$state == "stopped" || isTRUE(a$last)) return(lost(TRUE))
+    if (a$state == "failed") return(lost())
+    body <- .gl_body(a$res)
+    if (!is.list(body) || !is.null(names(body))) return(lost())
+    # Only the id and the date are read; each commit also carries its author's address.
+    pages[[k]] <- data.frame(id = vapply(body, function(x) .gl_chr(.gl_at(x, "id")), ""),
+                             at = vapply(body, function(x) .gl_utc(.gl_at(x, "committed_date")), ""),
+                             stringsAsFactors = FALSE)
+    nxt <- unname(a$res$headers["x-next-page"])
+    # Without the header only a short page is known to be the last.
+    if (length(nxt) != 1L || is.na(nxt)) { if (length(body) < 100L) break else return(lost()) }
+    if (!nzchar(nxt)) break
+    if (k == GITLAB_ONSET_PAGE_CAP) return(lost())
+  }
+  list(commits = do.call(rbind, pages), stopped = FALSE)
+}
+
+#' The oldest commit touching any of `paths` on the default branch, in UTC, for one project over REST.
+#' date is NA when nothing touches them, a page failed or the page cap was reached; stopped is TRUE when
+#' the host's budget ran out, or it said 429 or ratelimit-remaining 0, before every page was read.
+gl_file_onset <- function(io, domain, project_id, paths, pacer) {
+  earliest <- NA_character_
+  for (p in paths) {
+    h <- .gl_path_commits(io, domain, project_id, p, pacer)
+    if (is.null(h$commits)) return(list(date = NA_character_, stopped = h$stopped))
+    d <- h$commits$at[!is.na(h$commits$at)]
+    if (length(d)) earliest <- min(c(earliest, d), na.rm = TRUE)
+  }
+  list(date = earliest, stopped = FALSE)
+}
+
+#' The date of the commit that added `token` to an ignore file, by bisecting the file's revisions over REST,
+#' as fetch_ignore_onset does on GitHub: exact is FALSE when the line is there at the oldest revision. A
+#' failed read gives NA; stopped as for gl_file_onset.
+gl_ignore_line_onset <- function(io, domain, project_id, file, token, pacer) {
+  none <- function(stopped = FALSE) list(date = NA_character_, exact = FALSE, stopped = stopped)
+  h <- .gl_path_commits(io, domain, project_id, file, pacer)
+  if (is.null(h$commits)) return(none(h$stopped))
+  cm <- h$commits[!is.na(h$commits$id), , drop = FALSE]
+  if (!nrow(cm)) return(none())
+  cm <- cm[rev(seq_len(nrow(cm))), , drop = FALSE]
+  raw <- sprintf("/projects/%s/repository/files/%s/raw?ref=", format(project_id, scientific = FALSE, trim = TRUE),
+                 utils::URLencode(file, reserved = TRUE))
+  halt <- NA_character_
+  present <- function(i) {
+    if (!is.na(halt)) return(NA)
+    a <- .gl_rest_get(io, pacer, domain, paste0(raw, cm$id[i]))
+    if (a$state == "stopped" || isTRUE(a$last)) { halt <<- "stopped"; return(NA) }
+    if (a$state == "failed") { halt <<- "failed"; return(NA) }
+    ignore_text_has_token(a$res$body, token)
+  }
+  hit <- bisect_ignore_onset(nrow(cm), present)
+  if (!is.na(halt)) return(none(halt == "stopped"))
+  if (is.na(hit$index)) return(none())
+  list(date = cm$at[hit$index], exact = isTRUE(hit$exact), stopped = FALSE)
 }

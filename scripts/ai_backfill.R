@@ -15,6 +15,8 @@
 #                .github/workflows/ai-weekly.yml in place of gate)
 #   deep      -> ask the shard's share of the week's search list and write its dated rows,
 #                search log, account counts and campaign (matrix job)
+#   gitlab-onsets -> date the GitLab repositories' new findings over REST and write their
+#                dated rows (one job)
 #   merge     -> reconcile node_id identity, reduce prior+incoming onsets, rebuild the
 #                summary rollups, and republish (one job)
 if (!exists("STARGAZER_PAGE"))       source("scripts/config.R")
@@ -24,6 +26,7 @@ if (!exists("host_pacer"))     source("scripts/pacing.R")
 if (!exists("ensure_series_schema")) source("scripts/helpers.R")
 if (!exists("build_tree_query"))     source("scripts/github.R")
 if (!exists("gl_collect_gauges"))    source("scripts/gitlab.R")
+if (!exists("run_fetch_gitlab"))     source("scripts/gitlab_weekly.R") # .gl_rest_block for the GitLab dating
 if (!exists("gl_contents_query"))    source("scripts/gitlab_contents.R")
 if (!exists("gh_release_exists"))    source("scripts/update.R")   # default_io, gh_release_*, seed_working_db
 if (!exists("build_ai_detail"))      source("scripts/ai_signals.R")
@@ -909,8 +912,9 @@ run_gate <- function(io, out_dir, parts_dir, full = TRUE) {
     stored <- unname(.ai_read_pipeline_state(io, file.path(out_dir, "_state"))["ai_campaign_since"])
     since <- campaign_start(TRUE, if (length(stored)) stored else NA_character_, today)
   }
-  work <- select_deep_work(flagged_df, ev_df, pub$signals, pub$search_log, reads, pub$account_counts,
-                           campaign_since = since, today = today, full = full)
+  work <- gitlab_onset_only(select_deep_work(flagged_df, ev_df, pub$signals, pub$search_log, reads,
+                                             pub$account_counts, campaign_since = since, today = today, full = full),
+                            flagged_df)
   write_flagged_partial(file.path(out_dir, "vcs-ai-flagged-roster.db"), flagged_df, ev_df, work = work,
                         campaign = data.frame(since = since, stringsAsFactors = FALSE))
   counts <- table(factor(work$reason, levels = names(AI_WORK_PRIORITY)))
@@ -922,6 +926,15 @@ run_gate <- function(io, out_dir, parts_dir, full = TRUE) {
 
 #' The weekly gate: the same work list without a campaign.
 run_gate_incremental <- function(io, out_dir, parts_dir) run_gate(io, out_dir, parts_dir, full = FALSE)
+
+#' The work list without a GitLab repository's searches: GitHub's commit search cannot answer for one, so
+#' it keeps only its dating items, which gitlab-onsets works. Pure.
+gitlab_onset_only <- function(work, flagged) {
+  gl <- flagged$repo_id[is_gitlab_node(flagged$node_id)]
+  out <- work[!(work$repo_id %in% gl) | work$reason %in% "onset", , drop = FALSE]
+  rownames(out) <- NULL
+  out
+}
 
 # ---- deep onset shard IO ----------------------------------------------------
 export_ai_shard <- function(path, rows, model_rows = NULL, extra = list()) {
@@ -999,7 +1012,8 @@ run_deep <- function(io, out_dir, roster_path, i, N,
                      marker_delay = BACKFILL_DELAY_S, search_delay = SEARCH_DELAY_S) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   fr <- read_flagged(roster_path)
-  flagged <- fr$flagged
+  # GitLab repositories are dated by gitlab-onsets, and leaving them out keeps every GitHub shard as it was.
+  flagged <- fr$flagged[!is_gitlab_node(fr$flagged$node_id), , drop = FALSE]
   evidence <- .ai_bind_like(cbind(repo_id = character(0), .ai_empty_found()), list(fr$evidence))
   evidence$role[is.na(evidence$role)] <- "authoring"
   today <- format(Sys.Date())
@@ -1124,6 +1138,133 @@ run_deep <- function(io, out_dir, roster_path, i, N,
   if (refused > 0L)
     message(sprintf("ai deep shard %d/%d: WARNING %d commit search(es) were refused (rate limit or error); ", i, N, refused),
             "commit counts for this shard are UNDER-COUNTED, not absent")
+}
+
+# ---- GitLab dating ----------------------------------------------------------
+#' The gitlab-onsets io: GitLab REST with the domain's token where one is set. A 401 drops the token for the
+#' run and lowers `pacer`'s budget for that host. `run` is the transport, as for gl_rest().
+gitlab_onsets_io <- function(pacer, run = system2, log = message) {
+  state <- gl_run_state(pacer = pacer, log = log)
+  list(gl_rest = function(domain, path) gl_rest(domain, path, run = run, state = state))
+}
+
+# One dating item's state, as run_deep keeps it, or NULL when the host stopped answering part way.
+.gl_onset_item <- function(io, s, ev, tool, domain, project_id, pacer, today) {
+  for (marker in unique(ev$marker[ev$tier == "D"])) {
+    if (ai_is_ignore_marker(marker)) {
+      parts <- strsplit(marker, ":", fixed = TRUE)[[1]]
+      file <- if (identical(parts[1], "rbuildignore")) ".Rbuildignore" else ".gitignore"
+      got <- gl_ignore_line_onset(io, domain, project_id, file, paste(parts[-1], collapse = ":"), pacer)
+      if (got$stopped) return(NULL)
+      # An unreadable history falls back to the end of today, as on GitHub.
+      s$marker_dates[[marker]] <- if (!is.na(got$date)) got$date else paste0(today, "T23:59:59Z")
+      if (!is.na(got$date) && isTRUE(got$exact)) s$exact_ignores <- c(s$exact_ignores, marker)
+      next
+    }
+    got <- gl_file_onset(io, domain, project_id, expand_marker_paths(marker_repo_path(marker)), pacer)
+    if (got$stopped) return(NULL)
+    if (!is.na(got$date)) s$marker_dates[[marker]] <- got$date
+  }
+  s$tools <- unique(c(s$tools, tool))
+  s
+}
+
+.gl_onset_note <- function(why) switch(why, done = "end of the list", closed = "rate limited",
+  deferred = "deferred after repeated failures", deadline = "past the deadline",
+  hour = "out of requests for this hour and no time for the next", fault = "stopped by a fault")
+
+#' Dates the GitLab repositories' dating items from the flagged roster over REST, as run_deep dates GitHub's:
+#' a file by its oldest commit, an ignore line by bisecting the file's revisions, a commit credit as the read
+#' dated it. Items wait in a queue per host by priority and repo_id; one the hour's budget cuts off goes to the
+#' back of its queue, and a sleep to the next UTC hour comes when every host left is out of requests and the
+#' deadline allows. A host closed by a 429 keeps its items undated. Writes vcs-ai-shard-gitlab.db with the rows of every
+#' repository it worked on.
+run_gitlab_onsets <- function(io, out_dir, roster_path, now = function() as.numeric(Sys.time()), sleep = Sys.sleep,
+                              rest_pacer = gl_rest_pacer(now, sleep), deadline_min = GITLAB_ONSET_DEADLINE_MIN,
+                              log = message) {
+  if (!file.exists(roster_path)) {
+    log(sprintf("gitlab onsets: no flagged roster at %s, nothing dated", roster_path))
+    return(invisible(NULL))
+  }
+  deadline <- now() + 60 * deadline_min
+  fr <- read_flagged(roster_path)
+  flagged <- fr$flagged[is_gitlab_node(fr$flagged$node_id), , drop = FALSE]
+  evidence <- .ai_bind_like(cbind(repo_id = character(0), .ai_empty_found()), list(fr$evidence))
+  evidence$role[is.na(evidence$role)] <- "authoring"
+  today <- format(Sys.Date())
+  work <- if (!is.null(fr$work)) fr$work else select_deep_work(flagged, evidence, NULL, NULL, NULL, NULL, today = today)
+  work <- work[work$reason %in% "onset" & work$repo_id %in% flagged$repo_id, , drop = FALSE]
+  work <- work[order(work$priority, work$repo_id, method = "radix"), , drop = FALSE]
+  node <- flagged$node_id[match(work$repo_id, flagged$repo_id)]
+  dom <- sub(.GL_NODE_RE, "\\1", node)
+  hosts <- sort(unique(dom), method = "radix")
+  log(sprintf("gitlab onsets: %d dating item(s) for %d repositories on %d host(s)", nrow(work),
+              length(unique(work$repo_id)), length(hosts)))
+
+  acc <- new.env(parent = emptyenv())
+  acc$state <- list(); acc$done <- rep(FALSE, nrow(work))
+  acc$queue <- lapply(stats::setNames(hosts, hosts), function(d) which(dom == d))
+  acc$pos <- stats::setNames(rep(1L, length(hosts)), hosts)
+  acc$why <- stats::setNames(rep("done", length(hosts)), hosts)
+  # Works one host's queue until it cannot go on, and says why.
+  visit <- function(d) {
+    key <- .gl_key(d)
+    while (acc$pos[[d]] <= length(acc$queue[[d]])) {
+      block <- .gl_rest_block(rest_pacer, key, need = 1L)
+      if (!is.na(block)) return(block)
+      if (now() >= deadline) return("deadline")
+      k <- acc$queue[[d]][acc$pos[[d]]]; rid <- work$repo_id[k]
+      s <- acc$state[[rid]] %||% list(tools = character(0), marker_dates = list(), exact_ignores = character(0),
+                                      extra = NULL)
+      ev <- evidence[evidence$repo_id == rid & evidence$tool == work$tool[k] & evidence$role == "authoring", ,
+                     drop = FALSE]
+      s <- .gl_onset_item(io, s, ev, work$tool[k], d, sub("^.*:", "", node[k]), rest_pacer, today)
+      if (!is.null(s)) { acc$state[[rid]] <- s; acc$done[k] <- TRUE }
+      # One the hour's budget cut off is read again from the start after the hour.
+      else if (identical(.gl_rest_block(rest_pacer, key, need = 1L), "hour")) acc$queue[[d]] <- c(acc$queue[[d]], k)
+      acc$pos[[d]] <- acc$pos[[d]] + 1L
+    }
+    "done"
+  }
+  open <- hosts
+  while (length(open)) {
+    waiting <- character(0)
+    for (d in open) {
+      why <- tryCatch(visit(d), error = function(e) {
+        log(sprintf("gitlab onsets: %s stopped by a fault: %s", d, .gl_redact(conditionMessage(e))))
+        "fault"
+      })
+      if (identical(why, "hour")) waiting <- c(waiting, d) else acc$why[[d]] <- why
+    }
+    open <- waiting
+    if (!length(open)) break
+    # A host whose hour turned while the others ran goes again before anyone sleeps.
+    if (any(vapply(open, function(d) !identical(.gl_rest_block(rest_pacer, .gl_key(d), need = 1L), "hour"), NA))) next
+    wake <- (floor(now() / 3600) + 1) * 3600 + 1
+    if (wake >= deadline) {
+      acc$why[open] <- "hour"
+      break
+    }
+    log(sprintf("gitlab onsets: %s out of requests for this hour, waiting %d s for the next",
+                paste(open, collapse = ", "), as.integer(ceiling(wake - now()))))
+    sleep(wake - now())
+  }
+  for (d in hosts) {
+    items <- unique(acc$queue[[d]]); left <- items[!acc$done[items]]
+    log(sprintf("gitlab onsets: %s, %d of %d item(s) done, %s%s", d, length(items) - length(left), length(items),
+                .gl_onset_note(acc$why[[d]]),
+                if (length(left)) paste0(", left undated: ", paste(work$repo_id[left], work$tool[left], collapse = ", "))
+                else ""))
+  }
+
+  rows <- .ai_bind_like(.ai_empty_signals(), lapply(names(acc$state), function(rid)
+    .ai_deep_rows(rid, acc$state[[rid]], evidence, flagged[flagged$repo_id == rid, , drop = FALSE][1, ], today)))
+  dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+  path <- file.path(out_dir, "vcs-ai-shard-gitlab.db")
+  export_ai_shard(path, rows, NULL, extra = list(search_log = .ai_empty_log(), account_counts = .ai_empty_counts(),
+                                                 campaign = data.frame(since = character())))
+  log(sprintf("gitlab onsets: %d dated row(s) for %d repositories", nrow(rows), length(acc$state)))
+  invisible(path)
 }
 
 # ---- merge ------------------------------------------------------------------
@@ -1311,10 +1452,13 @@ run_merge <- function(io, out_dir, parts_dir) {
 # point CI does.
 main <- function(mode, out_dir, io = NULL) {
   token <- Sys.getenv("VCS_SIGNALS_TOKEN")
+  # One GitLab REST pacer per run: a 401 on the token lowers its budget, and the dating reads it.
+  gl_rest_p <- gl_rest_pacer()
   if (is.null(io)) io <- list(
     graphql        = default_io(token)$graphql,
     # gitlab-contents reads anonymously by construction.
     gl_graphql     = gitlab_contents_io()$gl_graphql,
+    gl_rest        = gitlab_onsets_io(gl_rest_p)$gl_rest,
     search_hit     = function(owner, name, query, delay = SEARCH_DELAY_S)
                        search_earliest_commit_hit(token, owner, name, query, delay, sleep = Sys.sleep),
     sleep          = function(seconds) Sys.sleep(seconds),
@@ -1351,6 +1495,9 @@ main <- function(mode, out_dir, io = NULL) {
       stop("deep: VCS_SHARD_I must be in [0, VCS_SHARD_N)")
     flagged_dir <- Sys.getenv("VCS_FLAGGED", out_dir)
     run_deep(io, out_dir, file.path(flagged_dir, "vcs-ai-flagged-roster.db"), i, N)
+  } else if (mode == "gitlab-onsets") {
+    run_gitlab_onsets(io, out_dir, file.path(Sys.getenv("VCS_FLAGGED", out_dir), "vcs-ai-flagged-roster.db"),
+                      rest_pacer = gl_rest_p)
   } else if (mode == "merge") {
     # If another publisher replaced the release between this merge's seed and its
     # publish (the weekly merge shares this Sunday cron), the merge waits for that
@@ -1359,7 +1506,7 @@ main <- function(mode, out_dir, io = NULL) {
     # repeated.
     retry_on_publish_conflict(io, function() run_merge(io, out_dir, Sys.getenv("VCS_PARTS", "parts")))
   } else {
-    stop("usage: ai_backfill.R [enumerate|canary|cheap|gitlab-contents|gate|gate-incremental|deep|merge]")
+    stop("usage: ai_backfill.R [enumerate|canary|cheap|gitlab-contents|gate|gate-incremental|deep|gitlab-onsets|merge]")
   }
 }
 
