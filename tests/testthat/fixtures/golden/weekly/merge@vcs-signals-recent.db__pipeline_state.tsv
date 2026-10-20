@@ -1,4 +1,5 @@
 key	value
+gitlab_license_since	<DATE>
 go_live	2026-08-20
 repo_dates_source	head-commit+latest-release
 repo_name_history_since	2026-08-20
