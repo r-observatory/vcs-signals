@@ -26,14 +26,14 @@ tables.vcs_ai_models	1
 tables.vcs_ai_outside_prs	1
 tables.vcs_ai_repo_reads	6
 tables.vcs_ai_review_signals	1
-tables.vcs_ai_rule_inventory	85
+tables.vcs_ai_rule_inventory	86
 tables.vcs_ai_ruleset_history	1
 tables.vcs_ai_search_coverage	55
 tables.vcs_ai_search_log	32
 tables.vcs_ai_signals	6
-tables.vcs_ai_silent_channels	77
+tables.vcs_ai_silent_channels	78
 tables.vcs_dev_tooling	6
-tables.vcs_dev_tooling_rules	93
+tables.vcs_dev_tooling_rules	100
 tables.vcs_repo_name_history	7
 tables.vcs_repo_owner	6
 tables.vcs_signals_summary	11

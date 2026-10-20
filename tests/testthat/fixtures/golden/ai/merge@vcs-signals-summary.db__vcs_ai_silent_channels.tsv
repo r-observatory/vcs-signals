@@ -48,6 +48,7 @@ D	cursor	unexplained	\N	\N
 D	devin	unexplained	\N	\N
 D	factory	genuine	No .factory folder in any repository, checked across 15,875 on 2026-09-25. The files at the top of every repository are read each week.	2026-09-25
 D	gemini	unexplained	\N	\N
+D	gitlab-duo	genuine	No GitLab Duo file (.gitlab/duo/chat-rules.md, agent-config.yml or mcp.json) in any of the 214 GitLab repositories read on 2026-10-20: 13 have a .gitlab folder and none holds a duo folder. The files at the top of every GitLab repository are read each week.	2026-10-20
 D	goose	genuine	No .goosehints file in any repository, checked across 15,875 on 2026-09-25. The files at the top of every repository are read each week.	2026-09-25
 D	grok	genuine	No GROK.md, .grok or .xai in any repository, checked across 15,875. xAI's Grok Build reads AGENTS.md, CLAUDE.md and .grok/rules rather than GROK.md, so a repository using it may show only as AGENTS.md or CLAUDE.md.	2026-09-25
 D	jules	unexplained	\N	\N
