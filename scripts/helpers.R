@@ -442,6 +442,49 @@ restore_name_history <- function(io, con, dir) {
     "lose every rename dated since %s."), since[1], since[1]), call. = FALSE)
 }
 
+GITLAB_LICENSE_SINCE_KEY <- "gitlab_license_since"
+
+.mark_gitlab_license_published <- function(con, today) {
+  if (!DBI::dbExistsTable(con, "gitlab_license") || !DBI::dbExistsTable(con, "pipeline_state"))
+    return(invisible(FALSE))
+  DBI::dbExecute(con, "INSERT OR IGNORE INTO pipeline_state (key, value)
+    SELECT ?, ? WHERE EXISTS (SELECT 1 FROM gitlab_license)",
+    params = list(GITLAB_LICENSE_SINCE_KEY, today))
+  invisible(TRUE)
+}
+
+#' Put back the GitLab licences a publish by older code dropped, from the published summary or
+#' its previous copy, as restore_name_history does for the name history. With no copy left the
+#' run goes on with a warning: the next weekly run reads every licence again.
+restore_gitlab_license <- function(io, con, dir) {
+  since <- tryCatch(DBI::dbGetQuery(con, "SELECT value FROM pipeline_state WHERE key = ?",
+                                    params = list(GITLAB_LICENSE_SINCE_KEY))$value,
+                    error = function(e) character(0))
+  if (length(since) == 0) return(invisible(character(0)))
+  if (DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM gitlab_license")$n > 0)
+    return(invisible(character(0)))
+  dir.create(dir, showWarnings = FALSE, recursive = TRUE)
+  cols <- c("repo_id", "license", "read_on")
+  for (asset in c("vcs-signals-summary.db", "vcs-signals-summary-prev.db")) {
+    path <- file.path(dir, asset)
+    if (!isTRUE(io$download(asset, dir)) || !file.exists(path)) next
+    pc <- DBI::dbConnect(RSQLite::SQLite(), path)
+    rows <- .gate_rows(pc, "gitlab_license")
+    DBI::dbDisconnect(pc)
+    if (is.null(rows) || nrow(rows) == 0 || !all(cols %in% names(rows))) next
+    DBI::dbWriteTable(con, "gitlab_license", rows[cols], append = TRUE)
+    message(sprintf(paste0("vcs-signals-recent.db carried no gitlab_license although the release has ",
+                           "published it since %s; restored %d from %s"), since[1], nrow(rows), asset))
+    return(invisible(asset))
+  }
+  message(sprintf(paste0(
+    "::warning::the release has published gitlab_license since %s, but vcs-signals-recent.db carries ",
+    "none and neither vcs-signals-summary.db nor vcs-signals-summary-prev.db has a copy. Code from ",
+    "before the table publishes without it. GitLab licences read empty until the next weekly run."),
+    since[1]))
+  invisible(character(0))
+}
+
 #' `links_backfill`, when given, is a frame read_links_backfill() has already
 #' checked. It is applied in the same transaction as today's links on every run,
 #' which costs one no-op pass over the table on an ordinary day and puts the
@@ -2649,6 +2692,7 @@ publish <- function(io, con, out_dir, tag, source_kind, force_full = FALSE, touc
   # Before the embed, so the recent shard the next run seeds from says so.
   .mark_links_published(con, format(today))
   .mark_name_history_published(con, format(today))
+  .mark_gitlab_license_published(con, format(today))
   .embed_recent_tables(con, recent_path)
   shard_names <- c(shard_names, recent_shard)
 

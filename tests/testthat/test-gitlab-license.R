@@ -225,3 +225,68 @@ test_that("a malformed GitLab shard is logged and skipped, and the GitHub shards
   expect_identical(s$contributors_total, 9L)
   expect_identical(.gll_read(rel, "SELECT COUNT(*) n FROM gitlab_license")$n, 0L)
 })
+
+# A release as a publish by code older than the table leaves it: the recent shard says since when
+# the licences were published but carries none, the summary has no table, and `prev` is what the
+# previous summary holds.
+.gll_lost_release <- function(prev, key = TRUE) {
+  rel <- tempfile("gll_lost_"); dir.create(rel)
+  mk <- function(name, rows = NULL, key = FALSE) {
+    con <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel, name)); on.exit(DBI::dbDisconnect(con))
+    ensure_repo_schema(con); ensure_series_schema(con)
+    DBI::dbExecute(con, "DROP TABLE gitlab_license")
+    if (!is.null(rows)) {
+      DBI::dbExecute(con, "CREATE TABLE gitlab_license (repo_id TEXT PRIMARY KEY, license TEXT, read_on TEXT NOT NULL)")
+      DBI::dbWriteTable(con, "gitlab_license", rows, append = TRUE)
+    }
+    if (key) DBI::dbExecute(con, "INSERT INTO pipeline_state VALUES (?, '2026-10-19')",
+                            params = list(GITLAB_LICENSE_SINCE_KEY))
+  }
+  mk("vcs-signals-recent.db", key = key)
+  mk("vcs-signals-summary.db")
+  if (!is.null(prev)) mk("vcs-signals-summary-prev.db", prev)
+  writeLines('{"summary":{"years":[]}}', file.path(rel, "manifest.json"))
+  rel
+}
+.gll_seeded <- function(rel) {
+  out <- tempfile("gll_seed_"); dir.create(out)
+  work <- file.path(out, "_working.db")
+  logged <- capture_messages(suppressWarnings(seed_working_db(local_release_io(rel), out, work)))
+  con <- DBI::dbConnect(RSQLite::SQLite(), work); on.exit(DBI::dbDisconnect(con))
+  list(rows = DBI::dbGetQuery(con, "SELECT repo_id, license, read_on FROM gitlab_license ORDER BY repo_id"),
+       logged = logged)
+}
+
+test_that("a seed that lost the GitLab licences restores them from the previous summary", {
+  saved <- data.frame(repo_id = c("gitlab.com/g/a", "gitlab.com/g/b"), license = c("MIT", NA),
+                      read_on = "2026-10-20", stringsAsFactors = FALSE)
+  s <- .gll_seeded(.gll_lost_release(saved))
+  expect_identical(s$rows$repo_id, saved$repo_id)
+  expect_identical(s$rows$license, saved$license)
+  expect_true(any(grepl("restored 2 from vcs-signals-summary-prev.db", s$logged, fixed = TRUE)))
+})
+
+test_that("with no copy left the seed goes on with a warning, since the next weekly reads them again", {
+  s <- .gll_seeded(.gll_lost_release(NULL))
+  expect_identical(nrow(s$rows), 0L)
+  expect_true(any(grepl("^::warning::.*gitlab_license since 2026-10-19", s$logged)))
+})
+
+test_that("before the licences were first published an empty table is not a loss", {
+  s <- .gll_seeded(.gll_lost_release(NULL, key = FALSE))
+  expect_identical(nrow(s$rows), 0L)
+  expect_false(any(grepl("gitlab_license", s$logged, fixed = TRUE)))
+})
+
+test_that("a publish with GitLab licences marks the recent shard with since when they were published", {
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:"); on.exit(DBI::dbDisconnect(con))
+  ensure_repo_schema(con); ensure_series_schema(con)
+  .mark_gitlab_license_published(con, "2026-10-20")
+  expect_length(DBI::dbGetQuery(con, "SELECT value FROM pipeline_state WHERE key = ?",
+                                params = list(GITLAB_LICENSE_SINCE_KEY))$value, 0L)
+  upsert_gitlab_license(con, data.frame(repo_id = "gitlab.com/g/a", license = "MIT", read_on = "2026-10-20"))
+  .mark_gitlab_license_published(con, "2026-10-20")
+  .mark_gitlab_license_published(con, "2026-10-27")
+  expect_identical(DBI::dbGetQuery(con, "SELECT value FROM pipeline_state WHERE key = ?",
+                                   params = list(GITLAB_LICENSE_SINCE_KEY))$value, "2026-10-20")
+})
