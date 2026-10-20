@@ -878,6 +878,9 @@ GITLAB_CONTENT_FILES <- c("DESCRIPTION", ".gitignore", ".Rbuildignore", ".gitlab
 # read per project in one run.
 GITLAB_MESSAGE_BATCH    <- 10L
 GITLAB_MESSAGE_PAGE_CAP <- 10L
+# Addresses the windsurf rules credit under any name, which no search phrase holds. GitLab's prefilter
+# only; GitHub's searches keep the rules' own phrases.
+GITLAB_MESSAGE_EXTRA_PHRASES <- c("@windsurf.ai", "@windsurf.com")
 # The contents query canary: one floor per set, met when any one candidate meets it.
 TREE_QUERY_CANARY <- list(
   own_community = c("tidyverse/forcats", "tidyverse/dplyr", "r-lib/usethis", "easystats/insight"),

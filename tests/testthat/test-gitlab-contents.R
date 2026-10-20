@@ -190,10 +190,11 @@ test_that("the fixtures hold no email address", {
 })
 
 # ---- commit-message search ----------------------------------------------------
-# GitLab hands the regexp to git's commit grep: basic syntax, \| between alternatives, any case
-# (measured on gitlab.com 2026-10-20). Each alternative reads the same in that grep and in PCRE.
+# GitLab hands the regexp to git's commit grep: basic syntax, \| between alternatives (measured on
+# gitlab.com 2026-10-20). Case is matched as written, since the query cannot ask to ignore it.
+# Each alternative reads the same in that grep and in PCRE.
 gitlab_grep <- function(re, x)
-  Reduce(`|`, lapply(strsplit(re, "\\|", fixed = TRUE)[[1]], grepl, x = x, ignore.case = TRUE, perl = TRUE))
+  Reduce(`|`, lapply(strsplit(re, "\\|", fixed = TRUE)[[1]], grepl, x = x, perl = TRUE))
 
 # Footers as the tools write them, at least one per message rule.
 footers <- c(
@@ -211,6 +212,8 @@ footers <- c(
   "msg.openhands.coauthor" = "Co-authored-by: openhands <openhands@all-hands.dev>",
   "msg.jules.coauthor" = "Co-authored-by: google-labs-jules[bot] <161369871+google-labs-jules[bot]@users.noreply.github.com>",
   "msg.windsurf.coauthor" = "Co-Authored-By: Windsurf <noreply@windsurf.com>",
+  "msg.windsurf.coauthor" = "Co-authored-by: Cascade <cascade@windsurf.com>",
+  "msg.windsurf.coauthor" = "Co-authored-by: SWE-1 <noreply@windsurf.ai>",
   "msg.windsurf.bot" = "Co-authored-by: windsurf-bot[bot] <189301087+windsurf-bot[bot]@users.noreply.github.com>",
   "msg.antigravity.coauthor" = "Co-authored-by: Antigravity <antigravity@google.com>",
   "msg.gemini.coauthor" = "Co-authored-by: Gemini <gemini@google.com>",
@@ -255,14 +258,45 @@ test_that("the prefilter catches every rule's own phrase and holds no lookaround
   expect_false(grepl("(?", re, fixed = TRUE))
 })
 
-test_that("each prefilter alternative is plain text, one-character classes and word gaps, read alike by RE2 and git", {
+test_that("each prefilter alternative holds only two-case letter classes, one-character classes, escapes and word gaps", {
   alts <- strsplit(gl_message_regex(), "\\|", fixed = TRUE)[[1]]
   expect_false(anyDuplicated(alts) > 0L)
   rest <- gsub("[^A-Za-z0-9]*", "", alts, fixed = TRUE)
-  rest <- gsub("\\[[^]^\\\\]\\]", "", rest)
+  pairs <- regmatches(rest, gregexpr("\\[[A-Za-z][A-Za-z]\\]", rest))
+  expect_true(all(vapply(unlist(pairs), function(p) substr(p, 2, 2) == toupper(substr(p, 3, 3)) &&
+                                                     substr(p, 3, 3) == tolower(substr(p, 2, 2)), NA)))
+  rest <- gsub("\\[[A-Za-z][A-Za-z]\\]", "", rest)
+  rest <- gsub("\\[[^]^\\\\A-Za-z]\\]", "", rest)
   rest <- gsub("\\\\[][\\\\^]", "", rest)
+  expect_false(any(grepl("[A-Za-z]", rest)), info = paste(rest, collapse = " "))
   expect_false(any(grepl("[][\\\\.+*?(){}|^$]", rest)), info = paste(rest, collapse = " "))
-  expect_true("223556219[+]Copilot" %in% alts)
+  expect_true("223556219[+][Cc][Oo][Pp][Ii][Ll][Oo][Tt]" %in% alts)
+})
+
+test_that("the prefilter matches a footer whatever its case, without the host ignoring case", {
+  re <- gl_message_regex()
+  expect_false(gitlab_grep("Co-Authored-By", "co-authored-by"))
+  odd <- c("msg.codex.coauthor" = "CO-AUTHORED-BY: CODEX <codex@openai.com>",
+           "msg.cursor.at-agent" = "co-authored-by: cursor <cursor@agent>",
+           "msg.gemini.coauthor" = "co-Authored-BY: gemini <gemini@google.com>",
+           "msg.cursor.made-with" = "MADE-WITH: CURSOR")
+  for (i in seq_along(odd)) {
+    msg <- paste0("Fix the parser\n\n", odd[[i]])
+    expect_true(names(odd)[i] %in% match_commit_findings(footer_commits(msg))$rule_key, info = odd[[i]])
+    expect_true(gitlab_grep(re, msg), info = odd[[i]])
+  }
+})
+
+test_that("a windsurf address under another name passes the prefilter, and GitHub's search phrases stay as they were", {
+  re <- gl_message_regex()
+  cascade <- "Fix\n\nCo-authored-by: Cascade <cascade@windsurf.com>"
+  swe <- "Fix\n\nCo-authored-by: SWE-1 <noreply@windsurf.ai>"
+  expect_setequal(match_commit_findings(footer_commits(cascade))$rule_key, c("msg.windsurf.coauthor", "msg.windsurf.cascade"))
+  expect_identical(match_commit_findings(footer_commits(swe))$rule_key, "msg.windsurf.coauthor")
+  expect_true(gitlab_grep(re, cascade)); expect_true(gitlab_grep(re, swe))
+  expect_false(gitlab_grep(gl_message_regex(extra = character(0)), cascade))
+  queries <- vapply(c(AI_TRAILER_PATTERNS, AI_REVIEW_RULES), `[[`, "", "query")
+  expect_false(any(grepl("@windsurf", queries, fixed = TRUE)))
 })
 
 test_that("real footers are credits for their rule and pass the prefilter, the bracketed Claude Code one too", {

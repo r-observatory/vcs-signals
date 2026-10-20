@@ -245,22 +245,25 @@ gl_collect_contents <- function(io, roster, pacer, log = NULL) {
 }
 
 # ---- commit-message search -----------------------------------------------------
-# A word escaped so both regexp syntaxes GitLab applies read it literally: RE2 validates the query,
-# then git's basic grep runs it. A one-character class, or a backslash for the four a class cannot hold.
+# A word escaped so both regexp syntaxes GitLab applies read it literally and in either case: RE2
+# validates the query, then git's basic grep runs it. A letter becomes a class of its two cases, other
+# metacharacters a one-character class, or a backslash for the four a class cannot hold.
 .gl_re_literal <- function(x) {
   ch <- strsplit(x, "")[[1]]
-  ch <- ifelse(ch %in% c(".", "+", "*", "?", "(", ")", "{", "}", "|", "$"), paste0("[", ch, "]"),
-               ifelse(ch %in% c("\\", "^", "[", "]"), paste0("\\", ch), ch))
+  ch <- ifelse(grepl("^[A-Za-z]$", ch), paste0("[", toupper(ch), tolower(ch), "]"),
+        ifelse(ch %in% c(".", "+", "*", "?", "(", ")", "{", "}", "|", "$"), paste0("[", ch, "]"),
+        ifelse(ch %in% c("\\", "^", "[", "]"), paste0("\\", ch), ch)))
   paste(ch, collapse = "")
 }
 
-#' The prefilter GitLab runs over commit messages: each rule's search phrase, any run of characters
-#' other than letters and digits between its words, phrases joined by \| as git's basic grep reads
-#' them. GitLab matches it ignoring case (measured on gitlab.com 2026-10-20: a (?i) group or a bare |
-#' matched nothing there). It holds no lookaround; each rule's own pattern decides locally what counts.
-gl_message_regex <- function(rules = c(AI_TRAILER_PATTERNS, AI_REVIEW_RULES)) {
-  phrases <- vapply(rules, function(r) {
-    w <- strsplit(gsub('"', "", r$query), " +")[[1]]
+#' The prefilter GitLab runs over commit messages: each rule's search phrase and each of `extra`, any
+#' run of characters other than letters and digits between words, phrases joined by \| as git's basic
+#' grep reads them (measured on gitlab.com 2026-10-20: a (?i) group or a bare | matched nothing there).
+#' The query cannot ask the host to ignore case, so every letter spells both. It holds no lookaround;
+#' each rule's own pattern decides locally what counts.
+gl_message_regex <- function(rules = c(AI_TRAILER_PATTERNS, AI_REVIEW_RULES), extra = GITLAB_MESSAGE_EXTRA_PHRASES) {
+  phrases <- vapply(c(vapply(rules, function(r) gsub('"', "", r$query), ""), extra), function(q) {
+    w <- strsplit(q, " +")[[1]]
     paste(vapply(w[nzchar(w)], .gl_re_literal, ""), collapse = "[^A-Za-z0-9]*")
   }, "")
   paste(unique(phrases), collapse = "\\|")
