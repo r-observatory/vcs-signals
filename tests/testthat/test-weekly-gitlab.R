@@ -227,6 +227,21 @@ test_that("a 5xx or a 404 visits its repository but writes no licence row, and a
   expect_identical(wkg_cursor(r$out), c(gitlab.com = "gitlab.com/g/p5"))
 })
 
+test_that("a release without the state is a quiet first run, and a failed download raises a warning", {
+  state <- file.path(withr::local_tempdir(), GITLAB_STATE_DB)
+  logged <- character()
+  log <- function(m) logged <<- c(logged, m)
+  absent <- list(download = function(pattern, dir) structure(FALSE, missing = TRUE))
+  expect_identical(read_gitlab_cursors(absent, state, log), stats::setNames(character(0), character(0)))
+  expect_identical(logged, "GitLab: the release has no cursor state yet, every host starts at its first repository")
+
+  logged <- character()
+  for (failing in list(function(pattern, dir) FALSE, function(pattern, dir) stop("HTTP 502"))) {
+    expect_length(read_gitlab_cursors(list(download = failing), state, log), 0L)
+  }
+  expect_identical(logged, rep("::warning::GitLab: the cursor state could not be downloaded, every host starts at its first repository", 2L))
+})
+
 test_that("a repository whose calls all failed is visited, and the cursor moves to it", {
   withr::local_envvar(GITLAB_TOKEN_GITLAB_COM = NA)
   roster <- wkg_roster(withr::local_tempdir(), list(gitlab.com = 1:4))

@@ -533,8 +533,8 @@ gh_release_generation <- function(repo, tag = "current", run = system2,
 
 #' Download one asset: TRUE once it lands, FALSE when it cannot. A failure is tried
 #' again after each of `waits`, so a burst of 502s no longer costs a whole run.
-#' gh saying the release lists no such asset is FALSE at once, since no retry
-#' changes that. "release not found" is retried: gh 2.96 and later word a failed
+#' gh saying the release lists no such asset is FALSE at once, marked
+#' attr(, "missing"), since no retry changes that. "release not found" is retried: gh 2.96 and later word a failed
 #' lookup that way (see gh_release_generation). run, sleep and rand (via ...) are
 #' injected so the suite needs no network and never waits.
 gh_release_download <- function(repo, pattern, dir, tag = "current", run = system2,
@@ -551,7 +551,7 @@ gh_release_download <- function(repo, pattern, dir, tag = "current", run = syste
     if (grepl("no assets match the file pattern|no assets to download", said)) {
       message(sprintf("gh release download: release '%s' on %s does not list %s (%s)",
                       tag, repo, pattern, said))
-      return(FALSE)
+      return(structure(FALSE, missing = TRUE))
     }
     message(sprintf("gh release download of %s failed, attempt %d of %d (exit %s): %s",
                     pattern, attempt, last, status, said))
