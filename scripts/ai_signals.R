@@ -29,6 +29,11 @@ classify_tree_markers <- function(root_entries, github_entries) {
     # A .gemini folder of review settings belongs to Gemini Code Assist.
     if (identical(m$path, ".gemini") && identical(classify_gemini_dir(root_entries), "review"))
       return(NULL)
+    # A folder whose files are all counted by their own rules, or are review settings, adds nothing.
+    if (!is.null(m$covered)) {
+      inside <- sub("^.*/", "", grep(paste0("^", gsub(".", "\\.", m$path, fixed = TRUE), "/[^/]+$"), hay, value = TRUE))
+      if (length(inside) && all(inside %in% m$covered)) return(NULL)
+    }
     data.frame(tool = m$tool, tier = "D", marker = m$path,
                agnostic = isTRUE(m$agnostic), stringsAsFactors = FALSE)
   })

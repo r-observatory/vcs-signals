@@ -154,11 +154,11 @@ test_that("a published table gains every new column with its declared type", {
   expect_identical(types[dev_tooling_columns()], dev_tooling_column_types())
 })
 
-test_that("the ruleset version names v3 and the day it landed", {
-  expect_match(DEV_TOOLING_RULESET_VERSION, "^v3 \\(\\d{4}-\\d{2}-\\d{2}\\)$")
+test_that("the ruleset version names v4 and the day it landed", {
+  expect_match(DEV_TOOLING_RULESET_VERSION, "^v4 \\(\\d{4}-\\d{2}-\\d{2}\\)$")
   for (d in DEV_TOOLING_DERIVED) {
     expect_true(d$type %in% c("INTEGER", "TEXT"), info = d$col)
-    expect_true(d$source %in% c("tree", "graphql", "workflow_text", "derived"), info = d$col)
+    expect_true(d$source %in% c("tree", "graphql", "workflow_text", "gitlab_ci_text", "derived"), info = d$col)
     expect_true(nzchar(d$rule), info = d$col)
   }
   expect_false(any(duplicated(dev_tooling_columns())))
@@ -188,7 +188,7 @@ test_that("the community and pkgdown lists are the ones the analyzer shares", {
   expect_identical(CONTRIBUTING_TREE_PATHS, c("CONTRIBUTING.md", "CONTRIBUTING", "CONTRIBUTING.Rmd",
     "CONTRIBUTING.rst", "contributing.md", "Contributing.md", "CONTRIBUTING.MD"))
   expect_identical(PR_TEMPLATE_TREE_PATHS, c("pull_request_template.md", "PULL_REQUEST_TEMPLATE.md",
-                                             "PULL_REQUEST_TEMPLATE"))
+                                             "PULL_REQUEST_TEMPLATE", ".gitlab/merge_request_templates"))
   pk <- Find(function(m) m$col == "has_pkgdown", DEV_TOOLING_MARKERS)$paths
   expect_setequal(pk, c(PKGDOWN_CONFIG_TREE_PATHS, "pkgdown"))
 })
@@ -236,7 +236,7 @@ test_that("Travis beside any CI system has_ci counts is not Travis alone", {
 test_that("the rules table states one rule per published column, from config", {
   rules <- dev_tooling_rules_table("v3 (2026-09-27)")
   expect_identical(rules$col, dev_tooling_columns())
-  expect_true(all(rules$source %in% c("tree", "graphql", "workflow_text", "derived")))
+  expect_true(all(rules$source %in% c("tree", "graphql", "workflow_text", "gitlab_ci_text", "derived")))
   expect_true(all(nzchar(rules$rule)))
   expect_true(all(rules$ruleset_version == "v3 (2026-09-27)"))
   expect_equal(rules$rule[rules$col == "has_litedown"], "_litedown.yml|site/_litedown.yml at root")
@@ -288,4 +288,85 @@ test_that("a smaller rules table is a ruleset change, not a regression", {
     DBI::dbDisconnect(con); p
   }
   expect_identical(summary_regressions(mk(60L), mk(10L)), character(0))
+})
+
+ci_repo <- function(text, path = ".gitlab-ci.yml") list(gitlab_ci = list(text = text, config_path = path))
+gl_ci_cols <- c("gitlab_ci_include", "gitlab_ci_rcmdcheck", "gitlab_ci_r_devel", "gitlab_ci_coverage",
+                "gitlab_ci_site_deploy", "gitlab_ci_lint")
+
+test_that("a .gitlab-ci.yml is read for its check, coverage, R-devel, platforms and Pages job", {
+  ci <- paste("image: rocker/r-ver:devel", "check:", "  script:", "    - R CMD check --as-cran *.tar.gz",
+              "    - Rscript -e 'covr::package_coverage()'", "win:", "  tags: [saas-windows-medium-amd64]",
+              "pages:", "  script: [Rscript -e 'pkgdown::build_site()']", sep = "\n")
+  got <- gitlab_ci_columns(".gitlab-ci.yml", ci_repo(ci))
+  expect_equal(unname(unlist(got[gl_ci_cols])), c(0L, 1L, 1L, 1L, 1L, 0L))
+  expect_identical(got$gitlab_ci_platforms, '["linux","windows"]')
+})
+
+test_that("a pages job sets the site deploy column and nothing else does without it", {
+  with_pages <- gitlab_ci_columns(".gitlab-ci.yml", ci_repo("pages:\n  script: [make site]\n"))
+  without <- gitlab_ci_columns(".gitlab-ci.yml", ci_repo("test:\n  script: [make test]\n"))
+  expect_identical(with_pages$gitlab_ci_site_deploy, 1L)
+  expect_identical(without$gitlab_ci_site_deploy, 0L)
+})
+
+test_that("a check named only in a comment is not a check", {
+  ci <- "# we used to run R CMD check on macOS\ntest:\n  script: [Rscript -e 'testthat::test_dir(\"tests\")'] # no R CMD check\n"
+  got <- gitlab_ci_columns(".gitlab-ci.yml", ci_repo(ci))
+  expect_identical(got$gitlab_ci_rcmdcheck, 0L)
+  expect_true(is.na(got$gitlab_ci_platforms)); expect_true(is.na(got$gitlab_ci_r_devel))
+})
+
+test_that("what an included configuration may hold reads NA, what the file shows reads 1", {
+  inc <- "include:\n  - component: $CI_SERVER_FQDN/r/ci/check@1\n"
+  got <- gitlab_ci_columns(".gitlab-ci.yml", ci_repo(inc))
+  expect_identical(got$gitlab_ci_include, 1L)
+  expect_true(all(is.na(unlist(got[setdiff(gl_ci_cols, "gitlab_ci_include")]))))
+  got2 <- gitlab_ci_columns(".gitlab-ci.yml", ci_repo(paste0(inc, "check:\n  script: [R CMD check .]\n")))
+  expect_identical(got2$gitlab_ci_rcmdcheck, 1L); expect_true(is.na(got2$gitlab_ci_coverage))
+})
+
+test_that("an absent CI file reads 0, an unread one or a custom path NA, a GitHub repository NA", {
+  absent <- gitlab_ci_columns("DESCRIPTION", ci_repo(NA_character_))
+  zero <- setdiff(gl_ci_cols, "gitlab_ci_r_devel")
+  expect_equal(unname(unlist(absent[zero])), rep(0L, 5))
+  expect_true(is.na(absent$gitlab_ci_platforms)); expect_true(is.na(absent$gitlab_ci_r_devel))
+  expect_true(all(is.na(unlist(gitlab_ci_columns(".gitlab-ci.yml", ci_repo(NA_character_))))))
+  expect_true(all(is.na(unlist(gitlab_ci_columns(".gitlab-ci.yml", ci_repo("x: 1", "ci/main.yml"))))))
+  expect_true(all(is.na(unlist(gitlab_ci_columns(".gitlab-ci.yml", list())))))
+})
+
+test_that("GitLab templates, CODEOWNERS and Pages fill the existing columns", {
+  el <- list(gl_pages_count = 3L, coc_url = NA_character_, contributing_url = NA_character_,
+             gitlab_ci = list(text = NA_character_, config_path = ".gitlab-ci.yml"))
+  dv <- classify_dev_tooling(c("DESCRIPTION", ".gitlab/issue_templates", ".gitlab/CODEOWNERS",
+                               ".gitlab/merge_request_templates"), character(0), repo = el)
+  expect_identical(c(dv$has_issue_template, dv$has_codeowners, dv$has_pr_template, dv$has_pages), c(1L, 1L, 1L, 1L))
+  expect_identical(c(dv$pr_template_source, dv$coc_source), c("repo", "none"))
+  expect_true(all(is.na(c(dv$pages_last_deploy, dv$pages_url, dv$homepage_url, dv$funding_links, dv$has_discussions))))
+  miss <- classify_dev_tooling("DESCRIPTION", character(0), repo = el)
+  expect_true(is.na(miss$pr_template_source))
+  expect_true(is.na(classify_dev_tooling("DESCRIPTION", character(0), repo = list(gl_pages_count = NA_integer_))$has_pages))
+  expect_identical(classify_dev_tooling("DESCRIPTION", character(0), repo = list(gl_pages_count = 0L))$has_pages, 0L)
+})
+
+test_that("a GitHub repository with a .gitlab-ci.yml reads the GitLab CI columns as not read", {
+  resp <- list(data = list(r0 = list(isFork = FALSE, rootTree = list(entries = list(
+    list(name = ".gitlab-ci.yml", type = "blob"), list(name = "DESCRIPTION", type = "blob"))))))
+  el <- parse_tree_markers(resp, data.frame(repo_id = "github.com/o/n", owner = "o", name = "n"))[[1]]
+  dv <- classify_dev_tooling(el$root_entries, el$github_entries, repo = el)
+  expect_identical(dv$ci_gitlab, 1L)
+  expect_true(all(is.na(unlist(dv[c(gl_ci_cols, "gitlab_ci_platforms")]))))
+})
+
+test_that("a cut-off vignettes listing leaves rbuildignore_excluded unknown", {
+  dv <- classify_dev_tooling(c("DESCRIPTION", ".Rbuildignore", "vignettes", "vignettes/a.Rmd"), character(0),
+                             repo = list(rbuildignore_text = "^vignettes$", truncated = "vignettes"))
+  expect_true(is.na(dv$rbuildignore_excluded))
+})
+
+test_that("the rules table names the GitLab CI columns under ruleset v4", {
+  rules <- dev_tooling_rules_table()
+  expect_setequal(rules$col[rules$source == "gitlab_ci_text"], c(gl_ci_cols, "gitlab_ci_platforms"))
+  expect_match(DEV_TOOLING_RULESET_VERSION, "^v4 \\(\\d{4}-\\d{2}-\\d{2}\\)$")
 })
