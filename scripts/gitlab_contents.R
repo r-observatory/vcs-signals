@@ -86,6 +86,7 @@ gl_parse_contents <- function(res, roster) {
       else if (startsWith(path, ".github/")) gh <- c(gh, if (length(ns)) paste0(sub("^\\.github/", "", path), "/", ns))
       else root <- c(root, if (length(ns)) paste0(path, "/", ns))
     }
+    # Only the named Duo files are read, so an unknown file next to a known one is not seen.
     root <- c(root, paths[!is.na(paths) & startsWith(paths, ".gitlab/duo/")])
     rbi <- text(".Rbuildignore")
     el <- list(
@@ -178,7 +179,8 @@ gl_collect_contents <- function(io, roster, pacer, log = NULL) {
       fail(rows, stopped[[d]]); return(invisible())
     }
     if (!.gl_answered(res)) {
-      pacer$after(key, FALSE)
+      # Only a one-project failure counts toward the breaker; a failed larger batch may hold one bad project.
+      if (nrow(rows) == 1L) pacer$after(key, FALSE)
       if (nrow(rows) > 1L) {
         h <- ceiling(nrow(rows) / 2)
         read(d, rows[seq_len(h), , drop = FALSE]); read(d, rows[-seq_len(h), , drop = FALSE])

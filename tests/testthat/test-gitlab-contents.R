@@ -73,15 +73,22 @@ test_that("a host whose schema lacks a required field fails without asking again
   expect_setequal(got$failed$repo_id, roster$repo_id); expect_true(all(got$failed$query == "gitlab-contents"))
 })
 
-test_that("a batch that times out is halved down to single projects", {
-  f <- fake_gitlab(function(domain, query, variables) {
-    ids <- unlist(variables$ids)
-    if (length(ids) > 5L) return(list(error = "Operation timed out", status = NA_integer_))
-    gl_ok(lapply(ids, function(i) utils::modifyList(hyd1d(), list(id = i))))
-  })
+test_that("a batch that times out is halved down to single projects, and only the bad one fails", {
   roster <- one(sprintf("gitlab.opencode.de/o/r%02d", 1:20), sprintf("gitlab:gitlab.opencode.de:%d", 1:20))
-  got <- gl_collect_contents(f$io, roster, gl_free_pacer())
-  expect_length(got$trees, 20L); expect_equal(nrow(got$failed), 0L)
+  run <- function(bad) {
+    f <- fake_gitlab(function(domain, query, variables) {
+      ids <- unlist(variables$ids)
+      if (any(ids == sprintf("gid://gitlab/Project/%d", bad))) return(list(error = "Operation timed out", status = NA_integer_))
+      gl_ok(lapply(ids, function(i) utils::modifyList(hyd1d(), list(id = i))))
+    })
+    gl_collect_contents(f$io, roster, gl_free_pacer())
+  }
+  for (bad in c(1L, 20L)) {
+    got <- run(bad)
+    expect_length(got$trees, 19L)
+    expect_identical(got$failed$repo_id, roster$repo_id[bad])
+    expect_match(got$failed$error, "timed out")
+  }
 })
 
 test_that("GitHub workflow files on a GitLab repository are read in a second request", {
@@ -131,18 +138,22 @@ test_that("a project is failed with a request cap reason when the pacer refuses 
 test_that("the .gitlab/duo files the read returned join the root entries", {
   duo <- function(paths) {
     node <- hyd1d()
+    node$repository$gitlab$trees$nodes <- list(list(name = "duo"))
     node$repository$blobs$nodes <- c(node$repository$blobs$nodes,
                                      lapply(paths, function(p) list(path = p, rawTextBlob = "x")))
     gl_parse_contents(gl_ok(list(node)), hyd1d_row)[[1]]
   }
-  only <- duo(".gitlab/duo/mr-review-instructions.yaml")
-  expect_true(".gitlab/duo/mr-review-instructions.yaml" %in% only$root_entries)
+  review <- ".gitlab/duo/mr-review-instructions.yaml"
+  only <- duo(review)
+  expect_true(all(c(".gitlab/duo", review) %in% only$root_entries))
   expect_false(".gitlab/duo/chat-rules.md" %in% only$root_entries)
-  unk <- duo(c(".gitlab/duo/mr-review-instructions.yaml", ".gitlab/duo/chat-rules.md"))
-  expect_true(all(c(".gitlab/duo/mr-review-instructions.yaml", ".gitlab/duo/chat-rules.md") %in% unk$root_entries))
   # The folder rule: a review-only folder counts for nothing, one with another file counts.
   expect_false("gitlab-duo" %in% classify_tree_markers(only$root_entries, only$github_entries)$tool)
-  expect_true("gitlab-duo" %in% classify_tree_markers(unk$root_entries, unk$github_entries)$tool)
+  none <- duo(character(0))
+  f <- classify_tree_markers(none$root_entries, none$github_entries)
+  expect_identical(f$marker[f$tool == "gitlab-duo"], ".gitlab/duo")
+  unk <- duo(c(review, ".gitlab/duo/chat-rules.md"))
+  expect_true(".gitlab/duo/chat-rules.md" %in% unk$root_entries)
 })
 
 test_that("the CI config path is the default for a default project, the custom path, or NA when not read", {
