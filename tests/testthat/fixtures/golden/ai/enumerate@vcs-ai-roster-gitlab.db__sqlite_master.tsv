@@ -1,0 +1,5 @@
+type	name	tbl_name	sql
+index	sqlite_autoindex_roster_1	roster	\N
+index	sqlite_autoindex_roster_cran_1	roster_cran	\N
+table	roster	roster	CREATE TABLE roster (repo_id TEXT PRIMARY KEY, node_id TEXT NOT NULL,\n    domain TEXT NOT NULL, project_id INTEGER NOT NULL, owner TEXT, name TEXT)
+table	roster_cran	roster_cran	CREATE TABLE roster_cran (repo_id TEXT NOT NULL, package TEXT NOT NULL,\n    cran_version TEXT NOT NULL, PRIMARY KEY (repo_id, package))

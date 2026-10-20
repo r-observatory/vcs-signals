@@ -7,6 +7,8 @@
 #   enumerate -> full active github roster from the published summary's repos table (one job)
 #   cheap     -> every repository's contents, recent pull requests and commits, and account
 #                counts over one mod-N shard, written to the cheap partial (matrix job)
+#   gitlab-contents -> every GitLab repository's contents, and its commit messages where the host
+#                can search them, written to the same two partials (one job, no token)
 #   gate      -> union the cheap partials into the flagged roster and write the week's search
 #                list, and on a full gate work within the campaign (one job)
 #   gate-incremental -> write the same list without a campaign (the weekly gate used by
@@ -50,14 +52,38 @@ write_ai_roster <- function(path, roster_df, roster_cran = NULL) {
     prs_walk_started_on TEXT, prs_walk_cursor TEXT)", AI_ROSTER_TABLE))
   cols <- intersect(c("repo_id", "owner", "name", "node_id", "done", .AI_ROSTER_READ_COLS), names(roster_df))
   if (nrow(roster_df) > 0) DBI::dbWriteTable(con, AI_ROSTER_TABLE, roster_df[cols], append = TRUE)
-  # Rebuilt every week from one CRAN read, so no week depends on an earlier copy.
+  .ai_write_roster_cran(con, roster_cran)
+  DBI::dbExecute(con, "VACUUM")
+  invisible(path)
+}
+
+# Rebuilt every week from one CRAN read, so no week depends on an earlier copy.
+.ai_write_roster_cran <- function(con, roster_cran) {
   DBI::dbExecute(con, "CREATE TABLE roster_cran (repo_id TEXT NOT NULL, package TEXT NOT NULL,
     cran_version TEXT NOT NULL, PRIMARY KEY (repo_id, package))")
   if (!is.null(roster_cran) && nrow(roster_cran) > 0)
     DBI::dbWriteTable(con, "roster_cran", roster_cran[c("repo_id", "package", "cran_version")], append = TRUE)
+}
+
+AI_GITLAB_ROSTER_DB <- "vcs-ai-roster-gitlab.db"
+
+#' The GitLab roster the gitlab-contents job reads: gitlab_roster_rows() and the CRAN versions.
+write_ai_gitlab_roster <- function(path, roster, roster_cran = NULL) {
+  if (file.exists(path)) unlink(path)
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  DBI::dbExecute(con, "PRAGMA journal_mode=DELETE")
+  DBI::dbExecute(con, sprintf("CREATE TABLE %s (repo_id TEXT PRIMARY KEY, node_id TEXT NOT NULL,
+    domain TEXT NOT NULL, project_id INTEGER NOT NULL, owner TEXT, name TEXT)", AI_ROSTER_TABLE))
+  if (nrow(roster) > 0)
+    DBI::dbWriteTable(con, AI_ROSTER_TABLE, roster[c("repo_id", "node_id", "domain", "project_id", "owner", "name")],
+                      append = TRUE)
+  .ai_write_roster_cran(con, roster_cran)
   DBI::dbExecute(con, "VACUUM")
   invisible(path)
 }
+
+load_ai_gitlab_roster <- function(path) load_ai_roster(path)
 
 load_ai_roster <- function(path) {
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
@@ -333,10 +359,25 @@ run_enumerate_ai <- function(io, out_dir) {
     for (cn in .AI_ROSTER_READ_COLS) roster[[cn]] <- rd[[cn]][m]
   }
   rp <- DBI::dbGetQuery(con, "SELECT repo_id, package FROM repo_packages WHERE origin = 'cran'")
-  roster_cran <- build_roster_cran(io, rp, roster$repo_id)
+  # The GitLab roster shares the one CRAN read; a fault in it leaves the GitHub roster as it is.
+  gl <- tryCatch(gitlab_roster_rows(con), error = function(e) {
+    message("ai enumerate: no GitLab roster written: ", conditionMessage(e)); NULL })
+  cran_all <- build_roster_cran(io, rp, c(roster$repo_id, gl$repo_id))
+  roster_cran <- cran_all[cran_all$repo_id %in% roster$repo_id, , drop = FALSE]
   message(sprintf("ai enumerate: %d active github repos, %d CRAN package versions to compare",
                   nrow(roster), nrow(roster_cran)))
-  write_ai_roster(file.path(out_dir, "vcs-ai-roster.db"), roster, roster_cran)
+  path <- write_ai_roster(file.path(out_dir, "vcs-ai-roster.db"), roster, roster_cran)
+  if (!is.null(gl)) {
+    gl_path <- file.path(out_dir, AI_GITLAB_ROSTER_DB)
+    tryCatch({
+      write_ai_gitlab_roster(gl_path, gl, cran_all[cran_all$repo_id %in% gl$repo_id, , drop = FALSE])
+      message(sprintf("ai enumerate: %d active GitLab repos on %d hosts", nrow(gl), length(unique(gl$domain))))
+    }, error = function(e) {
+      if (file.exists(gl_path) && !dir.exists(gl_path)) unlink(gl_path)
+      message("ai enumerate: no GitLab roster written: ", conditionMessage(e))
+    })
+  }
+  invisible(path)
 }
 
 # ---- flagged partial IO -----------------------------------------------------
@@ -696,6 +737,130 @@ run_cheap <- function(io, out_dir, roster_path, i, N, batch_size = TIER_D_BATCH)
   .ai_shard_stop(f, scanned, i, N)
 }
 
+# ---- GitLab read ------------------------------------------------------------
+#' The contents check: a stop message when at least GITLAB_CANARY_MIN_ASKED projects were asked and
+#' fewer than half came back, or fewer than half of those list DESCRIPTION at the root (measured
+#' 2026-10-20: 214 of 214 came back, 195 list it); NULL otherwise.
+gitlab_contents_canary <- function(asked, trees) {
+  if (is.na(asked) || asked < GITLAB_CANARY_MIN_ASKED) return(NULL)
+  back <- length(trees)
+  desc <- sum(vapply(trees, function(t) "DESCRIPTION" %in% t$root_entries, NA))
+  why <- if (back < asked / 2) "fewer than half came back"
+         else if (desc < back / 2) sprintf("only %d of them list DESCRIPTION at the root", desc)
+  if (is.null(why)) return(NULL)
+  sprintf(paste0("GitLab contents check: %d of %d projects asked came back, %s. GitLab may have changed ",
+                 "what the contents query returns; nothing was written. Read the job's lines for each host, ",
+                 "fix the query or the parser, and run the job again."), back, asked, why)
+}
+
+#' The message check: a stop message when GITLAB_MESSAGE_CANARY, a repository with many commits crediting
+#' a tool, was searched and none came back; NULL otherwise. Skipped with a log line when that repository
+#' is not on the roster, its host has no message search, or its search was not read this run.
+gitlab_message_canary <- function(roster, msgs, log = NULL, repo_id = GITLAB_MESSAGE_CANARY) {
+  skip <- function(why) { .gl_log(log, sprintf("GitLab message check: %s %s, skipped", repo_id, why)); NULL }
+  i <- match(repo_id, roster$repo_id)
+  if (is.na(i)) return(skip("is not on the roster"))
+  if (sub(.GL_NODE_RE, "\\1", roster$node_id[i]) %in% msgs$unsupported)
+    return(skip("is on a host without the message search"))
+  rd <- msgs$reads[[repo_id]]
+  if (is.null(rd)) return(skip("was not read this run"))
+  hits <- match_commit_findings(rd$commits)
+  n <- length(unique(hits$oid[hits$code == "B" & hits$role == "authoring"]))
+  if (n > 0L) {
+    .gl_log(log, sprintf("GitLab message check: passed, %d commits of %s credit a tool", n, repo_id))
+    return(NULL)
+  }
+  sprintf(paste0("GitLab message check: the search of %s found no commit crediting a tool, where hundreds ",
+                 "are known. GitLab may have changed how it matches the search; nothing was written, so no ",
+                 "repository reads none. Check gl_message_regex() against a known commit and run the job again."),
+          repo_id)
+}
+
+#' Repositories whose GitLab message search read every matching commit: their log rows and models replace
+#' last week's, as a GitHub read to the first commit does.
+gitlab_rebuilt_repos <- function(log_in) {
+  if (is.null(log_in) || !nrow(log_in) || !all(c("source", "mode") %in% names(log_in))) return(character(0))
+  unique(log_in$repo_id[log_in$source %in% "search" & log_in$mode %in% "replace"])
+}
+
+#' The weekly read of every GitLab repository: its files, and its commit messages where the host can
+#' search them, under one request cap per host. Writes the two partials a GitHub cheap shard writes,
+#' vcs-ai-cheap-gitlab.db and vcs-dev-tooling-gitlab.db, and nothing when either check stops the run.
+run_gitlab_contents <- function(io, out_dir, roster_path, now = function() as.numeric(Sys.time()),
+                                sleep = Sys.sleep, log = message) {
+  if (!file.exists(roster_path)) {
+    log(sprintf("gitlab contents: no GitLab roster at %s, nothing read", roster_path))
+    return(invisible(NULL))
+  }
+  roster <- load_ai_gitlab_roster(roster_path)
+  if (!nrow(roster)) {
+    log(sprintf("gitlab contents: no GitLab roster repositories in %s, nothing read", roster_path))
+    return(invisible(NULL))
+  }
+  cran_links <- load_roster_cran(roster_path)
+  today <- format(Sys.Date())
+  pacer <- gl_pacer(now, sleep, GITLAB_AI_MAX_REQUESTS)
+  ok <- is_gitlab_node(roster$node_id)
+  contents <- gl_collect_contents(io, roster, pacer, log)
+  stop_msg <- gitlab_contents_canary(sum(ok), contents$trees)
+  if (!is.null(stop_msg)) stop(stop_msg, call. = FALSE)
+  msgs <- gl_collect_messages(io, roster, pacer, log)
+  stop_msg <- gitlab_message_canary(roster, msgs, log)
+  if (!is.null(stop_msg)) stop(stop_msg, call. = FALSE)
+
+  proto <- .ai_cheap_tables()
+  sink <- new.env()
+  for (nm in c(names(proto), "dev")) sink[[nm]] <- list()
+  put <- function(nm, df) if (!is.null(df) && nrow(df)) sink[[nm]][[length(sink[[nm]]) + 1L]] <- df
+  for (r in seq_len(nrow(roster))) {
+    rid <- roster$repo_id[r]; tree <- contents$trees[[rid]]; rd <- msgs$reads[[rid]]
+    put("dev", .ai_dev_tooling_row(tree, rid, today, cran_links))
+    # A project with no read entry was not searched: no log rows, so its counts stay NA.
+    activity <- NULL; complete <- FALSE
+    if (!is.null(rd)) {
+      complete <- isTRUE(rd$complete)
+      activity <- list(prs = NULL, commits = rd$commits)
+      hits <- match_commit_findings(rd$commits)
+      put("search_log", gl_message_log_rows(hits, rid, today, complete))
+      if (complete) put("models", read_model_rows(rid, rd$commits, hits, "replace"))
+    }
+    if (is.null(tree) && is.null(activity)) next
+    found <- assemble_repo_evidence(tree, activity, NULL, scanned_on = today, whole_history = complete)
+    put("review", review_rows(found, rid, today))
+    if (!repo_has_ai_signal(found)) next
+    # A read that gave no fork flag may be a fork.
+    put("flagged", data.frame(repo_id = rid, owner = roster$owner[r], name = roster$name[r],
+      node_id = roster$node_id[r], is_fork = if (isFALSE(tree$is_fork)) 0L else 1L,
+      parent = if (is.null(tree)) NA_character_ else (tree$parent %||% NA_character_),
+      pr_onset_date = NA_character_, stringsAsFactors = FALSE))
+    put("evidence", cbind(repo_id = rid, found))
+  }
+  dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+  tables <- lapply(stats::setNames(names(proto), names(proto)), function(nm) .ai_bind_like(proto[[nm]], sink[[nm]]))
+  write_cheap_partial(file.path(out_dir, "vcs-ai-cheap-gitlab.db"), tables)
+  dev_df <- if (length(sink$dev)) do.call(rbind, sink$dev) else .devtool_empty_shard()
+  f <- .ai_bind_like(.fetch_failed_frame(), list(contents$failed, msgs$failed))
+  write_dev_tooling_partial(file.path(out_dir, "vcs-dev-tooling-gitlab.db"), dev_df, f)
+
+  dom <- sub(.GL_NODE_RE, "\\1", roster$node_id)
+  for (d in unique(dom[ok])) {
+    ids <- roster$repo_id[ok & dom == d]
+    searched <- msgs$reads[intersect(names(msgs$reads), ids)]
+    score <- suppressWarnings(max(contents$max_score[d], msgs$max_score[d], na.rm = TRUE))
+    log(sprintf(paste0("gitlab contents: %s, projects asked %d, read %d, fields left out: %s, message search: %s, ",
+                       "searched %d (%d whole), highest complexity %s"),
+                d, length(ids), sum(ids %in% names(contents$trees)),
+                if (length(contents$dropped[[d]])) paste(contents$dropped[[d]], collapse = ", ") else "none",
+                if (d %in% msgs$unsupported) "not on this host" else if (length(searched)) "there" else "no answer",
+                length(searched), sum(vapply(searched, function(x) isTRUE(x$complete), NA)),
+                if (is.finite(score)) score else "not reported"))
+  }
+  log(sprintf("gitlab contents: %d dev-tooling rows, %d flagged repos, %d repositories failed a read (contents %d, messages %d)",
+              nrow(dev_df), nrow(tables$flagged), length(unique(f$repo_id)), sum(f$query == "gitlab-contents"),
+              sum(f$query == "gitlab-messages")))
+  invisible(out_dir)
+}
+
 # ---- gate -------------------------------------------------------------------
 #' The published tables the gate plans from. A release whose summary cannot be read stops
 #' the gate: planning from nothing would put every repository back on the list.
@@ -989,16 +1154,18 @@ run_merge <- function(io, out_dir, parts_dir) {
   reads_prior <- have("vcs_ai_repo_reads", .ai_empty_reads())
   reads_in <- from(cheap, "repo_reads", cbind(.ai_empty_reads(), reached_first = integer()))
   reads <- fold_repo_reads(reads_prior, reads_in)
-  rebuilt <- rebuilt_log_repos(reads, reads_in)
+  log_in <- cbind(.ai_empty_log(), mode = character(), read_after = character())
+  cheap_log <- from(cheap, "search_log", log_in)
+  # A whole GitLab message search rebuilds its repository's rows, as a GitHub read to the first commit does.
+  rebuilt <- union(rebuilt_log_repos(reads, reads_in), gitlab_rebuilt_repos(cheap_log))
   counted <- !is.na(reads_in$accounts_counted_on)
   counts <- fold_account_counts(have("vcs_ai_account_counts", .ai_empty_counts()),
                                 rbind(from(cheap, "account_counts", .ai_empty_counts()),
                                       from(deep, "account_counts", .ai_empty_counts())),
                                 counted_repos = stats::setNames(reads_in$accounts_counted_on[counted],
                                                                 reads_in$repo_id[counted]))
-  log_in <- cbind(.ai_empty_log(), mode = character(), read_after = character())
   log <- fold_search_log(have("vcs_ai_search_log", .ai_empty_log()),
-                         rbind(from(cheap, "search_log", log_in), from(deep, "search_log", log_in)),
+                         rbind(cheap_log, from(deep, "search_log", log_in)),
                          rebuilt_repos = rebuilt, reads = reads_prior)
   review <- fold_review_rows(have("vcs_ai_review_signals", .ai_empty_review()), from(cheap, "review", .ai_empty_review()))
   outside <- fold_outside_prs(have("vcs_ai_outside_prs", .ai_empty_outside()), from(cheap, "outside_prs", .ai_empty_outside()))
@@ -1047,7 +1214,9 @@ run_merge <- function(io, out_dir, parts_dir) {
   since <- if (length(stored)) stored[1] else if (length(camp)) camp[1] else NA_character_
   if (!length(stored) && !is.na(since))
     DBI::dbExecute(con, "INSERT INTO pipeline_state (key, value) VALUES ('ai_campaign_since', ?)", params = list(since))
-  flag_ids <- unique(from(cheap, "flagged", .ai_empty_flagged())$repo_id)
+  # GitLab repositories never get the searches GitLab cannot answer, so a campaign never waits on them.
+  fl <- from(cheap, "flagged", .ai_empty_flagged())
+  flag_ids <- unique(fl$repo_id[!is_gitlab_node(fl$node_id)])
   if (!is.na(since) && length(flag_ids) && campaign_finished(flag_ids, log, reads, since)) {
     DBI::dbExecute(con, "DELETE FROM pipeline_state WHERE key = 'ai_campaign_since'")
     message(sprintf("ai merge: the campaign since %s has asked every flagged repository", since))
@@ -1093,16 +1262,23 @@ run_merge <- function(io, out_dir, parts_dir) {
                   nrow(merged_dev), nrow(dev_df), length(dev_parts)))
 
   fail_list <- lapply(dev_parts, read_scan_failures)
-  fails <- if (length(fail_list)) do.call(rbind, fail_list) else .fetch_failed_frame()
+  all_fails <- if (length(fail_list)) do.call(rbind, fail_list) else .fetch_failed_frame()
+  # The share counts GitHub reads against the GitHub roster; a GitLab fault never stops GitHub data.
+  gitlab <- grepl("^gitlab-", all_fails$query)
+  fails <- all_fails[!gitlab, , drop = FALSE]
+  gl_fails <- all_fails[gitlab, , drop = FALSE]
   active_n <- tryCatch(DBI::dbGetQuery(con,
     sprintf("SELECT COUNT(*) n FROM repos WHERE %s AND status = 'active'",
             host_predicate(GITHUB_HOSTS)))$n[1],
     error = function(e) NA_integer_)
-  per_doc <- function(q) length(unique(fails$repo_id[fails$query == q]))
+  per_doc <- function(q, f = fails) length(unique(f$repo_id[f$query == q]))
   message(sprintf(paste0("ai merge: %d repositories failed a read this week (contents %d, activity %d, ",
                          "accounts %d, walk %d) of %s on the roster"),
                   length(unique(fails$repo_id)), per_doc("contents"), per_doc("activity"), per_doc("accounts"),
                   per_doc("walk"), active_n))
+  message(sprintf("ai merge: %d GitLab repositories failed a read this week (contents %d, messages %d)",
+                  length(unique(gl_fails$repo_id)), per_doc("gitlab-contents", gl_fails),
+                  per_doc("gitlab-messages", gl_fails)))
   failure_stop <- scan_failure_stop_message(fails, active_n)
 
   message(sprintf("ai merge: %d prior, %d incoming, %d reduced onset rows",
@@ -1128,8 +1304,11 @@ run_merge <- function(io, out_dir, parts_dir) {
 # point CI does.
 main <- function(mode, out_dir, io = NULL) {
   token <- Sys.getenv("VCS_SIGNALS_TOKEN")
+  # gitlab-contents runs with no GitLab token set, so its reads are anonymous.
+  gl_state <- gl_run_state(log = message)
   if (is.null(io)) io <- list(
     graphql        = default_io(token)$graphql,
+    gl_graphql     = function(domain, query, variables) gl_graphql(domain, query, variables, state = gl_state),
     search_hit     = function(owner, name, query, delay = SEARCH_DELAY_S)
                        search_earliest_commit_hit(token, owner, name, query, delay, sleep = Sys.sleep),
     sleep          = function(seconds) Sys.sleep(seconds),
@@ -1153,6 +1332,8 @@ main <- function(mode, out_dir, io = NULL) {
       stop("cheap: VCS_SHARD_I must be in [0, VCS_SHARD_N)")
     roster_dir <- Sys.getenv("VCS_ROSTER", out_dir)
     run_cheap(io, out_dir, file.path(roster_dir, "vcs-ai-roster.db"), i, N)
+  } else if (mode == "gitlab-contents") {
+    run_gitlab_contents(io, out_dir, file.path(Sys.getenv("VCS_ROSTER", out_dir), AI_GITLAB_ROSTER_DB))
   } else if (mode == "gate") {
     run_gate(io, out_dir, Sys.getenv("VCS_PARTS", "parts"), full = TRUE)
   } else if (mode == "gate-incremental") {
@@ -1172,7 +1353,7 @@ main <- function(mode, out_dir, io = NULL) {
     # repeated.
     retry_on_publish_conflict(io, function() run_merge(io, out_dir, Sys.getenv("VCS_PARTS", "parts")))
   } else {
-    stop("usage: ai_backfill.R [enumerate|canary|cheap|gate|gate-incremental|deep|merge]")
+    stop("usage: ai_backfill.R [enumerate|canary|cheap|gitlab-contents|gate|gate-incremental|deep|merge]")
   }
 }
 

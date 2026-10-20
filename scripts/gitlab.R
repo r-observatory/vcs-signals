@@ -272,6 +272,19 @@ gl_resolve <- function(io, repos, pacer, log = NULL, deadline = Inf,
 # ---- daily gauges --------------------------------------------------------------
 .gl_gid <- function(node_ids) paste0("gid://gitlab/Project/", sub("^.*:", "", node_ids))
 .GL_NODE_RE <- "^gitlab:([^:]+):[0-9]+$"
+is_gitlab_node <- function(node_id) !is.na(node_id) & grepl(.GL_NODE_RE, node_id)
+
+#' The active GitLab repositories with a GitLab node id, by repo_id: the domain and project id the
+#' id carries, and the owner and name the summary holds. `con` is the published summary.
+gitlab_roster_rows <- function(con) {
+  rows <- DBI::dbGetQuery(con, sprintf(paste0(
+    "SELECT repo_id, node_id, owner, name FROM repos WHERE %s AND status = 'active' AND node_id IS NOT NULL ",
+    "ORDER BY repo_id"), host_predicate(GITLAB_HOSTS)))
+  rows <- rows[is_gitlab_node(rows$node_id), , drop = FALSE]
+  data.frame(repo_id = rows$repo_id, node_id = rows$node_id, domain = sub(.GL_NODE_RE, "\\1", rows$node_id),
+             project_id = as.integer(sub("^.*:", "", rows$node_id)), owner = rows$owner, name = rows$name,
+             stringsAsFactors = FALSE)
+}
 
 #' Daily gauges for resolved GitLab projects, `GITLAB_BATCH` ids per request, grouped by domain.
 #' `repo_map` has node_id and repo_id; each project's domain is read from its node id. Returns

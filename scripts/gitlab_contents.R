@@ -148,6 +148,13 @@ gl_parse_workflows <- function(res, wanted) {
   if (is.numeric(s) && length(s) == 1L && !is.na(s)) as.integer(s) else NA_integer_
 }
 
+# Highest scores by domain, raised by an answer's; a domain with no score reported has no entry.
+.gl_keep_score <- function(scores, domain, res) {
+  s <- .gl_score(res)
+  if (!is.na(s) && (is.na(scores[domain]) || s > scores[domain])) scores[domain] <- s
+  scores
+}
+
 # One batch, asked again in halves down to single projects while its answer fails. `ask(rows)` returns
 # an answer, NULL when the pacer refused, or "done" when it settled the rows itself; `take(res, rows)`
 # reads an answer; `lost(rows, why, res)` records rows left unread (res is NULL for a refusal).
@@ -166,9 +173,9 @@ gl_parse_workflows <- function(res, wanted) {
 #' Reads every roster project's contents, `GITLAB_CONTENTS_BATCH` per request, grouped by the node id's
 #' domain. `roster` has repo_id and node_id. Returns trees (elements by repo_id), failed (a
 #' fetch-failure frame), dropped (optional fields a host rejected, by domain) and max_score (the
-#' highest query complexity an answer reported).
+#' highest query complexity the answers reported, by domain).
 gl_collect_contents <- function(io, roster, pacer, log = NULL) {
-  trees <- list(); failed <- list(); dropped <- list(); max_score <- 0L
+  trees <- list(); failed <- list(); dropped <- list(); max_score <- integer(0)
   fail <- function(rows, why)
     failed[[length(failed) + 1L]] <<- .fetch_failed_frame(rows$repo_id, "gitlab-contents", why, .utc_now())
   stopped <- list()
@@ -201,7 +208,7 @@ gl_collect_contents <- function(io, roster, pacer, log = NULL) {
       }
     }
     take <- function(res, rows) {
-      max_score <<- max(max_score, .gl_score(res), na.rm = TRUE)
+      max_score <<- .gl_keep_score(max_score, d, res)
       got <- gl_parse_contents(res, rows)
       trees[names(got)] <<- got
       bad <- rows[rows$repo_id %in% attr(got, "unreadable"), , drop = FALSE]
@@ -309,9 +316,10 @@ gl_message_commits <- function(nodes) {
 #' Searches every roster project's commit messages: first pages GITLAB_MESSAGE_BATCH per request, then
 #' later pages one project per request up to GITLAB_MESSAGE_PAGE_CAP. A host without the search is
 #' asked once and its projects get no entry. Returns reads (by repo_id: commits, and complete when the
-#' last page said there was no next), unsupported (domains), failed (a fetch-failure frame) and max_score.
+#' last page said there was no next), unsupported (domains), failed (a fetch-failure frame) and
+#' max_score (by domain).
 gl_collect_messages <- function(io, roster, pacer, log = NULL) {
-  reads <- list(); failed <- list(); unsupported <- character(0); max_score <- 0L
+  reads <- list(); failed <- list(); unsupported <- character(0); max_score <- integer(0)
   fail <- function(rows, why)
     failed[[length(failed) + 1L]] <<- .fetch_failed_frame(rows$repo_id, "gitlab-messages", why, .utc_now())
   roster <- roster[!is.na(roster$node_id) & grepl(.GL_NODE_RE, roster$node_id), , drop = FALSE]
@@ -354,14 +362,14 @@ gl_collect_messages <- function(io, roster, pacer, log = NULL) {
           return(fail(row, .gl_why(res)))
         }
         pacer$after(key, TRUE)
-        max_score <<- max(max_score, .gl_score(res), na.rm = TRUE)
+        max_score <<- .gl_keep_score(max_score, d, res)
         cm <- commits_of(res, row)
       }
       cms <- do.call(rbind, got)
       reads[[row$repo_id]] <<- list(commits = cms[!duplicated(cms$oid), , drop = FALSE], complete = !more)
     }
     take <- function(res, rows) {
-      max_score <<- max(max_score, .gl_score(res), na.rm = TRUE)
+      max_score <<- .gl_keep_score(max_score, d, res)
       ids <- vapply(.gl_nodes(res), function(n) .gl_chr(.gl_at(n, "id")), "")
       for (j in which(.gl_gid(rows$node_id) %in% ids)) {
         row <- rows[j, , drop = FALSE]

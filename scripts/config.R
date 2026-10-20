@@ -881,6 +881,13 @@ GITLAB_MESSAGE_PAGE_CAP <- 10L
 # Addresses the windsurf rules credit under any name, which no search phrase holds. GitLab's prefilter
 # only; GitHub's searches keep the rules' own phrases.
 GITLAB_MESSAGE_EXTRA_PHRASES <- c("@windsurf.ai", "@windsurf.com")
+# The weekly GitLab read (ai_backfill.R gitlab-contents): GraphQL requests per host in one run, the
+# contents read and the message search together, and the fewest projects its contents check judges.
+GITLAB_AI_MAX_REQUESTS  <- 60L
+GITLAB_CANARY_MIN_ASKED <- 20L
+# A repository with hundreds of commits crediting Claude (247 on 2026-10-20) on a host with the message
+# search. A search there that finds none stops the run, so a change in GitLab's matching never writes none.
+GITLAB_MESSAGE_CANARY <- "gitlab.com/bart-turczynski/punycoder"
 # The contents query canary: one floor per set, met when any one candidate meets it.
 TREE_QUERY_CANARY <- list(
   own_community = c("tidyverse/forcats", "tidyverse/dplyr", "r-lib/usethis", "easystats/insight"),

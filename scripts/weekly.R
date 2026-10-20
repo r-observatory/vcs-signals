@@ -150,13 +150,7 @@ write_gitlab_roster <- function(path, roster_df) {
 enumerate_gitlab <- function(summary_path, path) {
   con <- DBI::dbConnect(RSQLite::SQLite(), summary_path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
-  rows <- DBI::dbGetQuery(con, sprintf(
-    "SELECT repo_id, node_id FROM repos WHERE %s AND status = 'active' AND node_id IS NOT NULL ORDER BY repo_id",
-    host_predicate(GITLAB_HOSTS)))
-  rows <- rows[grepl(.GL_NODE_RE, rows$node_id), , drop = FALSE]
-  roster <- data.frame(repo_id = rows$repo_id, node_id = rows$node_id,
-                       domain = sub(.GL_NODE_RE, "\\1", rows$node_id),
-                       project_id = as.integer(sub("^.*:", "", rows$node_id)), stringsAsFactors = FALSE)
+  roster <- gitlab_roster_rows(con)
   message(sprintf("enumerate: %d gitlab repos on %d hosts", nrow(roster), length(unique(roster$domain))))
   write_gitlab_roster(path, roster)
 }
