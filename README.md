@@ -26,7 +26,7 @@ dbDisconnect(con)
 
 For the full time series, download `vcs-signals-recent.db` (rolling 400-day window) or a per-year `vcs-signals-<YYYY>.db` archive, and query `signals_series(repo_id, date, metric, value)`.
 
-The release also holds `vcs-signals-gitlab-state.db`, the weekly GitLab job's own state. It has one cursor per GitLab host, the last repository that host's rotation read. It is not data to query. Losing it only restarts the rotation from the start of each host's list.
+The release also holds `vcs-signals-gitlab-state.db`, the weekly GitLab job's own state. It has one cursor per GitLab host, the last repository that host's rotation read. It is not data to query. Losing it only restarts the rotation from the start of each host's list, and a run that cannot download it says so in a workflow warning.
 
 ## Schema
 

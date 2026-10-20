@@ -5,13 +5,18 @@
 GITLAB_SHARD_DB <- "vcs-signals-shard-gitlab.db"
 GITLAB_STATE_DB <- "vcs-signals-gitlab-state.db"
 
-#' Each domain's last repository visited, named by domain, from the published state. A download that
-#' fails or finds none, or a file that cannot be read, starts every host at its first repository.
+#' Each domain's last repository visited, named by domain, from the published state. A release without
+#' the state, a download that fails, or a file that cannot be read starts every host at its first
+#' repository; only the failed download raises a workflow warning, since the release does hold a state.
 read_gitlab_cursors <- function(io, state_path, log = message) {
   none <- stats::setNames(character(0), character(0))
-  got <- tryCatch(isTRUE(io$download(basename(state_path), dirname(state_path))), error = function(e) FALSE)
-  if (!got || !file.exists(state_path)) {
-    log("GitLab: no cursor state downloaded, every host starts at its first repository")
+  got <- tryCatch(io$download(basename(state_path), dirname(state_path)), error = function(e) FALSE)
+  if (isTRUE(attr(got, "missing"))) {
+    log("GitLab: the release has no cursor state yet, every host starts at its first repository")
+    return(none)
+  }
+  if (!isTRUE(as.vector(got)) || !file.exists(state_path)) {
+    log("::warning::GitLab: the cursor state could not be downloaded, every host starts at its first repository")
     return(none)
   }
   cur <- tryCatch({

@@ -70,9 +70,18 @@ test_that("an asset the release does not list is FALSE at once, with no wait", {
                                                sleep = function(s) slept <<- c(slept, s),
                                                rand = no_jitter))
     expect_false(ok, info = said)
+    expect_true(isTRUE(attr(ok, "missing")), info = said)
     expect_length(gh$patterns(), 1L)
     expect_length(slept, 0L)
   }
+})
+
+test_that("a download that fails on every attempt is not marked missing", {
+  gh <- fake_gh_download(function(pattern, n) "gh: HTTP 504")
+  ok <- suppressMessages(gh_release_download("o/r", "vcs-signals-2010.db", download_dir(), run = gh$run,
+                                             sleep = function(s) invisible(NULL), rand = no_jitter))
+  expect_false(ok)
+  expect_false(isTRUE(attr(ok, "missing")))
 })
 
 test_that("release not found is downloaded again, since gh words a failed lookup that way", {
