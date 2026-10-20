@@ -13,10 +13,12 @@ gl_token <- function(domain) {
 }
 
 # Per-run token state: domains whose token was refused, domains already logged as accepted, and
-# the REST pacer whose budget a refusal lowers. The caller makes one per run.
-gl_run_state <- function(pacer = NULL, log = NULL) {
+# the REST pacer whose budget a refusal lowers. The caller makes one per run. An anonymous run
+# never reads a GITLAB_TOKEN_<DOMAIN>.
+gl_run_state <- function(pacer = NULL, log = NULL, anonymous = FALSE) {
   st <- new.env(parent = emptyenv())
   st$dropped <- character(); st$accepted <- character(); st$pacer <- pacer; st$log <- log
+  st$anonymous <- isTRUE(anonymous)
   st
 }
 
@@ -30,7 +32,7 @@ gl_run_state <- function(pacer = NULL, log = NULL) {
 # `status`. A 401 while the token is set drops it, lowers the REST budget and retries once without it.
 .gl_with_token <- function(domain, state, send) {
   if (is.null(state)) state <- gl_run_state()
-  tok <- if (domain %in% state$dropped) NA_character_ else gl_token(domain)
+  tok <- if (isTRUE(state$anonymous) || domain %in% state$dropped) NA_character_ else gl_token(domain)
   r <- send(tok)
   if (!.has_token(tok)) return(r)
   if (identical(r$status, 401L)) {

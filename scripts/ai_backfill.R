@@ -783,6 +783,13 @@ gitlab_rebuilt_repos <- function(log_in) {
   unique(log_in$repo_id[log_in$source %in% "search" & log_in$mode %in% "replace"])
 }
 
+#' The gitlab-contents io: GitLab GraphQL that never sends a token, whatever the environment holds.
+#' `run` is the transport, as for gl_graphql().
+gitlab_contents_io <- function(run = system2, log = message) {
+  state <- gl_run_state(log = log, anonymous = TRUE)
+  list(gl_graphql = function(domain, query, variables) gl_graphql(domain, query, variables, run = run, state = state))
+}
+
 #' The weekly read of every GitLab repository: its files, and its commit messages where the host can
 #' search them, under one request cap per host. Writes the two partials a GitHub cheap shard writes,
 #' vcs-ai-cheap-gitlab.db and vcs-dev-tooling-gitlab.db, and nothing when either check stops the run.
@@ -1304,11 +1311,10 @@ run_merge <- function(io, out_dir, parts_dir) {
 # point CI does.
 main <- function(mode, out_dir, io = NULL) {
   token <- Sys.getenv("VCS_SIGNALS_TOKEN")
-  # gitlab-contents runs with no GitLab token set, so its reads are anonymous.
-  gl_state <- gl_run_state(log = message)
   if (is.null(io)) io <- list(
     graphql        = default_io(token)$graphql,
-    gl_graphql     = function(domain, query, variables) gl_graphql(domain, query, variables, state = gl_state),
+    # gitlab-contents reads anonymously by construction.
+    gl_graphql     = gitlab_contents_io()$gl_graphql,
     search_hit     = function(owner, name, query, delay = SEARCH_DELAY_S)
                        search_earliest_commit_hit(token, owner, name, query, delay, sleep = Sys.sleep),
     sleep          = function(seconds) Sys.sleep(seconds),

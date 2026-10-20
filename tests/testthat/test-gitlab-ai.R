@@ -353,6 +353,33 @@ test_that("main runs the GitLab read over the roster VCS_ROSTER names", {
   expect_identical(read_dev_tooling(file.path(out, "vcs-dev-tooling-gitlab.db"))$repo_id, "gitlab.com/o/a")
 })
 
+test_that("the GitLab read sends no token, even when the environment holds one", {
+  withr::local_envvar(GITLAB_TOKEN_GITLAB_COM = "not-a-real-token")
+  dir <- withr::local_tempdir()
+  roster_path <- gla_roster(dir, "gitlab.com/o/a", "gitlab:gitlab.com:1")
+  seen <- new.env(); seen$sent <- character(0); seen$args <- character(0)
+  gid <- .gl_gid("gitlab:gitlab.com:1")
+  # A fake curl: notes whether a header file (where a token would go) was passed, and answers.
+  run <- function(cmd, args, stdout = TRUE, ...) {
+    plain <- gsub("^'|'$", "", args)
+    seen$args <- c(seen$args, plain)
+    seen$sent <- c(seen$sent, if (any(grepl("^@", plain[which(plain == "-H") + 1L]))) "token" else "anon")
+    q <- paste(readLines(sub("^@", "", plain[match("--data-binary", plain) + 1L]), warn = FALSE), collapse = "\n")
+    node <- if (grepl("UntrustedRegexp", q, fixed = TRUE)) gla_commits(gid, list()) else gla_node(gid)
+    writeLines(c("HTTP/2 200", ""), plain[match("-D", plain) + 1L])
+    writeLines(as.character(jsonlite::toJSON(list(data = list(projects = list(nodes = list(node)))),
+                                             auto_unbox = TRUE, null = "null")),
+               plain[match("-o", plain) + 1L], sep = "")
+    "200"
+  }
+  lg <- gla_log(); clock <- gla_clock()
+  run_gitlab_contents(gitlab_contents_io(run = run, log = lg$log), file.path(dir, "out"), roster_path,
+                      now = clock$now, sleep = clock$sleep, log = lg$log)
+  expect_identical(seen$sent, c("anon", "anon"))
+  expect_identical(read_dev_tooling(file.path(dir, "out", "vcs-dev-tooling-gitlab.db"))$repo_id, "gitlab.com/o/a")
+  expect_false(any(grepl("not-a-real-token", c(seen$args, lg$lines()), fixed = TRUE)))
+})
+
 # ---- the merge -----------------------------------------------------------------
 # A release holding one GitHub and two GitLab repositories, plus what `seed(con)` writes.
 gla_release <- function(seed = NULL) {
@@ -407,12 +434,11 @@ gla_github_parts <- function(parts, failures = NULL) {
 
 test_that("a whole GitLab search replaces last week's message rows and models for that repository", {
   gl <- "gitlab.com/o/a"; gh <- "github.com/o/r"
-  # Last week's GitLab tally was cut off: the publish gate holds a whole tally's rows, on either host.
-  cut <- transform(gla_model(gl, "4.8"), window_complete = 0L)
+  # Last week's tally of a was whole too, so its Opus 4.8 row vanishing is reported, not refused.
   io <- gla_release(function(con) {
     DBI::dbWriteTable(con, "vcs_ai_search_log", rbind(gla_logged(gl, "msg.cursor.made-with", "hit"),
                                                       gla_logged(gh, "msg.cursor.made-with", "hit")), append = TRUE)
-    DBI::dbWriteTable(con, "vcs_ai_models", rbind(cut, gla_model(gh, "4.8")), append = TRUE)
+    DBI::dbWriteTable(con, "vcs_ai_models", rbind(gla_model(gl, "4.8"), gla_model(gh, "4.8")), append = TRUE)
   })
   today <- format(Sys.Date())
   cm <- gl_message_commits(list(gla_commit("a1", "2026-10-15T09:00:00Z")))
@@ -422,7 +448,14 @@ test_that("a whole GitLab search replaces last week's message rows and models fo
     search_log = gl_message_log_rows(hits, gl, today, complete = TRUE),
     models = read_model_rows(gl, cm, hits, "replace")))
   write_dev_tooling_partial(file.path(parts, "vcs-dev-tooling-gitlab.db"), .devtool_empty_shard())
-  suppressMessages(run_merge(io, tempfile("m_"), parts))
+  got <- new.env()
+  msgs <- testthat::capture_messages(tryCatch(run_merge(io, tempfile("m_"), parts),
+                                              error = function(e) got$err <- conditionMessage(e)))
+  expect_null(got$err)
+  warned <- grep("^::warning::", msgs, value = TRUE)
+  expect_length(warned, 1L)
+  expect_match(warned, "gitlab.com/o/a/claude Opus 4.8", fixed = TRUE)
+  expect_false(grepl(gh, warned, fixed = TRUE))
   lg <- gla_pub(io, "vcs_ai_search_log")
   expect_identical(lg$outcome[lg$repo_id == gl & lg$rule_key == "msg.cursor.made-with"], "none")
   expect_identical(lg$outcome[lg$repo_id == gl & lg$rule_key == "msg.claude.coauthor"], "hit")
@@ -431,6 +464,29 @@ test_that("a whole GitLab search replaces last week's message rows and models fo
   expect_identical(lg$outcome[lg$repo_id == gh & lg$rule_key == "msg.cursor.made-with"], "hit")
   expect_identical(lg$asked_on[lg$repo_id == gh], "2026-10-11")
   expect_identical(m$version[m$repo_id == gh], "4.8")
+})
+
+# A summary holding the release's repositories and these model rows.
+gla_models_summary <- function(models) {
+  path <- tempfile(fileext = ".db")
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  ensure_repo_schema(con); ensure_series_schema(con)
+  DBI::dbExecute(con, "INSERT INTO repos (repo_id,node_id,host,host_domain,owner,name,name_with_owner,supported,n_packages,first_seen,last_seen,status) VALUES
+    ('github.com/o/r','R_r','github','github.com','o','r','o/r',1,1,'2024-01-01','2026-10-11','active'),
+    ('gitlab.com/o/a','gitlab:gitlab.com:1','gitlab','gitlab.com','o','a','o/a',1,1,'2024-01-01','2026-10-11','active')")
+  DBI::dbWriteTable(con, "vcs_ai_models", models, append = TRUE)
+  DBI::dbDisconnect(con)
+  path
+}
+
+test_that("a whole GitHub model row that disappears is still refused, beside a GitLab one that is let go", {
+  prev <- gla_models_summary(rbind(gla_model("github.com/o/r", "4.8"), gla_model("github.com/o/r", "5"),
+                                   gla_model("gitlab.com/o/a", "4.8"), gla_model("gitlab.com/o/a", "5")))
+  nxt <- gla_models_summary(rbind(gla_model("github.com/o/r", "5"), gla_model("gitlab.com/o/a", "5")))
+  msgs <- testthat::capture_messages(got <- summary_regressions(prev, nxt))
+  expect_identical(got, paste0("vcs_ai_models: 1 model row(s) are gone from 1 repository/tool pair(s) the outgoing ",
+                               "build still scans and the published one had read to the end of: github.com/o/r/claude"))
+  expect_true(any(grepl("^::warning::.*gitlab.com/o/a/claude Opus 4.8", msgs)))
 })
 
 test_that("GitLab failures never stop the merge and a failed GitLab week keeps last week's rows", {

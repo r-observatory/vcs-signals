@@ -1173,10 +1173,14 @@ upsert_gitlab_license <- function(con, readings) {
   invisible(nrow(readings))
 }
 
+# The GitLab repositories in `con`'s repos table.
+gitlab_repo_ids <- function(con)
+  DBI::dbGetQuery(con, sprintf("SELECT repo_id FROM repos WHERE %s", host_predicate(GITLAB_HOSTS)))$repo_id
+
 #' `attrs` with each GitLab repository's licence from gitlab_license, NA where none was read.
 #' Every other row keeps its own.
 apply_gitlab_license <- function(con, attrs) {
-  gl <- DBI::dbGetQuery(con, sprintf("SELECT repo_id FROM repos WHERE %s", host_predicate(GITLAB_HOSTS)))$repo_id
+  gl <- gitlab_repo_ids(con)
   lic <- DBI::dbGetQuery(con, "SELECT repo_id, license FROM gitlab_license")
   on <- attrs$repo_id %in% gl
   attrs$license[on] <- as.character(lic$license[match(attrs$repo_id[on], lic$repo_id)])
@@ -2092,6 +2096,9 @@ build_release_notes <- function(summary, changed_shards, tag) {
 #'   pair's rows through a refusal, so a pair leaves only when a read to the
 #'   first commit names none of its models.
 #'
+#' A GitLab repository's rows are not held either: a refusal would stop the GitHub publish, so a
+#' GitLab row that vanished is a warning naming it.
+#'
 #' Exact, with no proportional allowance, because outside those two exemptions
 #' there is no ordinary churn to allow for: a search that fails is a refusal and
 #' leaves the stored rows in place, so a scan that came back and came back
@@ -2139,6 +2146,17 @@ build_release_notes <- function(summary, changed_shards, tag) {
     message(sprintf("publish gate: %d model row(s) gone at the source and recorded in AI_MODEL_ROWS_GONE_AT_SOURCE: %s",
                     sum(excused), .gate_show(unique(paste(prev$repo_id[excused], prev$tool[excused], sep = "/")))))
   held <- held & !excused
+  # A GitLab tally comes from GitLab's experimental message search, and refusing it would hold back the
+  # GitHub data too, so a GitLab row that vanished is reported and let go.
+  gitlab <- held & prev$repo_id %in% tryCatch(gitlab_repo_ids(nc), error = function(e) character(0))
+  if (any(gitlab)) {
+    g <- prev[gitlab, , drop = FALSE]
+    model <- trimws(gsub(" +", " ", do.call(paste, lapply(c("provider", "family", "version", "context_window"),
+                                                          function(k) ifelse(is.na(g[[k]]), "", g[[k]])))))
+    message(sprintf("::warning::publish gate: %d GitLab model row(s) a whole message search no longer names, published without them: %s",
+                    nrow(g), paste(sprintf("%s/%s %s", g$repo_id, g$tool, model), collapse = ", ")))
+  }
+  held <- held & !gitlab
   if (!any(held)) return(out)
   gone <- prev[held, , drop = FALSE]
   lost <- unique(.gate_key(gone, key))
