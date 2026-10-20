@@ -142,6 +142,27 @@ gl_parse_workflows <- function(res, wanted) {
   is.list(res) && (is.null(e) || is.na(.gl_chr(e))) && !is.null(.gl_nodes(res))
 }
 
+# The query complexity an answer reported, or NA.
+.gl_score <- function(res) {
+  s <- .gl_at(res, "data", "queryComplexity", "score")
+  if (is.numeric(s) && length(s) == 1L && !is.na(s)) as.integer(s) else NA_integer_
+}
+
+# One batch, asked again in halves down to single projects while its answer fails. `ask(rows)` returns
+# an answer, NULL when the pacer refused, or "done" when it settled the rows itself; `take(res, rows)`
+# reads an answer; `lost(rows, why, res)` records rows left unread (res is NULL for a refusal).
+# Only a one-project failure counts toward the breaker; a failed larger batch may hold one bad project.
+.gl_halving <- function(pacer, key, rows, ask, take, lost) {
+  res <- ask(rows)
+  if (identical(res, "done")) return(invisible())
+  if (is.null(res)) return(lost(rows, "request cap", NULL))
+  if (.gl_answered(res)) { pacer$after(key, TRUE); return(take(res, rows)) }
+  if (nrow(rows) == 1L) { pacer$after(key, FALSE); return(lost(rows, .gl_why(res), res)) }
+  h <- ceiling(nrow(rows) / 2)
+  .gl_halving(pacer, key, rows[seq_len(h), , drop = FALSE], ask, take, lost)
+  .gl_halving(pacer, key, rows[-seq_len(h), , drop = FALSE], ask, take, lost)
+}
+
 #' Reads every roster project's contents, `GITLAB_CONTENTS_BATCH` per request, grouped by the node id's
 #' domain. `roster` has repo_id and node_id. Returns trees (elements by repo_id), failed (a
 #' fetch-failure frame), dropped (optional fields a host rejected, by domain) and max_score (the
@@ -159,49 +180,40 @@ gl_collect_contents <- function(io, roster, pacer, log = NULL) {
   roster <- roster[!odd, , drop = FALSE]
   dom <- sub(.GL_NODE_RE, "\\1", roster$node_id)
 
-  # One batch: asks, retries once without rejected optional fields, halves on any other failure.
-  read <- function(d, rows) {
-    if (!is.null(stopped[[d]])) { fail(rows, stopped[[d]]); return(invisible()) }
+  for (d in unique(dom)) {
     key <- .gl_key(d)
-    repeat {
-      res <- .gl_contents_ask(io, pacer, d, gl_contents_query(dropped[[d]]), list(ids = as.list(.gl_gid(rows$node_id))))
-      if (is.null(res)) { fail(rows, "request cap"); return(invisible()) }
-      fields <- gl_schema_fields(res)
-      if (!length(fields)) break
-      pacer$after(key, TRUE)
-      if (all(fields %in% GITLAB_OPTIONAL_FIELDS)) {
-        dropped[[d]] <<- union(dropped[[d]], fields)
-        .gl_log(log, sprintf("GitLab %s: no %s, asked again without", d, paste(fields, collapse = " or ")))
-        next
+    # Asks, and again without optional fields the host rejects; a required field it lacks stops the host.
+    ask <- function(rows) {
+      if (!is.null(stopped[[d]])) { fail(rows, stopped[[d]]); return("done") }
+      repeat {
+        res <- .gl_contents_ask(io, pacer, d, gl_contents_query(dropped[[d]]), list(ids = as.list(.gl_gid(rows$node_id))))
+        fields <- gl_schema_fields(res)
+        if (!length(fields)) return(res)
+        pacer$after(key, TRUE)
+        if (all(fields %in% GITLAB_OPTIONAL_FIELDS)) {
+          dropped[[d]] <<- union(dropped[[d]], fields)
+          .gl_log(log, sprintf("GitLab %s: no %s, asked again without", d, paste(fields, collapse = " or ")))
+          next
+        }
+        stopped[[d]] <<- paste("schema lacks", paste(fields, collapse = ", "))
+        .gl_log(log, sprintf("GitLab %s: contents not read, the schema lacks %s", d, paste(fields, collapse = ", ")))
+        fail(rows, stopped[[d]]); return("done")
       }
-      stopped[[d]] <<- paste("schema lacks", paste(fields, collapse = ", "))
-      .gl_log(log, sprintf("GitLab %s: contents not read, the schema lacks %s", d, paste(fields, collapse = ", ")))
-      fail(rows, stopped[[d]]); return(invisible())
     }
-    if (!.gl_answered(res)) {
-      # Only a one-project failure counts toward the breaker; a failed larger batch may hold one bad project.
-      if (nrow(rows) == 1L) pacer$after(key, FALSE)
-      if (nrow(rows) > 1L) {
-        h <- ceiling(nrow(rows) / 2)
-        read(d, rows[seq_len(h), , drop = FALSE]); read(d, rows[-seq_len(h), , drop = FALSE])
-      } else {
-        .gl_log(log, sprintf("GitLab %s: contents of %s not read: %s", d, rows$repo_id, .gl_why(res)))
-        fail(rows, .gl_why(res))
-      }
-      return(invisible())
+    take <- function(res, rows) {
+      max_score <<- max(max_score, .gl_score(res), na.rm = TRUE)
+      got <- gl_parse_contents(res, rows)
+      trees[names(got)] <<- got
+      bad <- rows[rows$repo_id %in% attr(got, "unreadable"), , drop = FALSE]
+      if (nrow(bad)) fail(bad, "root listing cut off or repository unreadable")
     }
-    pacer$after(key, TRUE)
-    s <- .gl_at(res, "data", "queryComplexity", "score")
-    if (is.numeric(s) && length(s) == 1L && !is.na(s)) max_score <<- max(max_score, as.integer(s))
-    got <- gl_parse_contents(res, rows)
-    trees[names(got)] <<- got
-    bad <- rows[rows$repo_id %in% attr(got, "unreadable"), , drop = FALSE]
-    if (nrow(bad)) fail(bad, "root listing cut off or repository unreadable")
-    invisible()
-  }
-  for (d in unique(dom))
+    lost <- function(rows, why, res) {
+      if (!is.null(res)) .gl_log(log, sprintf("GitLab %s: contents of %s not read: %s", d, rows$repo_id, why))
+      fail(rows, why)
+    }
     for (b in unname(chunk(which(dom == d), GITLAB_CONTENTS_BATCH)))
-      read(d, roster[b, , drop = FALSE])
+      .gl_halving(pacer, key, roster[b, , drop = FALSE], ask, take, lost)
+  }
 
   # GitHub workflow files, a second request per batch for the projects that list YAML files.
   for (d in unique(dom)) {
@@ -230,4 +242,164 @@ gl_collect_contents <- function(io, roster, pacer, log = NULL) {
   }
   list(trees = trees, failed = if (length(failed)) do.call(rbind, failed) else .fetch_failed_frame(),
        dropped = dropped, max_score = max_score)
+}
+
+# ---- commit-message search -----------------------------------------------------
+# A word escaped so both regexp syntaxes GitLab applies read it literally: RE2 validates the query,
+# then git's basic grep runs it. A one-character class, or a backslash for the four a class cannot hold.
+.gl_re_literal <- function(x) {
+  ch <- strsplit(x, "")[[1]]
+  ch <- ifelse(ch %in% c(".", "+", "*", "?", "(", ")", "{", "}", "|", "$"), paste0("[", ch, "]"),
+               ifelse(ch %in% c("\\", "^", "[", "]"), paste0("\\", ch), ch))
+  paste(ch, collapse = "")
+}
+
+#' The prefilter GitLab runs over commit messages: each rule's search phrase, any run of characters
+#' other than letters and digits between its words, phrases joined by \| as git's basic grep reads
+#' them. GitLab matches it ignoring case (measured on gitlab.com 2026-10-20: a (?i) group or a bare |
+#' matched nothing there). It holds no lookaround; each rule's own pattern decides locally what counts.
+gl_message_regex <- function(rules = c(AI_TRAILER_PATTERNS, AI_REVIEW_RULES)) {
+  phrases <- vapply(rules, function(r) {
+    w <- strsplit(gsub('"', "", r$query), " +")[[1]]
+    paste(vapply(w[nzchar(w)], .gl_re_literal, ""), collapse = "[^A-Za-z0-9]*")
+  }, "")
+  paste(unique(phrases), collapse = "\\|")
+}
+
+#' The message search over up to GITLAB_MESSAGE_BATCH projects, or with `after` one project's next
+#' page. It asks for no author.
+gl_message_query <- function(after = FALSE)
+  sprintf(paste0('query($ids: [ID!], $re: UntrustedRegexp!%s) { queryComplexity { score limit } ',
+                 'projects(ids: $ids, first: %d) { nodes { id repository { ',
+                 'commits(ref: "HEAD", query: $re, first: 100%s) { pageInfo { hasNextPage endCursor } ',
+                 'nodes { sha committedDate message } } } } } }'),
+          if (after) ", $after: String" else "", GITLAB_MESSAGE_BATCH, if (after) ", after: $after" else "")
+
+#' TRUE when a host's schema has no message search: no data, and an error naming Repository.commits,
+#' its query argument or the UntrustedRegexp type. A transport error, timeout or complexity refusal is FALSE.
+gl_message_unsupported <- function(res) {
+  if (!is.list(res) || !is.null(.gl_nodes(res))) return(FALSE)
+  said <- function(e) {
+    ext <- function(k) .gl_chr(.gl_at(e, "extensions", k))
+    code <- ext("code"); msg <- .gl_chr(.gl_at(e, "message"))
+    (code %in% "undefinedField" && ext("fieldName") %in% "commits") ||
+      (code %in% "argumentNotAccepted" && ext("argumentName") %in% "query") ||
+      (code %in% "undefinedType" && ext("typeName") %in% "UntrustedRegexp") ||
+      (!is.na(msg) && grepl(paste0("Field 'commits' doesn't exist on type 'Repository'|",
+                                   "Field 'commits' doesn't accept argument 'query'|UntrustedRegexp isn't a defined"), msg))
+  }
+  any(vapply(Filter(is.list, .gl_at(res, "errors")), said, NA))
+}
+
+#' Commit nodes of a message search in match_commit_findings' shape: dates in UTC, author columns NA,
+#' so no account or author-name rule can match.
+gl_message_commits <- function(nodes) {
+  nodes <- Filter(function(n) is.list(n) && !is.na(.gl_chr(.gl_at(n, "sha"))), nodes %||% list())
+  chr <- function(f) vapply(nodes, f, "")
+  data.frame(oid = chr(function(n) .gl_chr(.gl_at(n, "sha"))),
+             committed_at = chr(function(n) .gl_utc(.gl_at(n, "committedDate"))),
+             message = chr(function(n) .gl_chr(.gl_at(n, "message"))),
+             author_name = rep(NA_character_, length(nodes)), author_email = rep(NA_character_, length(nodes)),
+             stringsAsFactors = FALSE)
+}
+
+#' Searches every roster project's commit messages: first pages GITLAB_MESSAGE_BATCH per request, then
+#' later pages one project per request up to GITLAB_MESSAGE_PAGE_CAP. A host without the search is
+#' asked once and its projects get no entry. Returns reads (by repo_id: commits, and complete when the
+#' last page said there was no next), unsupported (domains), failed (a fetch-failure frame) and max_score.
+gl_collect_messages <- function(io, roster, pacer, log = NULL) {
+  reads <- list(); failed <- list(); unsupported <- character(0); max_score <- 0L
+  fail <- function(rows, why)
+    failed[[length(failed) + 1L]] <<- .fetch_failed_frame(rows$repo_id, "gitlab-messages", why, .utc_now())
+  roster <- roster[!is.na(roster$node_id) & grepl(.GL_NODE_RE, roster$node_id), , drop = FALSE]
+  dom <- sub(.GL_NODE_RE, "\\1", roster$node_id)
+  re <- gl_message_regex()
+  for (d in unique(dom)) {
+    key <- .gl_key(d)
+    page <- function(rows, after = NULL)
+      .gl_contents_ask(io, pacer, d, gl_message_query(!is.null(after)),
+                       c(list(ids = as.list(.gl_gid(rows$node_id)), re = re), if (!is.null(after)) list(after = after)))
+    ask <- function(rows) {
+      if (d %in% unsupported) return("done")
+      res <- page(rows)
+      if (is.null(res) || !gl_message_unsupported(res)) return(res)
+      pacer$after(key, TRUE)
+      unsupported <<- c(unsupported, d)
+      .gl_log(log, sprintf("GitLab %s: no commit message search, its projects are not searched", d))
+      "done"
+    }
+    commits_of <- function(res, row) {
+      nodes <- .gl_nodes(res)
+      hit <- match(.gl_gid(row$node_id), vapply(nodes, function(n) .gl_chr(.gl_at(n, "id")), ""))
+      if (is.na(hit)) NULL else .gl_at(nodes[[hit]], "repository", "commits")
+    }
+    # One project from its first page on; any page not read leaves it with no entry.
+    follow <- function(row, cm) {
+      got <- list()
+      repeat {
+        if (!is.list(cm)) return(fail(row, "commit search unreadable"))
+        got[[length(got) + 1L]] <- gl_message_commits(.gl_at(cm, "nodes"))
+        more <- isTRUE(.gl_at(cm, "pageInfo", "hasNextPage"))
+        if (!more || length(got) >= GITLAB_MESSAGE_PAGE_CAP) break
+        cursor <- .gl_chr(.gl_at(cm, "pageInfo", "endCursor"))
+        if (is.na(cursor)) return(fail(row, "no cursor for the next page"))
+        res <- page(row, cursor)
+        if (is.null(res)) return(fail(row, "request cap"))
+        if (!.gl_answered(res)) {
+          pacer$after(key, FALSE)
+          .gl_log(log, sprintf("GitLab %s: commit messages of %s not read: %s", d, row$repo_id, .gl_why(res)))
+          return(fail(row, .gl_why(res)))
+        }
+        pacer$after(key, TRUE)
+        max_score <<- max(max_score, .gl_score(res), na.rm = TRUE)
+        cm <- commits_of(res, row)
+      }
+      cms <- do.call(rbind, got)
+      reads[[row$repo_id]] <<- list(commits = cms[!duplicated(cms$oid), , drop = FALSE], complete = !more)
+    }
+    take <- function(res, rows) {
+      max_score <<- max(max_score, .gl_score(res), na.rm = TRUE)
+      ids <- vapply(.gl_nodes(res), function(n) .gl_chr(.gl_at(n, "id")), "")
+      for (j in which(.gl_gid(rows$node_id) %in% ids)) {
+        row <- rows[j, , drop = FALSE]
+        follow(row, commits_of(res, row))
+      }
+    }
+    lost <- function(rows, why, res) {
+      if (!is.null(res)) .gl_log(log, sprintf("GitLab %s: commit messages of %s not read: %s", d, rows$repo_id, why))
+      fail(rows, why)
+    }
+    for (b in unname(chunk(which(dom == d), GITLAB_MESSAGE_BATCH)))
+      .gl_halving(pacer, key, roster[b, , drop = FALSE], ask, take, lost)
+  }
+  list(reads = reads, unsupported = unsupported,
+       failed = if (length(failed)) do.call(rbind, failed) else .fetch_failed_frame(), max_score = max_score)
+}
+
+#' Search-log rows of one project's message search, in the cheap partial's search_log shape. A whole
+#' search answers every message and review rule, hit or none, and replaces the project's rows; the
+#' Assisted-by rule also gets a hit row per tool its lines named. A cut-off search gives its hits only,
+#' incomplete and undated, since the oldest match was not reached.
+gl_message_log_rows <- function(hits, repo_id, today, complete) {
+  rules <- c(AI_TRAILER_PATTERNS, AI_REVIEW_RULES)
+  keys <- vapply(rules, `[[`, "", "key")
+  rev <- vapply(rules, function(r) as.integer(r$rev), 1L)
+  h <- .ai_bind_like(.ai_empty_commit_hits(), list(hits))
+  h <- h[h$rule_key %in% keys, , drop = FALSE]
+  ab <- "msg.any.assisted-by"
+  tools <- sort(unique(h$tool[h$rule_key == ab]))
+  groups <- c(lapply(keys, function(k) h[h$rule_key == k, , drop = FALSE]),
+              lapply(tools, function(t) h[h$rule_key == ab & h$tool == t, , drop = FALSE]))
+  n <- vapply(groups, function(g) length(unique(g$oid)), 1L)
+  first <- vapply(groups, function(g) substr(.ai_earliest_chr(g$committed_at), 1, 10), "")
+  out <- data.frame(repo_id = rep(repo_id, length(n)), rule_key = c(keys, paste0(ab, ".", tools, recycle0 = TRUE)),
+    rule_rev = c(rev, rep(rev[keys == ab], length(tools))), ruleset_version = AI_RULESET_VERSION,
+    asked_on = today, outcome = ifelse(n > 0L, "hit", "none"), total_count = n,
+    verified = ifelse(n > 0L, 1L, NA_integer_), incomplete = if (complete) 0L else 1L,
+    first_hit_on = if (complete) ifelse(n > 0L, first, NA_character_) else NA_character_,
+    source = "search", mode = if (complete) "replace" else NA_character_, read_after = NA_character_,
+    stringsAsFactors = FALSE)
+  if (!complete) out <- out[n > 0L, , drop = FALSE]
+  rownames(out) <- NULL
+  out
 }

@@ -874,6 +874,10 @@ GITLAB_TREE_ALIASES <- c(github = ".github", workflows = ".github/workflows", gi
 GITLAB_CONTENT_FILES <- c("DESCRIPTION", ".gitignore", ".Rbuildignore", ".gitlab-ci.yml", "docs/pkgdown.yml",
                           ".gitlab/duo/chat-rules.md", ".gitlab/duo/agent-config.yml", ".gitlab/duo/mcp.json",
                           ".gitlab/duo/mr-review-instructions.yaml")
+# GitLab commit-message search: projects per first-page request, and pages of 100 matching commits
+# read per project in one run.
+GITLAB_MESSAGE_BATCH    <- 10L
+GITLAB_MESSAGE_PAGE_CAP <- 10L
 # The contents query canary: one floor per set, met when any one candidate meets it.
 TREE_QUERY_CANARY <- list(
   own_community = c("tidyverse/forcats", "tidyverse/dplyr", "r-lib/usethis", "easystats/insight"),
