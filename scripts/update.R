@@ -170,6 +170,8 @@ seed_working_db <- function(io, out_dir, working_path) {
     restore_package_links(io, wcon, file.path(out_dir, "_links_restore")))
   .pull_or_conflict(io, generation, "while restoring the name history", function()
     restore_name_history(io, wcon, file.path(out_dir, "_names_restore")))
+  .pull_or_conflict(io, generation, "while restoring the GitLab licences", function()
+    restore_gitlab_license(io, wcon, file.path(out_dir, "_gitlab_license_restore")))
   seeded(TRUE)
 }
 
