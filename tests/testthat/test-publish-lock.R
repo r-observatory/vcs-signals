@@ -636,7 +636,11 @@ test_that("every merge job downloads the partials run_merge reads", {
   rerun <- readLines(file.path(wf_dir, "ai-merge-rerun.yml"), warn = FALSE)
   rerun <- rerun[.is_code(rerun)]
   guard <- grep("Refuse an empty parts directory", rerun)
-  expect_true(any(grepl("vcs-ai-cheap-*.db", rerun[guard:min(length(rerun), guard + 14L)], fixed = TRUE)))
+  # The GitLab partial alone is no week of GitHub reads, so the count takes numbered shards only.
+  counted <- grep("^\\s*cheap=\\$\\(find", rerun[guard:min(length(rerun), guard + 14L)], value = TRUE)
+  expect_length(counted, 1L)
+  expect_true(grepl("-name 'vcs-ai-cheap-[0-9]*.db'", counted, fixed = TRUE))
+  expect_false(grepl("vcs-ai-cheap-*.db", counted, fixed = TRUE))
 })
 
 test_that("the weekly merge runs when the GitLab fetch fails, and only the GitLab REST jobs see the GitLab token", {
@@ -688,7 +692,10 @@ test_that("ai-weekly.yml runs the GitLab read before the gate and the GitLab dat
   own <- lapply(jobs, function(j) { code <- j[.is_code(j)]; code[.indent(code) == min(.indent(code))] })
   needs <- lapply(own, function(o) {
     n <- grep("^\\s*needs:", o, value = TRUE)
-    if (length(n)) trimws(strsplit(gsub("^\\s*needs:\\s*\\[?|\\]?\\s*$", "", n[1]), ",")[[1]]) else character(0)
+    if (!length(n)) return(character(0))
+    # A list on the lines below would read as no needs, so the reader refuses it.
+    if (grepl("^\\s*needs:\\s*$", n[1])) stop("a needs: list on its own lines, which this reader does not read: ", n[1])
+    trimws(strsplit(gsub("^\\s*needs:\\s*\\[?|\\]?\\s*$", "", n[1]), ",")[[1]])
   })
   upstream <- function(j) unique(c(needs[[j]], unlist(lapply(needs[[j]], upstream))))
   result <- character(0)
@@ -728,4 +735,7 @@ test_that("a GitLab job that fails skips no other job", {
   expect_setequal(.jobs_that_run(.workflow_jobs(wf), "gitlab-b"), c("a", "gitlab-b", "c"))
   expect_error(.jobs_that_run(.workflow_jobs(sub("!cancelled()", "always()", wf, fixed = TRUE)), character(0)),
                "does not know")
+  # A needs: list on its own lines stops the reader rather than reading as no needs.
+  multi <- c("jobs:", "  a:", "    runs-on: x", "  b:", "    needs:", "      - a", "    runs-on: x")
+  expect_error(.jobs_that_run(.workflow_jobs(multi), character(0)), "needs: list on its own lines")
 })
