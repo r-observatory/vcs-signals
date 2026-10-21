@@ -275,13 +275,9 @@ cb_locate <- function(io, repos, st, deadline = Inf, now = function() as.numeric
 
 # The first CODEBERG_TOPICS_MAX topics joined with ",", "" for none, NA unless an array of strings.
 .cb_topics <- function(x) {
-  if (is.list(x)) {
-    if (!is.null(names(x)) || !all(vapply(x, function(t) is.character(t) && length(t) == 1L && !is.na(t), NA)))
-      return(NA_character_)
-    x <- as.character(unlist(x))
-  }
-  if (!is.character(x) || anyNA(x)) return(NA_character_)
-  paste(utils::head(x, CODEBERG_TOPICS_MAX), collapse = ",")
+  if (!.cb_is_array(x) || !all(vapply(x, function(t) is.character(t) && length(t) == 1L && !is.na(t), NA)))
+    return(NA_character_)
+  paste(utils::head(as.character(unlist(x)), CODEBERG_TOPICS_MAX), collapse = ",")
 }
 
 #' What a repository's extra calls fill, all NA until read.
@@ -296,9 +292,10 @@ cb_gauge_row <- function(obj, extras = cb_extras_na()) {
   ex <- function(k) .gl_at(extras, k)
   issues <- .cb_issues_on(obj); prs <- .cb_prs_on(obj)
   id <- at("id")
-  # A migrated or mirrored repository's created_at is the day it came to Codeberg.
-  url <- .gl_chr(at("original_url"))
-  moved_in <- (!is.na(url) && nzchar(url)) || isTRUE(at("mirror"))
+  # A migrated or mirrored repository's created_at is the day it came to Codeberg, so the date is
+  # kept only when both fields are readable and say it was not moved.
+  url <- .gl_chr(at("original_url")); mir <- .gl_flag(at("mirror"))
+  native <- !is.na(url) && !is.na(mir) && !nzchar(url) && mir == 0L
   data.frame(
     node_id = if (.cb_id_ok(id)) cb_node_id(id) else NA_character_,
     name_with_owner = .gl_chr(at("full_name")),
@@ -314,7 +311,7 @@ cb_gauge_row <- function(obj, extras = cb_extras_na()) {
     license = NA_character_,
     topics = .cb_topics(at("topics")),
     is_archived = .gl_flag(at("archived")), is_fork = .gl_flag(at("fork")), is_mirror = .gl_flag(at("mirror")),
-    created_at = if (moved_in) NA_character_ else .gl_utc(at("created_at")),
+    created_at = if (native) .gl_utc(at("created_at")) else NA_character_,
     pushed_at = NA_character_,
     last_release_at = .gl_chr(ex("last_release_at")), last_release_tag = .gl_chr(ex("last_release_tag")),
     head_committed_at = .gl_chr(ex("head_committed_at")),

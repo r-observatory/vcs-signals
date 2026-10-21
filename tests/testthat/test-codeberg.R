@@ -349,6 +349,25 @@ test_that("a migrated or mirrored repository has no created date, topics stop at
   expect_identical(cb_na_counts(row)[["stars"]], 1L)
 })
 
+test_that("a created date is kept only when original_url and mirror are readable and say the repository was not moved", {
+  expect_identical(cb_gauge_row(cb_fixture("repo_zoo.json"))$created_at, "2026-07-15T20:11:48Z")
+  expect_identical(cb_gauge_row(cb_obj(120L, "o/k"))$created_at, "2024-01-23T21:06:52Z")
+  no_url <- cb_obj(121L, "o/u"); no_url$original_url <- NULL
+  no_mirror <- cb_obj(122L, "o/v"); no_mirror$mirror <- NULL
+  odd <- list(no_url = no_url, no_mirror = no_mirror, null_url = cb_obj(123L, "o/w", original_url = NULL),
+              mirror_text = cb_obj(124L, "o/x", mirror = "true"), url_number = cb_obj(125L, "o/y", original_url = 1L))
+  for (k in names(odd)) expect_true(is.na(cb_gauge_row(odd[[k]])$created_at), info = k)
+})
+
+test_that("topics that are not a JSON array of strings read NA, never one topic", {
+  expect_true(is.na(cb_gauge_row(cb_obj(126L, "o/s", topics = "r"))$topics))
+  expect_true(is.na(cb_gauge_row(cb_obj(127L, "o/c", topics = c("r", "stats")))$topics))
+  expect_true(is.na(cb_gauge_row(cb_obj(128L, "o/o", topics = list(a = "r")))$topics))
+  expect_true(is.na(cb_gauge_row(cb_obj(129L, "o/n", topics = list("r", 1L)))$topics))
+  expect_identical(cb_gauge_row(cb_obj(130L, "o/e", topics = list()))$topics, "")
+  expect_identical(cb_gauge_row(cb_obj(131L, "o/r"))$topics, "r,stats")
+})
+
 test_that("cb_collect_gauges leaves a repository with any failed call out of the snapshot, and keeps one whose unit answered 404", {
   routes <- c(cb_gauge_routes("o/a", latest = cb_answer(500L)), cb_gauge_routes("o/b"))
   routes[["/repos/o/b/issues?state=closed&type=issues&limit=1"]] <- cb_answer(404L)
