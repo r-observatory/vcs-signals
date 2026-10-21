@@ -20,6 +20,7 @@ gl_rest	gitlab.com	/projects/46520077/repository/contributors?order_by=commits&s
 gl_rest	gitlab.com	/projects/46520077?license=true
 cb_get	/users/someone/repos?limit=50&page=1
 cb_clone	https://codeberg.org/someone/cbpkg.git
+bb_clone	https://bitbucket.org/someone/bbpkg.git
 generation
 download	vcs-signals-recent.db
 release_exists
