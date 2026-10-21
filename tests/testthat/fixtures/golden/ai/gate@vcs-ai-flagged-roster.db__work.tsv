@@ -1,4 +1,5 @@
 repo_id	tool	rule_key	reason	priority
+code.usgs.gov/water/toxics/usgspkg	claude	\N	onset	1
 github.com/epiverse-trace/cfr	cursor	\N	onset	1
 github.com/ropensci-review-tools/goodpractice	agents-md	\N	onset	1
 github.com/ropensci-review-tools/goodpractice	aider	msg.aider.coauthor	campaign	6
@@ -32,3 +33,4 @@ github.com/ropensci-review-tools/goodpractice	windsurf	msg.windsurf.bot	campaign
 github.com/ropensci-review-tools/goodpractice	windsurf	msg.windsurf.cascade	campaign	6
 github.com/ropensci-review-tools/goodpractice	windsurf	msg.windsurf.coauthor	campaign	6
 github.com/tidyverse/forcats	claude	\N	onset	1
+gitlab.com/epiverse/outbreaks/linelist	claude	\N	onset	1
