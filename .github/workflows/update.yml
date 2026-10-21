@@ -75,7 +75,7 @@ jobs:
     # 2026-08-30, 09-06 and 09-13. On the first two the AI merge seeded before
     # the weekly merge published and uploaded after it, silently putting the
     # weekly values in series_latest and the summary back to an earlier week.
-    # This job seeds before a collection of about ninety minutes, the widest
+    # This job seeds before a collection of up to two hours, the widest
     # window of any publisher, and a late cron or a dispatch can put that
     # window over a Sunday merge. A merge may now wait that long for it.
     #
@@ -90,11 +90,11 @@ jobs:
       queue: max
     runs-on: ubuntu-latest
     # In minutes: update.R stops the GitHub gauge pass at GAUGE_DEADLINE_MIN
-    # (100), GitLab may add GITLAB_DEADLINE_EXTRA_MIN (10) plus one 30 s
+    # (125), GitLab may add GITLAB_DEADLINE_EXTRA_MIN (10) plus one 30 s
     # request, Codeberg may add CODEBERG_DEADLINE_EXTRA_MIN (15), and setup,
-    # tests and the stages through the publish took up to 36 more (longest
-    # recent job 136). That is about 161, so 185 leaves ~24.
-    timeout-minutes: 185
+    # tests and the stages through the publish took up to 42 more (longest
+    # recent job 148). That is about 192, so 215 leaves ~23.
+    timeout-minutes: 215
     steps:
       - uses: actions/checkout@v7
       - uses: r-lib/actions/setup-r@v2

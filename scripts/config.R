@@ -159,9 +159,10 @@ REVISION_WINDOW<- 10L    # trailing days re-materialized each run (must be < REC
 POINT_RESERVE  <- 1500L  # GraphQL points left unspent as headroom
 BATCH_DELAY_S  <- 0.35   # pause between GraphQL batches, to stay well under secondary rate limits
 # Minutes into update.R after which the gauge pass stops and the run publishes
-# what it has. The job is capped at 185; setup, tests and the stages after the
-# gauges took up to 36, GitLab may add 10 and Codeberg 15, so 100 leaves ~24 spare.
-GAUGE_DEADLINE_MIN <- 100
+# what it has. The job is capped at 215; setup, tests and the stages after the
+# gauges took up to 42, GitLab may add 10 and Codeberg 15, so 125 leaves ~23 spare.
+# On weekdays GitHub's 502s and 504s slow the pass, and the slowest in October needed 124.
+GAUGE_DEADLINE_MIN <- 125
 # More unresolvable ids than this (or than 1% of the gauged repos) in one run
 # reads as a GitHub fault, not deleted repos, so none are acted on.
 UNRESOLVABLE_CAP <- 100L
