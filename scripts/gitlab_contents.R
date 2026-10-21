@@ -7,7 +7,8 @@ GITLAB_CONTENTS_BATCH <- 20L  # projects per contents request; projects(ids:) is
 GITLAB_OPTIONAL_FIELDS <- c("forkedFrom", "pagesDeployments")
 
 # No pageInfo: it costs most of the complexity. A page of exactly 100 names is the only sign of a cut.
-gl_contents_query <- function(drop = character(0)) {
+# GitLab scores the query by its text, so `first` sets the score whatever the number of ids.
+gl_contents_query <- function(drop = character(0), first = GITLAB_CONTENTS_BATCH) {
   listing <- "trees(first: 100) { nodes { name } } blobs(first: 100) { nodes { name } }"
   trees <- vapply(names(GITLAB_TREE_ALIASES), function(a)
     sprintf('%s: tree(path: "%s") { %s }', a, GITLAB_TREE_ALIASES[[a]], listing), "")
@@ -25,11 +26,12 @@ gl_contents_query <- function(drop = character(0)) {
       blobs(paths: [%s]) { nodes { path rawTextBlob } }
     }
   } }
-}', GITLAB_CONTENTS_BATCH, paste(fields[!names(fields) %in% drop], collapse = " "), listing,
+}', first, paste(fields[!names(fields) %in% drop], collapse = " "), listing,
     paste(trees, collapse = "\n      "), files)
 }
 
-gl_workflows_query <- function()
+# Named files of several projects: GitHub workflow files, and GitLab Duo's files.
+gl_files_query <- function()
   sprintf('query($ids: [ID!], $paths: [String!]!) {
   projects(ids: $ids, first: %d) { nodes { id repository { blobs(paths: $paths) { nodes { path rawTextBlob } } } } }
 }', GITLAB_CONTENTS_BATCH)
@@ -44,6 +46,16 @@ gl_schema_fields <- function(res) {
     if (length(m)) m[2] else NA_character_
   }, "")
   unique(out[!is.na(out)])
+}
+
+#' c(score, limit) when GitLab refused a query as too complex, else NULL.
+gl_complexity_refusal <- function(res) {
+  for (e in Filter(is.list, .gl_at(res, "errors"))) {
+    m <- regmatches(.gl_chr(.gl_at(e, "message")),
+                    regexec("complexity of ([0-9]+), which exceeds max complexity of ([0-9]+)", .gl_chr(.gl_at(e, "message"))))[[1]]
+    if (length(m)) return(c(score = as.integer(m[2]), limit = as.integer(m[3])))
+  }
+  NULL
 }
 
 # ---- parsing -------------------------------------------------------------------
@@ -87,8 +99,6 @@ gl_parse_contents <- function(res, roster) {
       else if (startsWith(path, ".github/")) gh <- c(gh, if (length(ns)) paste0(sub("^\\.github/", "", path), "/", ns))
       else root <- c(root, if (length(ns)) paste0(path, "/", ns))
     }
-    # Only the named Duo files are read, so an unknown file next to a known one is not seen.
-    root <- c(root, paths[!is.na(paths) & startsWith(paths, ".gitlab/duo/")])
     rbi <- text(".Rbuildignore")
     el <- list(
       root_entries = root, github_entries = gh,
@@ -111,7 +121,7 @@ gl_parse_contents <- function(res, roster) {
   out
 }
 
-#' Workflow texts by repo_id from a gl_workflows_query answer. `wanted` has repo_id, node_id and
+#' Workflow texts by repo_id from a gl_files_query answer. `wanted` has repo_id, node_id and
 #' name, one row per workflow file; each project keeps only its own files, null texts are dropped.
 gl_parse_workflows <- function(res, wanted) {
   nodes <- .gl_nodes(res)
@@ -126,6 +136,21 @@ gl_parse_workflows <- function(res, wanted) {
     tx <- vapply(blobs, function(b) .gl_chr(.gl_at(b, "rawTextBlob")), "")
     keep <- !is.na(tx) & p %in% paste0(".github/workflows/", w$name)
     out[[r]] <- data.frame(name = sub("^.*/", "", p[keep]), text = tx[keep], stringsAsFactors = FALSE)
+  }
+  out
+}
+
+#' The GITLAB_DUO_FILES each project holds, by repo_id, from a gl_files_query answer. `wanted` has repo_id
+#' and node_id; a project the answer leaves out has no entry.
+gl_parse_duo <- function(res, wanted) {
+  nodes <- .gl_nodes(res)
+  ids <- vapply(nodes, function(n) .gl_chr(.gl_at(n, "id")), "")
+  out <- list()
+  for (j in seq_len(nrow(wanted))) {
+    hit <- match(.gl_gid(wanted$node_id[j]), ids)
+    if (is.na(hit)) next
+    p <- vapply(.nn(.gl_at(nodes[[hit]], "repository", "blobs", "nodes"), list()), function(b) .gl_chr(.gl_at(b, "path")), "")
+    out[[wanted$repo_id[j]]] <- p[p %in% GITLAB_DUO_FILES]
   }
   out
 }
@@ -172,7 +197,8 @@ gl_parse_workflows <- function(res, wanted) {
 }
 
 #' Reads every roster project's contents, `GITLAB_CONTENTS_BATCH` per request, grouped by the node id's
-#' domain. `roster` has repo_id and node_id. Returns trees (elements by repo_id), failed (a
+#' domain. A host that refuses the query as too complex is asked half as many at a time for the rest of
+#' the run. `roster` has repo_id and node_id. Returns trees (elements by repo_id), failed (a
 #' fetch-failure frame), dropped (optional fields a host rejected, by domain) and max_score (the
 #' highest query complexity the answers reported, by domain).
 gl_collect_contents <- function(io, roster, pacer, log = NULL) {
@@ -180,6 +206,8 @@ gl_collect_contents <- function(io, roster, pacer, log = NULL) {
   fail <- function(rows, why)
     failed[[length(failed) + 1L]] <<- .fetch_failed_frame(rows$repo_id, "gitlab-contents", why, .utc_now())
   stopped <- list()
+  # Projects per request by host, and the first complexity refusal each host gave.
+  sizes <- list(); refused <- list()
   odd <- is.na(roster$node_id) | !grepl(.GL_NODE_RE, roster$node_id)
   if (any(odd)) {
     .gl_log(log, sprintf("GitLab contents: %d ids are not GitLab node ids and were not asked", sum(odd)))
@@ -190,13 +218,33 @@ gl_collect_contents <- function(io, roster, pacer, log = NULL) {
 
   for (d in unique(dom)) {
     key <- .gl_key(d)
+    size <- function() sizes[[key]] %||% GITLAB_CONTENTS_BATCH
     # Asks, and again without optional fields the host rejects; a required field it lacks stops the host.
+    # A complexity refusal is the query's fault, not the host's: it halves the host's batch and asks the
+    # same projects again, and never counts toward the breaker.
     ask <- function(rows) {
       if (!is.null(stopped[[d]])) { fail(rows, stopped[[d]]); return("done") }
+      if (nrow(rows) > size()) {
+        for (b in unname(chunk(seq_len(nrow(rows)), size())))
+          .gl_halving(pacer, key, rows[b, , drop = FALSE], ask, take, lost)
+        return("done")
+      }
       repeat {
-        res <- .gl_contents_ask(io, pacer, d, gl_contents_query(dropped[[d]]), list(ids = as.list(.gl_gid(rows$node_id))))
+        res <- .gl_contents_ask(io, pacer, d, gl_contents_query(dropped[[d]], size()),
+                                list(ids = as.list(.gl_gid(rows$node_id))))
         fields <- gl_schema_fields(res)
-        if (!length(fields)) return(res)
+        if (!length(fields)) {
+          cx <- gl_complexity_refusal(res)
+          if (is.null(cx)) return(res)
+          pacer$after(key, TRUE)
+          if (is.null(refused[[key]])) refused[[key]] <<- list(score = cx[["score"]], limit = cx[["limit"]], at = size())
+          if (size() > 1L) { sizes[[key]] <<- max(1L, size() %/% 2L); return(ask(rows)) }
+          stopped[[d]] <<- sprintf("query complexity %d over the limit of %d", cx[["score"]], cx[["limit"]])
+          .gl_log(log, sprintf("GitLab %s: contents not read, the query scored %d over the limit of %d even for one project",
+                               d, cx[["score"]], cx[["limit"]]))
+          refused[[key]]$logged <<- TRUE
+          fail(rows, stopped[[d]]); return("done")
+        }
         pacer$after(key, TRUE)
         if (all(fields %in% GITLAB_OPTIONAL_FIELDS)) {
           dropped[[d]] <<- union(dropped[[d]], fields)
@@ -221,6 +269,36 @@ gl_collect_contents <- function(io, roster, pacer, log = NULL) {
     }
     for (b in unname(chunk(which(dom == d), GITLAB_CONTENTS_BATCH)))
       .gl_halving(pacer, key, roster[b, , drop = FALSE], ask, take, lost)
+    cx <- refused[[key]]
+    if (!is.null(cx) && !isTRUE(cx$logged)) {
+      .gl_log(log, sprintf("GitLab %s: the contents query scored %d at %d projects a request, over the limit of %d, so it asked %d at a time",
+                           d, cx$score, cx$at, cx$limit, size()))
+      refused[[key]]$logged <- TRUE
+    }
+  }
+
+  # GitLab Duo's files, a second request per batch for the projects whose .gitlab folder lists duo. Only
+  # the named files are read, so an unknown file next to a known one is not seen. A project whose request
+  # fails is not read at all, since its folder alone would read as Duo.
+  for (d in unique(dom)) {
+    rows <- roster[dom == d & roster$repo_id %in% names(trees), , drop = FALSE]
+    want <- rows[vapply(rows$repo_id, function(r) ".gitlab/duo" %in% trees[[r]]$root_entries, NA), , drop = FALSE]
+    for (b in unname(chunk(seq_len(nrow(want)), GITLAB_CONTENTS_BATCH))) {
+      w <- want[b, , drop = FALSE]
+      res <- .gl_contents_ask(io, pacer, d, gl_files_query(), list(ids = as.list(.gl_gid(w$node_id)), paths = as.list(GITLAB_DUO_FILES)))
+      if (is.null(res) || !.gl_answered(res)) {
+        if (!is.null(res)) pacer$after(.gl_key(d), FALSE)
+        .gl_log(log, sprintf("GitLab %s: Duo files of %d projects not read", d, nrow(w)))
+        trees[w$repo_id] <- NULL
+        fail(w, if (is.null(res)) "request cap" else paste("Duo files not read:", .gl_why(res)))
+        next
+      }
+      pacer$after(.gl_key(d), TRUE)
+      got <- gl_parse_duo(res, w)
+      for (r in intersect(w$repo_id, names(got))) trees[[r]]$root_entries <- c(trees[[r]]$root_entries, got[[r]])
+      gone <- w[!w$repo_id %in% names(got), , drop = FALSE]
+      if (nrow(gone)) { trees[gone$repo_id] <- NULL; fail(gone, "Duo files not read: left out of the answer") }
+    }
   }
 
   # GitHub workflow files, a second request per batch for the projects that list YAML files.
@@ -236,7 +314,7 @@ gl_collect_contents <- function(io, roster, pacer, log = NULL) {
     for (b in unname(chunk(unique(want$repo_id), GITLAB_CONTENTS_BATCH))) {
       w <- want[want$repo_id %in% b, , drop = FALSE]
       ids <- unique(w$node_id)
-      res <- .gl_contents_ask(io, pacer, d, gl_workflows_query(),
+      res <- .gl_contents_ask(io, pacer, d, gl_files_query(),
                               list(ids = as.list(.gl_gid(ids)), paths = as.list(unique(paste0(".github/workflows/", w$name)))))
       if (is.null(res) || !.gl_answered(res)) {
         if (!is.null(res)) pacer$after(.gl_key(d), FALSE)

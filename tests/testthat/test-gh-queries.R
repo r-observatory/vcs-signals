@@ -205,7 +205,7 @@ test_that("every AI file rule under a subtree names a subtree the query fetches"
   pre <- tree_subtree_prefixes()
   for (m in c(AI_MARKERS, AI_REVIEW_FILES)) {
     if (!grepl("/", m$path, fixed = TRUE)) next
-    if (any(startsWith(GITLAB_CONTENT_FILES, m$path))) next
+    if (any(startsWith(c(GITLAB_CONTENT_FILES, GITLAB_DUO_FILES), m$path))) next
     first <- sub("/.*$", "", m$path)
     allowed <- if (identical(m$location, "github")) pre$github else pre$root
     expect_true(first %in% allowed, info = m$path)

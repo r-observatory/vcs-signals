@@ -135,25 +135,95 @@ test_that("a project is failed with a request cap reason when the pacer refuses 
   expect_identical(got$failed$repo_id, hyd1d_row$repo_id); expect_identical(got$failed$error, "request cap")
 })
 
-test_that("the .gitlab/duo files the read returned join the root entries", {
-  duo <- function(paths) {
-    node <- hyd1d()
-    node$repository$gitlab$trees$nodes <- list(list(name = "duo"))
-    node$repository$blobs$nodes <- c(node$repository$blobs$nodes,
-                                     lapply(paths, function(p) list(path = p, rawTextBlob = "x")))
-    gl_parse_contents(gl_ok(list(node)), hyd1d_row)[[1]]
+duo_node <- function() {
+  node <- hyd1d()
+  node$repository$gitlab$trees$nodes <- list(list(name = "duo"))
+  node
+}
+duo_answer <- function(node, paths) gl_ok(list(list(id = node$id, repository = list(blobs = list(nodes =
+  lapply(paths, function(p) list(path = p, rawTextBlob = "x")))))))
+
+test_that("GitLab Duo files are read in a second request where .gitlab lists duo, and read as the single query did", {
+  review <- ".gitlab/duo/mr-review-instructions.yaml"; chat <- ".gitlab/duo/chat-rules.md"
+  run <- function(paths, fail = FALSE) {
+    node <- duo_node()
+    f <- fake_gitlab(function(domain, query, variables)
+      if (is.null(variables$paths)) gl_ok(list(node))
+      else if (fail) list(error = "HTTP 502", status = 502L) else duo_answer(node, paths))
+    list(f = f, got = gl_collect_contents(f$io, hyd1d_row, gl_free_pacer()))
   }
-  review <- ".gitlab/duo/mr-review-instructions.yaml"
-  only <- duo(review)
-  expect_true(all(c(".gitlab/duo", review) %in% only$root_entries))
-  expect_false(".gitlab/duo/chat-rules.md" %in% only$root_entries)
-  # The folder rule: a review-only folder counts for nothing, one with another file counts.
-  expect_false("gitlab-duo" %in% classify_tree_markers(only$root_entries, only$github_entries)$tool)
-  none <- duo(character(0))
-  f <- classify_tree_markers(none$root_entries, none$github_entries)
-  expect_identical(f$marker[f$tool == "gitlab-duo"], ".gitlab/duo")
-  unk <- duo(c(review, ".gitlab/duo/chat-rules.md"))
-  expect_true(".gitlab/duo/chat-rules.md" %in% unk$root_entries)
+  # The single query returned the Duo files with the others, and they joined the end of the root entries.
+  single <- function(paths) {
+    el <- gl_parse_contents(gl_ok(list(duo_node())), hyd1d_row)[[1]]
+    el$root_entries <- c(el$root_entries, paths)
+    el
+  }
+  for (paths in list(character(0), review, c(review, chat))) {
+    a <- run(paths)
+    expect_length(a$f$calls$graphql, 2L)
+    expect_setequal(unlist(a$f$calls$graphql[[2]]$variables$paths), GITLAB_DUO_FILES)
+    el <- a$got$trees[[1]]; ref <- single(paths)
+    expect_identical(el$root_entries, ref$root_entries)
+    expect_identical(classify_dev_tooling(el$root_entries, el$github_entries, repo = el),
+                     classify_dev_tooling(ref$root_entries, ref$github_entries, repo = ref))
+    expect_identical(assemble_repo_evidence(el, scanned_on = "2026-10-20"), assemble_repo_evidence(ref, scanned_on = "2026-10-20"))
+  }
+  # The folder rule: a review-only folder counts for nothing, one with another file or an unread one counts.
+  ev <- function(paths) assemble_repo_evidence(run(paths)$got$trees[[1]], scanned_on = "2026-10-20")
+  expect_false("gitlab-duo" %in% ev(review)$tool)
+  expect_identical(ev(review)$tool[ev(review)$role == "review"], "gitlab-duo-review")
+  expect_identical(ev(character(0))$marker[ev(character(0))$tool == "gitlab-duo"], ".gitlab/duo")
+  expect_true(chat %in% ev(c(review, chat))$marker)
+  # A failed second request leaves the project unread rather than counting its folder alone.
+  b <- run(chat, fail = TRUE)
+  expect_length(b$got$trees, 0L)
+  expect_identical(b$got$failed$repo_id, hyd1d_row$repo_id); expect_match(b$got$failed$error, "Duo files not read")
+  # A project whose .gitlab lists no duo costs no second request.
+  f <- fake_gitlab(function(domain, query, variables) gl_ok(list(hyd1d())))
+  gl_collect_contents(f$io, hyd1d_row, gl_free_pacer())
+  expect_length(f$calls$graphql, 1L)
+})
+
+# A host that answers GitLab's complexity error for any query asking more than `max_first` projects.
+complex_host <- function(max_first) fake_gitlab(function(domain, query, variables) {
+  n <- as.integer(sub("(?s)^.*projects[(]ids: [$]ids, first: ([0-9]+)[)].*$", "\\1", query, perl = TRUE))
+  if (n > max_first) return(list(data = NULL, status = 200L, error = NA_character_, errors = list(list(
+    message = sprintf("Query has complexity of %d, which exceeds max complexity of 200", 190L + n)))))
+  gl_ok(lapply(unlist(variables$ids), function(i) utils::modifyList(hyd1d(), list(id = i))))
+})
+complex_run <- function(max_first) {
+  roster <- one(sprintf("h.example/o/r%02d", 1:45), sprintf("gitlab:h.example:%d", 1:45))
+  f <- complex_host(max_first)
+  kept <- new.env(); kept$lines <- character(0)
+  p <- gl_free_pacer()
+  got <- gl_collect_contents(f$io, roster, p, log = function(m) kept$lines <- c(kept$lines, m))
+  firsts <- vapply(f$calls$graphql, function(x) as.integer(sub("(?s)^.*projects[(]ids: [$]ids, first: ([0-9]+)[)].*$", "\\1", x$query, perl = TRUE)), 1L)
+  list(got = got, lines = kept$lines, deferred = p$deferred(), firsts = firsts)
+}
+
+test_that("a host that refuses the query as too complex is asked half as many at a time, and every project is read", {
+  a <- complex_run(10L)
+  expect_length(a$got$trees, 45L); expect_equal(nrow(a$got$failed), 0L)
+  expect_identical(a$firsts, c(20L, rep(10L, 5L)))
+  expect_length(a$deferred, 0L)
+  said <- grep("complexity|scored", a$lines, value = TRUE)
+  expect_length(said, 1L)
+  expect_match(said, "GitLab h.example: the contents query scored 210 at 20 projects a request, over the limit of 200, so it asked 10 at a time", fixed = TRUE)
+  # Three refusals in a row (20, 10 and 5) never trip the breaker.
+  b <- complex_run(2L)
+  expect_length(b$got$trees, 45L); expect_equal(nrow(b$got$failed), 0L)
+  expect_identical(b$firsts[1:3], c(20L, 10L, 5L)); expect_true(all(b$firsts[-(1:3)] == 2L))
+  expect_length(b$deferred, 0L)
+  expect_match(grep("scored", b$lines, value = TRUE), "so it asked 2 at a time", fixed = TRUE)
+})
+
+test_that("a query too complex even for one project fails the host's projects without asking again", {
+  a <- complex_run(0L)
+  expect_identical(a$firsts, c(20L, 10L, 5L, 2L, 1L))
+  expect_length(a$got$trees, 0L)
+  expect_equal(nrow(a$got$failed), 45L); expect_true(all(grepl("query complexity 191 over the limit of 200", a$got$failed$error)))
+  expect_length(a$deferred, 0L)
+  expect_length(grep("even for one project", a$lines), 1L)
 })
 
 test_that("the CI config path is the default for a default project, the custom path, or NA when not read", {
@@ -182,6 +252,18 @@ test_that("the query asks for no page info and leaves the dropped fields out", {
                          grepl, NA, x = q, fixed = TRUE)))
   expect_true(all(vapply(unname(GITLAB_TREE_ALIASES), function(p) grepl(sprintf('tree(path: "%s")', p), q, fixed = TRUE), NA)))
   expect_false(grepl("pagesDeployments", gl_contents_query("pagesDeployments"), fixed = TRUE))
+  expect_false(any(vapply(GITLAB_DUO_FILES, grepl, NA, x = q, fixed = TRUE)))
+  expect_true(grepl("projects(ids: $ids, first: 7)", gl_contents_query(first = 7L), fixed = TRUE))
+  expect_true(grepl(sprintf("first: %d)", GITLAB_CONTENTS_BATCH), q, fixed = TRUE))
+})
+
+test_that("GitLab's complexity error is read for its score and limit, and nothing else is", {
+  err <- function(m) list(data = NULL, status = 200L, error = NA_character_, errors = list(list(message = m)))
+  expect_identical(gl_complexity_refusal(err("Query has complexity of 201, which exceeds max complexity of 200")),
+                   c(score = 201L, limit = 200L))
+  expect_null(gl_complexity_refusal(err("Field 'forkedFrom' doesn't exist on type 'Project'")))
+  expect_null(gl_complexity_refusal(gl_ok(list())))
+  expect_null(gl_complexity_refusal(list(error = "curl timed out (exit 28)", status = NA_integer_)))
 })
 
 test_that("the fixtures hold no email address", {

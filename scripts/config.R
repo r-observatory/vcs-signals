@@ -871,9 +871,11 @@ GITLAB_TREE_ALIASES <- c(github = ".github", workflows = ".github/workflows", gi
                          site = "site", posit = ".posit", positai = ".positai", gemini = ".gemini",
                          gitlab = ".gitlab")
 # Files read by path from a GitLab repository, whose folders are not listed.
-GITLAB_CONTENT_FILES <- c("DESCRIPTION", ".gitignore", ".Rbuildignore", ".gitlab-ci.yml", "docs/pkgdown.yml",
-                          ".gitlab/duo/chat-rules.md", ".gitlab/duo/agent-config.yml", ".gitlab/duo/mcp.json",
-                          ".gitlab/duo/mr-review-instructions.yaml")
+GITLAB_CONTENT_FILES <- c("DESCRIPTION", ".gitignore", ".Rbuildignore", ".gitlab-ci.yml", "docs/pkgdown.yml")
+# GitLab Duo's files, read in a second request only for a project whose .gitlab folder lists duo. In the
+# contents query they put it over GitLab's anonymous complexity limit (201 of 200, measured 2026-10-20).
+GITLAB_DUO_FILES <- c(".gitlab/duo/chat-rules.md", ".gitlab/duo/agent-config.yml", ".gitlab/duo/mcp.json",
+                      ".gitlab/duo/mr-review-instructions.yaml")
 # GitLab commit-message search: projects per first-page request, and pages of 100 matching commits
 # read per project in one run.
 GITLAB_MESSAGE_BATCH    <- 10L
@@ -883,7 +885,7 @@ GITLAB_MESSAGE_PAGE_CAP <- 10L
 GITLAB_MESSAGE_EXTRA_PHRASES <- c("@windsurf.ai", "@windsurf.com")
 # The weekly GitLab read (ai_backfill.R gitlab-contents): GraphQL requests per host in one run, the
 # contents read and the message search together, and the fewest projects its contents check judges.
-GITLAB_AI_MAX_REQUESTS  <- 60L
+GITLAB_AI_MAX_REQUESTS  <- 100L
 GITLAB_CANARY_MIN_ASKED <- 20L
 # A repository with hundreds of commits crediting Claude (247 on 2026-10-20) on a host with the message
 # search. A search there that finds none stops the run, so a change in GitLab's matching never writes none.
