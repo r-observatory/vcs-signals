@@ -26,7 +26,7 @@
 # GitLab state upload call io$upload. A new mode or a new script counts as publishing until it is listed
 # here, which is the moment to check that it never uploads.
 .READ_ONLY_MODES <- list(
-  "weekly.R"      = c("enumerate", "fetch", "fetch-gitlab"),
+  "weekly.R"      = c("enumerate", "fetch", "fetch-gitlab", "fetch-codeberg"),
   "backfill.R"    = c("enumerate", "fetch"),
   "ai_backfill.R" = c("enumerate", "cheap", "gitlab-contents", "gate", "gate-incremental", "deep",
                       "gitlab-onsets"))
@@ -643,7 +643,7 @@ test_that("every merge job downloads the partials run_merge reads", {
   expect_false(grepl("vcs-ai-cheap-*.db", counted, fixed = TRUE))
 })
 
-test_that("the weekly merge runs when the GitLab fetch fails, and only the GitLab REST jobs see the GitLab token", {
+test_that("the weekly merge runs when the GitLab or Codeberg fetch fails, and only the GitLab REST jobs see the GitLab token", {
   wf_dir <- file.path(.repo_root, ".github", "workflows")
   skip_if_not(dir.exists(wf_dir), "workflows not in this checkout")
   weekly <- readLines(file.path(wf_dir, "weekly.yml"), warn = FALSE)
@@ -653,6 +653,11 @@ test_that("the weekly merge runs when the GitLab fetch fails, and only the GitLa
   expect_match(cond, "!cancelled()", fixed = TRUE)
   expect_match(cond, "needs.fetch.result == 'success'", fixed = TRUE)
   expect_false(grepl("fetch-gitlab", cond, fixed = TRUE))
+  expect_false(grepl("fetch-codeberg", cond, fixed = TRUE))
+  expect_true(any(grepl("needs: [fetch, fetch-gitlab, fetch-codeberg]", jobs[["merge"]], fixed = TRUE)))
+  # The Codeberg job is anonymous: no token and no secret of any kind.
+  expect_false(any(grepl("TOKEN", jobs[["fetch-codeberg"]], fixed = TRUE)))
+  expect_false(any(grepl("secrets.", jobs[["fetch-codeberg"]], fixed = TRUE)))
   # The token is named in these jobs only, and nowhere else in any workflow.
   holders <- c("weekly.yml" = "fetch-gitlab", "ai-weekly.yml" = "gitlab-onsets")
   named <- function(x) sum(grepl("GITLAB_TOKEN_GITLAB_COM", x, fixed = TRUE))
@@ -666,6 +671,29 @@ test_that("the weekly merge runs when the GitLab fetch fails, and only the GitLa
   # Workflow-level env reaches every job, the anonymous GitLab read included.
   top <- .top_level(readLines(file.path(wf_dir, "ai-weekly.yml"), warn = FALSE))
   expect_false(any(grepl("TOKEN|secrets\\.", top[.is_code(top)])))
+})
+
+test_that("weekly.yml runs fetch-codeberg read-only on enumerate's Codeberg roster, and the merge downloads its shard", {
+  wf_dir <- file.path(.repo_root, ".github", "workflows")
+  skip_if_not(dir.exists(wf_dir), "workflows not in this checkout")
+  jobs <- lapply(.workflow_jobs(readLines(file.path(wf_dir, "weekly.yml"), warn = FALSE)), function(j) j[.is_code(j)])
+  body <- function(name) paste(jobs[[name]], collapse = "\n")
+  # The job's token can read the repository and nothing more: one job-level block, contents: read alone.
+  cb <- jobs[["fetch-codeberg"]]
+  at <- grep("^\\s*permissions:\\s*$", cb)
+  expect_length(at, 1L)
+  expect_identical(.indent(cb[at]), min(.indent(cb)))
+  block <- cb[seq_along(cb) > at & cumsum(seq_along(cb) > at & .indent(cb) <= .indent(cb[at])) == 0L]
+  expect_identical(trimws(block), "contents: read")
+  expect_false(any(grepl("write", cb, fixed = TRUE)))
+  expect_match(body("enumerate"), "out/vcs-signals-roster-codeberg.db", fixed = TRUE)
+  expect_match(body("fetch-codeberg"), "needs: enumerate", fixed = TRUE)
+  expect_match(body("fetch-codeberg"), "name: roster", fixed = TRUE)
+  expect_match(body("fetch-codeberg"), "VCS_ROSTER: roster", fixed = TRUE)
+  expect_match(body("fetch-codeberg"), "Rscript scripts/weekly.R fetch-codeberg", fixed = TRUE)
+  expect_match(body("fetch-codeberg"), "name: shard-codeberg", fixed = TRUE)
+  expect_match(body("fetch-codeberg"), "path: out/vcs-signals-shard-codeberg.db", fixed = TRUE)
+  expect_match(body("merge"), "pattern: shard-*", fixed = TRUE)
 })
 
 test_that("ai-weekly.yml runs the GitLab read before the gate and the GitLab dating before the merge", {
@@ -716,17 +744,18 @@ test_that("ai-weekly.yml runs the GitLab read before the gate and the GitLab dat
   names(result)[result != "skipped"]
 }
 
-test_that("a GitLab job that fails skips no other job", {
+test_that("a GitLab or Codeberg job that fails skips no other job", {
   # GitHub's default condition reads the whole upstream chain, so a GitHub job two steps below a failed
-  # GitLab job is skipped unless it says otherwise. Each job below a GitLab job has to say so.
+  # GitLab or Codeberg job is skipped unless it says otherwise. Each job below one has to say so.
   wf_dir <- file.path(.repo_root, ".github", "workflows")
   skip_if_not(dir.exists(wf_dir), "workflows not in this checkout")
   for (wf in c("weekly.yml", "ai-weekly.yml")) {
     jobs <- .workflow_jobs(readLines(file.path(wf_dir, wf), warn = FALSE))
-    gitlab <- grep("gitlab", names(jobs), value = TRUE)
-    expect_true(length(gitlab) > 0L, info = wf)
+    hosts <- grep("gitlab|codeberg", names(jobs), value = TRUE)
+    expect_true(any(grepl("gitlab", hosts, fixed = TRUE)), info = wf)
+    if (wf == "weekly.yml") expect_true("fetch-codeberg" %in% hosts)
     expect_setequal(.jobs_that_run(jobs, character(0)), names(jobs))
-    for (g in gitlab) expect_setequal(.jobs_that_run(jobs, g), names(jobs))
+    for (g in hosts) expect_setequal(.jobs_that_run(jobs, g), names(jobs))
   }
 
   # The reader sees the skip a job two steps down would take without its own condition.

@@ -13,6 +13,8 @@
 #                matrix job
 #   fetch-gitlab -> the GitLab roster's commit totals, contributors and
 #                licences, read in turn under each host's REST budget - one job
+#   fetch-codeberg -> the Codeberg roster's commit totals and commit identities,
+#                from a treeless clone of each repository - one job
 #   merge     -> fold every shard's snapshot into the published series as a
 #                change-only weekly point dated today, rebuild the summary,
 #                and republish - one job
@@ -29,6 +31,7 @@ if (!exists("ensure_series_schema")) source("scripts/helpers.R")
 if (!exists("build_gauge_query"))    source("scripts/github.R")
 if (!exists("gl_collect_gauges"))    source("scripts/gitlab.R")
 if (!exists("run_fetch_gitlab"))     source("scripts/gitlab_weekly.R")
+if (!exists("run_fetch_codeberg"))   source("scripts/codeberg_clone.R")
 if (!exists("gh_release_exists"))    source("scripts/update.R")  # default_io, gh_release_*, seed_working_db
 if (!exists("run_enumerate"))        source("scripts/backfill.R") # run_enumerate, write_roster, load_roster
 suppressPackageStartupMessages({ library(DBI); library(RSQLite) })
@@ -155,12 +158,29 @@ enumerate_gitlab <- function(summary_path, path) {
   write_gitlab_roster(path, roster)
 }
 
-#' weekly.yml's enumerate: the GitHub roster, then the GitLab one. A GitLab roster that cannot be
-#' written leaves fetch-gitlab without one and the GitHub shards untouched.
+#' The Codeberg roster from the summary run_enumerate downloaded: every active Codeberg repository with
+#' a Codeberg node id, which the daily stores once it has located the repository.
+enumerate_codeberg <- function(summary_path, path) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), summary_path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  roster <- codeberg_active_repos(con)
+  roster <- roster[is_codeberg_node(roster$node_id), , drop = FALSE]
+  message(sprintf("enumerate: %d codeberg repos", nrow(roster)))
+  write_codeberg_roster(path, roster)
+}
+
+#' weekly.yml's enumerate: the GitHub roster, then the GitLab and Codeberg ones. A GitLab or Codeberg
+#' roster that cannot be written leaves that host's job without one and touches nothing else.
 run_weekly_enumerate <- function(io, out_dir) {
   res <- run_enumerate(io, out_dir)
-  tryCatch(enumerate_gitlab(file.path(out_dir, "vcs-signals-summary.db"), file.path(out_dir, GITLAB_ROSTER_DB)),
+  summary_path <- file.path(out_dir, "vcs-signals-summary.db")
+  tryCatch(enumerate_gitlab(summary_path, file.path(out_dir, GITLAB_ROSTER_DB)),
            error = function(e) message("enumerate: no gitlab roster: ", conditionMessage(e)))
+  cb <- file.path(out_dir, CODEBERG_ROSTER_DB)
+  tryCatch(enumerate_codeberg(summary_path, cb), error = function(e) {
+    if (file.exists(cb) && !dir.exists(cb)) unlink(cb)
+    message("enumerate: no codeberg roster: ", conditionMessage(e))
+  })
   invisible(res)
 }
 
@@ -178,8 +198,9 @@ run_weekly_enumerate <- function(io, out_dir) {
 #' likewise built from WEEKLY_METRICS alone. A repo unchanged since the last
 #' weekly run contributes no new signals_series row for that metric. The GitLab
 #' shard's licence readings go into gitlab_license, which every summary build
-#' reads for GitLab rows. The GitLab cursor state in parts_dir, when
-#' fetch-gitlab supplied it, is uploaded after the publish.
+#' reads for GitLab rows. A GitLab or Codeberg shard that cannot be read is
+#' skipped. The GitLab cursor state in parts_dir, when fetch-gitlab supplied
+#' it, is uploaded after the publish.
 run_merge <- function(io, out_dir, parts_dir) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   working_path <- file.path(out_dir, "_weekly_working.db")
@@ -221,15 +242,24 @@ run_merge <- function(io, out_dir, parts_dir) {
     list(snapshot = if (DBI::dbExistsTable(pcon, SNAPSHOT_TABLE)) DBI::dbReadTable(pcon, SNAPSHOT_TABLE) else empty_snapshot,
          license = if (DBI::dbExistsTable(pcon, "license")) DBI::dbReadTable(pcon, "license"))
   }
-  # A fault in the GitLab shard skips that file, so the GitHub shards still merge and publish.
+  # A fault in the GitLab or Codeberg shard skips that file, so the GitHub shards still merge and publish.
+  # Each of the two is named in the log, folded in or skipped.
+  host_shards <- c(GitLab = GITLAB_SHARD_DB, Codeberg = CODEBERG_SHARD_DB)
   read_part_guarded <- function(p) {
-    if (basename(p) != GITLAB_SHARD_DB) return(read_part(p))
-    tryCatch(suppressWarnings(read_part(p)), error = function(e) {
-      message(sprintf("GitLab shard %s not read, skipped: %s", GITLAB_SHARD_DB, substr(conditionMessage(e), 1L, 200L)))
-      list(snapshot = empty_snapshot, license = NULL)
+    host <- names(host_shards)[match(basename(p), host_shards)]
+    if (is.na(host)) return(read_part(p))
+    r <- tryCatch(suppressWarnings(read_part(p)), error = function(e) {
+      message(sprintf("weekly merge: %s shard %s not read, skipped: %s", host, basename(p),
+                      substr(conditionMessage(e), 1L, 200L)))
+      NULL
     })
+    if (is.null(r)) return(list(snapshot = empty_snapshot, license = NULL))
+    message(sprintf("weekly merge: %s shard %s folded in, %d repos", host, basename(p), nrow(r$snapshot)))
+    r
   }
   shard_reads <- lapply(parts, read_part_guarded)
+  for (h in names(host_shards)[!host_shards %in% basename(parts)])
+    message(sprintf("weekly merge: %s shard %s not in the parts, skipped", h, host_shards[[h]]))
   snap_rows <- lapply(shard_reads, function(r) r$snapshot)
   snapshot <- if (length(snap_rows)) do.call(rbind, snap_rows) else empty_snapshot
   snapshot <- snapshot[!duplicated(snapshot$repo_id), , drop = FALSE]
@@ -328,6 +358,8 @@ main <- function(mode, out_dir, io = NULL) {
       contributors   = function(owner, name) fetch_contributor_count(token, owner, name),
       gl_graphql     = function(domain, query, variables) gl_graphql(domain, query, variables, state = gl_state),
       gl_rest        = function(domain, path) gl_rest(domain, path, state = gl_state),
+      cb_get         = cb_get,
+      cb_clone       = cb_git_clone,
       release_exists = function() gh_release_exists(RELEASE_REPO),
       generation     = function() gh_release_generation(RELEASE_REPO),
       download       = function(pattern, dir) gh_release_download(RELEASE_REPO, pattern, dir),
@@ -347,13 +379,15 @@ main <- function(mode, out_dir, io = NULL) {
     roster_dir <- Sys.getenv("VCS_ROSTER", out_dir)
     run_fetch_gitlab(io, out_dir, file.path(roster_dir, GITLAB_ROSTER_DB), file.path(out_dir, GITLAB_STATE_DB),
                      rest_pacer = gl_rest_p)
+  } else if (mode == "fetch-codeberg") {
+    run_fetch_codeberg(io, out_dir, file.path(Sys.getenv("VCS_ROSTER", out_dir), CODEBERG_ROSTER_DB))
   } else if (mode == "merge") {
     # If another publisher replaced the release between this merge's seed and its
     # publish (the AI merge shares this Sunday cron), the merge waits for that
     # publisher to finish, seeds again from what it left, and rebuilds.
     retry_on_publish_conflict(io, function() run_merge(io, out_dir, Sys.getenv("VCS_PARTS", "parts")))
   } else {
-    stop("usage: weekly.R [enumerate|fetch|fetch-gitlab|merge]")
+    stop("usage: weekly.R [enumerate|fetch|fetch-gitlab|fetch-codeberg|merge]")
   }
 }
 
