@@ -755,3 +755,30 @@ test_that("an item the hour's budget cuts off part way goes to the back of its q
                    c("1.1", "1.2", "2.1", "3.1", "2.1", "2.2"))
   expect_true(any(grepl("gitlab.com, 3 of 3 item(s) done", lg$lines(), fixed = TRUE)))
 })
+
+test_that("an ignore line whose file GitLab cannot read keeps the floor of the day it was seen, not today", {
+  dir <- withr::local_tempdir()
+  # Seen nine days ago, so its floor and today's differ.
+  seen <- paste0(format(Sys.Date() - 9), "T23:59:59Z")
+  ids <- c("gitlab.com/o/raw", "gitlab.com/o/hist")
+  path <- file.path(dir, "vcs-ai-flagged-roster.db")
+  write_flagged_partial(path,
+    data.frame(repo_id = ids, owner = "o", name = c("raw", "hist"), node_id = c("gitlab:gitlab.com:1", "gitlab:gitlab.com:2"),
+               is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_, stringsAsFactors = FALSE),
+    cbind(repo_id = ids, .ai_found("claude", "D", "gitignore:.claude", onset = seen, onset_censored = 1L)),
+    work = data.frame(repo_id = ids, tool = "claude", rule_key = NA_character_, reason = "onset", priority = 1L,
+                      stringsAsFactors = FALSE))
+  # raw: the history reads and every revision read fails; hist: the history read fails.
+  f <- fake_gitlab(rest = function(domain, path) {
+    if (startsWith(path, "/projects/1/repository/commits"))
+      return(rest_ok(commits_body(c("g2", "g1"), c("2026-05-02T00:00:00Z", "2026-05-01T00:00:00Z"))))
+    list(status = 502L, error = "HTTP 502", headers = character(), body = "")
+  })
+  clock <- gla_clock()
+  run_gitlab_onsets(f$io, file.path(dir, "out"), path, now = clock$now, sleep = clock$sleep,
+                    rest_pacer = gl_rest_pacer(clock$now, clock$sleep), log = function(...) NULL)
+  sig <- gla_onset_rows(file.path(dir, "out"))
+  expect_identical(sig$first_seen_date[match(ids, sig$repo_id)], c(seen, seen))
+  expect_identical(sig$first_seen_censored[match(ids, sig$repo_id)], c(1L, 1L))
+  expect_true(any(grepl("/repository/files/.gitignore/raw?ref=", f$calls$rest, fixed = TRUE)))
+})

@@ -90,6 +90,40 @@ gitlab_rotation <- function(ids, cursor = NA_character_) {
   "done"
 }
 
+#' Runs visit(d) over the hosts in rounds and returns each host's end reason, named by host; on_end(d, why)
+#' is called as each one ends. A host visit leaves at "hour" waits, and when every waiting host is still out
+#' of this hour's requests (`need` each) the run sleeps to the next UTC hour, or ends them at "hour" when that
+#' is past the deadline. A fault ends only its host. `fault` and `wait` are the sprintf formats of the log lines.
+.gl_host_rounds <- function(hosts, visit, pacer, deadline, now, sleep, log, on_end = function(d, why) NULL,
+                            need = GITLAB_REST_CALLS_PER_REPO, fault = "GitLab %s: collection stopped by a fault: %s",
+                            wait = "GitLab: %s out of requests for this hour, waiting %d s for the next") {
+  ended <- stats::setNames(character(length(hosts)), hosts)
+  end <- function(d, why) { ended[[d]] <<- why; on_end(d, why) }
+  open <- hosts
+  while (length(open)) {
+    waiting <- character(0)
+    for (d in open) {
+      why <- tryCatch(visit(d), error = function(e) {
+        log(sprintf(fault, d, .gl_redact(conditionMessage(e))))
+        "fault"
+      })
+      if (identical(why, "hour")) waiting <- c(waiting, d) else end(d, why)
+    }
+    open <- waiting
+    if (!length(open)) break
+    # A host whose hour turned while the others ran goes again before anyone sleeps.
+    if (any(vapply(open, function(d) !identical(.gl_rest_block(pacer, .gl_key(d), need), "hour"), NA))) next
+    wake <- (floor(now() / 3600) + 1) * 3600 + 1
+    if (wake >= deadline) {
+      for (d in open) end(d, "hour")
+      break
+    }
+    log(sprintf(wait, paste(open, collapse = ", "), as.integer(ceiling(wake - now()))))
+    sleep(wake - now())
+  }
+  ended
+}
+
 .gl_rotation_note <- function(d, why, n_visited, n) sprintf("GitLab %s: %d of %d repositories visited, %s",
   d, n_visited, n,
   switch(why, done = "end of the roster", closed = "rate limited", deferred = "deferred after repeated failures",
@@ -144,30 +178,9 @@ run_fetch_gitlab <- function(io, out_dir, roster_path, state_path,
   queues <- lapply(stats::setNames(hosts, hosts), function(d)
     gitlab_rotation(roster$repo_id[roster$domain == d], acc$cursors[d]))
 
-  open <- hosts
-  while (length(open)) {
-    waiting <- character(0)
-    for (d in open) {
-      why <- tryCatch(.gl_rotate(io, d, queues[[d]], roster, rest_pacer, deadline, now, acc), error = function(e) {
-        log(sprintf("GitLab %s: collection stopped by a fault: %s", d, .gl_redact(conditionMessage(e))))
-        "fault"
-      })
-      if (identical(why, "hour")) waiting <- c(waiting, d)
-      else log(.gl_rotation_note(d, why, acc$n_visited[[d]], length(queues[[d]])))
-    }
-    open <- waiting
-    if (!length(open)) break
-    # A host whose hour turned while the others ran goes again before anyone sleeps.
-    if (any(vapply(open, function(d) !identical(.gl_rest_block(rest_pacer, .gl_key(d)), "hour"), NA))) next
-    wake <- (floor(now() / 3600) + 1) * 3600 + 1
-    if (wake >= deadline) {
-      for (d in open) log(.gl_rotation_note(d, "hour", acc$n_visited[[d]], length(queues[[d]])))
-      break
-    }
-    log(sprintf("GitLab: %s out of requests for this hour, waiting %d s for the next",
-                paste(open, collapse = ", "), as.integer(ceiling(wake - now()))))
-    sleep(wake - now())
-  }
+  .gl_host_rounds(hosts, function(d) .gl_rotate(io, d, queues[[d]], roster, rest_pacer, deadline, now, acc),
+                  rest_pacer, deadline, now, sleep, log,
+                  on_end = function(d, why) log(.gl_rotation_note(d, why, acc$n_visited[[d]], length(queues[[d]]))))
 
   rows <- data.frame(repo_id = roster$repo_id, commits_total = as.integer(commits),
                      contributors_total = acc$total, top_contributor_commits = acc$top,

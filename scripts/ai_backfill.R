@@ -1149,15 +1149,15 @@ gitlab_onsets_io <- function(pacer, run = system2, log = message) {
 }
 
 # One dating item's state, as run_deep keeps it, or NULL when the host stopped answering part way.
-.gl_onset_item <- function(io, s, ev, tool, domain, project_id, pacer, today) {
+.gl_onset_item <- function(io, s, ev, tool, domain, project_id, pacer) {
   for (marker in unique(ev$marker[ev$tier == "D"])) {
     if (ai_is_ignore_marker(marker)) {
       parts <- strsplit(marker, ":", fixed = TRUE)[[1]]
       file <- if (identical(parts[1], "rbuildignore")) ".Rbuildignore" else ".gitignore"
       got <- gl_ignore_line_onset(io, domain, project_id, file, paste(parts[-1], collapse = ":"), pacer)
       if (got$stopped) return(NULL)
-      # An unreadable history falls back to the end of today, as on GitHub.
-      s$marker_dates[[marker]] <- if (!is.na(got$date)) got$date else paste0(today, "T23:59:59Z")
+      # A line it cannot date keeps the floor of the day the read saw it.
+      if (!is.na(got$date)) s$marker_dates[[marker]] <- got$date
       if (!is.na(got$date) && isTRUE(got$exact)) s$exact_ignores <- c(s$exact_ignores, marker)
       next
     }
@@ -1205,7 +1205,6 @@ run_gitlab_onsets <- function(io, out_dir, roster_path, now = function() as.nume
   acc$state <- list(); acc$done <- rep(FALSE, nrow(work))
   acc$queue <- lapply(stats::setNames(hosts, hosts), function(d) which(dom == d))
   acc$pos <- stats::setNames(rep(1L, length(hosts)), hosts)
-  acc$why <- stats::setNames(rep("done", length(hosts)), hosts)
   # Works one host's queue until it cannot go on, and says why.
   visit <- function(d) {
     key <- .gl_key(d)
@@ -1218,7 +1217,7 @@ run_gitlab_onsets <- function(io, out_dir, roster_path, now = function() as.nume
                                       extra = NULL)
       ev <- evidence[evidence$repo_id == rid & evidence$tool == work$tool[k] & evidence$role == "authoring", ,
                      drop = FALSE]
-      s <- .gl_onset_item(io, s, ev, work$tool[k], d, sub("^.*:", "", node[k]), rest_pacer, today)
+      s <- .gl_onset_item(io, s, ev, work$tool[k], d, sub("^.*:", "", node[k]), rest_pacer)
       if (!is.null(s)) { acc$state[[rid]] <- s; acc$done[k] <- TRUE }
       # One the hour's budget cut off is read again from the start after the hour.
       else if (identical(.gl_rest_block(rest_pacer, key, need = 1L), "hour")) acc$queue[[d]] <- c(acc$queue[[d]], k)
@@ -1226,33 +1225,13 @@ run_gitlab_onsets <- function(io, out_dir, roster_path, now = function() as.nume
     }
     "done"
   }
-  open <- hosts
-  while (length(open)) {
-    waiting <- character(0)
-    for (d in open) {
-      why <- tryCatch(visit(d), error = function(e) {
-        log(sprintf("gitlab onsets: %s stopped by a fault: %s", d, .gl_redact(conditionMessage(e))))
-        "fault"
-      })
-      if (identical(why, "hour")) waiting <- c(waiting, d) else acc$why[[d]] <- why
-    }
-    open <- waiting
-    if (!length(open)) break
-    # A host whose hour turned while the others ran goes again before anyone sleeps.
-    if (any(vapply(open, function(d) !identical(.gl_rest_block(rest_pacer, .gl_key(d), need = 1L), "hour"), NA))) next
-    wake <- (floor(now() / 3600) + 1) * 3600 + 1
-    if (wake >= deadline) {
-      acc$why[open] <- "hour"
-      break
-    }
-    log(sprintf("gitlab onsets: %s out of requests for this hour, waiting %d s for the next",
-                paste(open, collapse = ", "), as.integer(ceiling(wake - now()))))
-    sleep(wake - now())
-  }
+  why <- .gl_host_rounds(hosts, visit, rest_pacer, deadline, now, sleep, log, need = 1L,
+                         fault = "gitlab onsets: %s stopped by a fault: %s",
+                         wait = "gitlab onsets: %s out of requests for this hour, waiting %d s for the next")
   for (d in hosts) {
     items <- unique(acc$queue[[d]]); left <- items[!acc$done[items]]
     log(sprintf("gitlab onsets: %s, %d of %d item(s) done, %s%s", d, length(items) - length(left), length(items),
-                .gl_onset_note(acc$why[[d]]),
+                .gl_onset_note(why[[d]]),
                 if (length(left)) paste0(", left undated: ", paste(work$repo_id[left], work$tool[left], collapse = ", "))
                 else ""))
   }
