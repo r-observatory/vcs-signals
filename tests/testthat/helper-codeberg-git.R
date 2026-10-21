@@ -59,7 +59,10 @@ cb_fixture_repo <- function() {
   bare
 }
 
-#' A cb_clone io member that clones `src` from its local path, under the clone environment.
+#' A cb_clone io member that clones `src` under the clone environment, treeless as from Codeberg: over
+#' file://, since a plain local clone ignores the filter, with an upload-pack that allows it.
 cb_local_clone <- function(src) function(url, dir)
-  .cb_git(system2, c("clone", "--bare", "--no-tags", "--single-branch", "--quiet", shQuote(src), shQuote(dir)),
+  .cb_git(system2, c("clone", "--bare", paste0("--filter=", CODEBERG_CLONE_FILTER), "--no-tags", "--single-branch",
+                     "--quiet", paste0("--upload-pack=", shQuote("git -c uploadpack.allowFilter=true upload-pack")),
+                     shQuote(paste0("file://", src)), shQuote(dir)),
           stderr = TRUE, timeout = CODEBERG_CLONE_TIMEOUT_S)

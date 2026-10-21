@@ -29,7 +29,11 @@ test_that("git answering 429 closes Codeberg for the run, and a missing reposito
     output = "fatal: unable to access 'https://codeberg.org/o/r.git/': The requested URL returned error: 429"))
   expect_identical(cb_clone_counts(r429, cb_obj(64L, "o/r"), st, withr::local_tempdir())$state, "stopped")
   expect_identical(st$closed, "429")
-  expect_identical(cb_clone_counts(r429, cb_obj(65L, "o/q"), st, withr::local_tempdir())$state, "stopped")
+  expect_identical(st$pacer$hourly_budget(CODEBERG_DOMAIN), 0)
+  called <- new.env(); called$n <- 0L
+  counting <- list(cb_clone = function(url, dir) { called$n <- called$n + 1L; list(status = 0L, output = character()) })
+  expect_identical(cb_clone_counts(counting, cb_obj(65L, "o/q"), st, withr::local_tempdir())$state, "stopped")
+  expect_identical(called$n, 0L)
   st2 <- cb_test_state()
   gone <- list(cb_clone = function(url, dir) list(status = 128L, output = "fatal: repository 'https://codeberg.org/o/r.git/' not found"))
   for (i in 1:4) expect_identical(cb_clone_counts(gone, cb_obj(66L, "o/r"), st2, withr::local_tempdir())$state, "failed")
@@ -49,6 +53,54 @@ test_that("git answering 403 or 410 is an answer about the repository, while thr
   for (i in 1:3) expect_identical(cb_clone_counts(eof, cb_obj(72L, "o/r"), st2, withr::local_tempdir())$state, "failed")
   expect_identical(st2$pacer$deferred(), CODEBERG_DOMAIN)
   expect_identical(cb_clone_counts(eof, cb_obj(72L, "o/r"), st2, withr::local_tempdir())$state, "stopped")
+})
+
+test_that("only git's wording for a missing repository is an answer, never another message that says not found", {
+  thrown <- list(cb_clone = function(url, dir) stop("object 'x' not found"))
+  backend <- list(cb_clone = function(url, dir) list(status = 128L, output = "remote: storage backend not found"))
+  for (io in list(thrown, backend)) {
+    st <- cb_test_state()
+    for (i in 1:3) expect_identical(cb_clone_counts(io, cb_obj(74L, "o/r"), st, withr::local_tempdir())$state, "failed")
+    expect_identical(st$pacer$deferred(), CODEBERG_DOMAIN)
+  }
+  st <- cb_test_state()
+  gone <- list(cb_clone = function(url, dir) list(status = 128L,
+    output = c("remote: Not found.", "fatal: repository 'https://codeberg.org/o/r.git/' not found")))
+  for (i in 1:3) expect_identical(cb_clone_counts(gone, cb_obj(74L, "o/r"), st, withr::local_tempdir())$state, "failed")
+  expect_length(st$pacer$deferred(), 0L)
+})
+
+test_that("st$asked grows by CODEBERG_CLONE_SLOTS for each clone started and not at all when the slots are refused", {
+  st <- cb_test_state()
+  gone <- list(cb_clone = function(url, dir) list(status = 128L, output = "fatal: repository 'https://codeberg.org/o/r.git/' not found"))
+  cb_clone_counts(gone, cb_obj(75L, "o/r"), st, withr::local_tempdir())
+  expect_identical(st$asked, as.integer(CODEBERG_CLONE_SLOTS))
+  cb_clone_counts(list(cb_clone = cb_local_clone(cb_fixture_repo())), cb_obj(76L, "o/s"), st, withr::local_tempdir())
+  expect_identical(st$asked, 2L * CODEBERG_CLONE_SLOTS)
+  st$pacer$set_hourly_budget(CODEBERG_DOMAIN, 0)
+  expect_identical(cb_clone_counts(gone, cb_obj(77L, "o/t"), st, withr::local_tempdir())$state, "stopped")
+  expect_identical(st$asked, 2L * CODEBERG_CLONE_SLOTS)
+})
+
+test_that("a clone member answering with something other than a list is failed with one log line, and its directory is gone", {
+  lines <- new.env(); lines$v <- character(0)
+  st <- cb_test_state(log = function(m) lines$v <- c(lines$v, m))
+  scratch <- withr::local_tempdir()
+  odd <- list(cb_clone = function(url, dir) { dir.create(dir); "fatal: something odd" })
+  expect_identical(cb_clone_counts(odd, cb_obj(78L, "o/odd"), st, scratch)$state, "failed")
+  expect_length(lines$v, 1L)
+  expect_match(lines$v, "Codeberg o/odd: not counted:", fixed = TRUE)
+  expect_length(list.files(scratch, all.files = TRUE, no.. = TRUE), 0L)
+})
+
+test_that("the fixture clone holds no trees, as a treeless Codeberg clone does, and the commits are counted without a lazy fetch", {
+  dir <- file.path(withr::local_tempdir(), "c")
+  r <- cb_local_clone(cb_fixture_repo())("https://codeberg.org/someone/cbpkg.git", dir)
+  expect_identical(r$status, 0L)
+  expect_false(any(grepl("filtering not recognized", r$output, fixed = TRUE)))
+  expect_identical(cb_git_local(dir, c("cat-file", "-e", "HEAD"))$status, 0L)
+  expect_false(cb_git_local(dir, c("cat-file", "-e", shQuote("HEAD^{tree}")))$status == 0L)
+  expect_identical(cb_git_local(dir, c("rev-list", "--count", "HEAD")), list(status = 0L, lines = "6"))
 })
 
 test_that("a clone URL off codeberg.org is never cloned, and a clone takes CODEBERG_CLONE_SLOTS pacer slots", {

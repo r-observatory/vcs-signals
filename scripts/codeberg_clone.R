@@ -1,7 +1,8 @@
 # scripts/codeberg_clone.R - the weekly Codeberg pass: commit totals and commit identity counts from a
 # treeless bare clone of each repository's default branch. The clone is the io member
 # io$cb_clone(url, dir), returning list(status, output); local git commands are never io members.
-# Uses cb_run_state, cb_pacer, .cb_log and .cb_close (codeberg.R) and .gl_redact (gitlab_weekly.R).
+# Uses cb_run_state, cb_pacer, .cb_log and .cb_close (codeberg.R), .gl_at, .gl_chr and .gl_int
+# (gitlab.R) and .gl_redact (gitlab_weekly.R).
 
 CODEBERG_ROSTER_DB <- "vcs-signals-roster-codeberg.db"
 CODEBERG_SHARD_DB <- "vcs-signals-shard-codeberg.db"
@@ -10,7 +11,7 @@ CODEBERG_SHARD_DB <- "vcs-signals-shard-codeberg.db"
 .CB_GIT_ENV <- c("GIT_TERMINAL_PROMPT=0", "GIT_NO_LAZY_FETCH=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
 .CB_CLONE_URL_RE <- "^https://codeberg\\.org/[^/]+/[^/]+\\.git$"
 # Git's words for a missing, private or refused repository: an answer about it, never a breaker failure.
-.CB_GIT_ANSWER_RE <- "not found|could not read Username|Authentication failed|returned error: (403|404|410)"
+.CB_GIT_ANSWER_RE <- "repository '[^']*' not found|could not read Username|Authentication failed|returned error: (403|404|410)"
 
 # Runs git under .CB_GIT_ENV. Returns list(status, output); a run that throws or times out (system2
 # gives 124) has a non-zero status.
@@ -52,8 +53,9 @@ cb_identity_counts <- function(lines) {
 
 #' One located repository's commit total and identity counts, from a clone of its default branch into
 #' `scratch`, removed whatever happens. Returns list(state, commits_total, contributors_total,
-#' top_contributor_commits), the values NA unless state is "ok". "failed" logs one line; "stopped"
-#' (Codeberg closed or deferred for the run, or out of requests) clones nothing.
+#' top_contributor_commits), the values NA unless state is "ok". "failed" logs one line. "stopped"
+#' is a git 429, which closes Codeberg for the run, or a run already closed, deferred or out of
+#' requests, when nothing is cloned.
 cb_clone_counts <- function(io, obj, st, scratch) {
   name <- .gl_chr(.gl_at(obj, "full_name"))
   url <- .gl_chr(.gl_at(obj, "clone_url"))
@@ -64,6 +66,7 @@ cb_clone_counts <- function(io, obj, st, scratch) {
   # A clone costs Codeberg about three requests.
   for (k in seq_len(CODEBERG_CLONE_SLOTS))
     if (!isTRUE(st$pacer$before(CODEBERG_DOMAIN))) return(.cb_clone_result("stopped"))
+  st$asked <- st$asked + CODEBERG_CLONE_SLOTS
   dir <- tempfile("clone-", tmpdir = scratch)
   on.exit(unlink(dir, recursive = TRUE, force = TRUE), add = TRUE)
   tryCatch(.cb_clone_read(io, st, name, url, dir), error = function(e) {
