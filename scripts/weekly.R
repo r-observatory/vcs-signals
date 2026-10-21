@@ -29,6 +29,7 @@ if (!exists("ensure_series_schema")) source("scripts/helpers.R")
 if (!exists("build_gauge_query"))    source("scripts/github.R")
 if (!exists("gl_collect_gauges"))    source("scripts/gitlab.R")
 if (!exists("run_fetch_gitlab"))     source("scripts/gitlab_weekly.R")
+if (!exists("run_fetch_codeberg"))   source("scripts/codeberg_clone.R")
 if (!exists("gh_release_exists"))    source("scripts/update.R")  # default_io, gh_release_*, seed_working_db
 if (!exists("run_enumerate"))        source("scripts/backfill.R") # run_enumerate, write_roster, load_roster
 suppressPackageStartupMessages({ library(DBI); library(RSQLite) })

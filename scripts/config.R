@@ -108,6 +108,15 @@ CODEBERG_PR_PAGES <- 10L
 CODEBERG_TOPICS_MAX <- 20L
 # The daily Codeberg pass runs after GitLab's, until this many minutes past the later of its end and its deadline.
 CODEBERG_DEADLINE_EXTRA_MIN <- 15
+# The weekly clone pass (scripts/codeberg_clone.R). A treeless clone holds the commits only. Each
+# measured clone cost 3 requests of Codeberg's window, so a clone takes 3 pacer slots.
+CODEBERG_CLONE_FILTER <- "tree:0"
+CODEBERG_CLONE_SLOTS <- 3L
+CODEBERG_CLONE_TIMEOUT_S <- 300
+CODEBERG_LOCAL_GIT_TIMEOUT_S <- 120
+# The pass stops itself at this deadline, inside the fetch-codeberg job's 120-minute cap.
+CODEBERG_WEEKLY_DEADLINE_MIN <- 100
+CODEBERG_WEEKLY_MAX_REQUESTS <- 900L  # weekly run cap, clone slots included
 
 # Hosts we have an adapter for. This sets repos.supported and routes nothing.
 SUPPORTED_HOSTS <- c("github", "gitlab", "codeberg")
