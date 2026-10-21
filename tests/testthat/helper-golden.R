@@ -450,6 +450,28 @@ skip_golden_parity <- function()
   else answer(list(id = as.integer(p$id), license = list(key = p$license, name = "Licence")))
 }
 
+# ---- the fake Codeberg --------------------------------------------------------
+# someone/cbpkg as Codeberg answers `back` daily runs before the recorded day: every unit on, one
+# star more and one open issue fewer each run, three closed pull requests (two merged), a newest
+# release and a newest commit. Any other path is a 404. No answer carries an address.
+.golden_codeberg <- function(path, back = 0L) {
+  obj <- list(id = 4242L, full_name = "someone/cbpkg", owner = list(id = 77L, login = "someone"),
+    empty = FALSE, fork = FALSE, mirror = FALSE, archived = FALSE, original_url = "", website = "",
+    clone_url = "https://codeberg.org/someone/cbpkg.git", stars_count = 5L - back, forks_count = 1L,
+    watchers_count = 2L, open_issues_count = 1L + back, open_pr_counter = 1L, release_counter = 2L, size = 820L,
+    topics = list("r", "stats"), created_at = "2023-02-11T09:30:00+01:00", has_issues = TRUE,
+    has_pull_requests = TRUE, has_releases = TRUE, default_branch = "main")
+  pr <- function(merged) list(number = 1L, pull_request = list(merged = merged))
+  switch(path,
+    "/users/someone/repos?limit=50&page=1" = cb_list(list(obj)),
+    "/repos/someone/cbpkg/issues?state=closed&type=issues&limit=1" = cb_list(list(list(number = 2L)), total = 7L),
+    "/repos/someone/cbpkg/issues?state=closed&type=pulls&limit=50&page=1" = cb_list(list(pr(TRUE), pr(TRUE), pr(FALSE))),
+    "/repos/someone/cbpkg/releases/latest" = cb_answer(body = list(tag_name = "v0.3.0", published_at = "2026-06-01T10:00:00+02:00")),
+    "/repos/someone/cbpkg/commits?limit=1&stat=false&verification=false&files=false" =
+      cb_list(list(list(sha = "5d1c9e0a", commit = list(committer = list(name = "Maintainer", date = "2026-09-30T12:00:00+02:00"))))),
+    cb_answer(404L, list(message = "The target couldn't be found.")))
+}
+
 # The weekly documents' and the contents check's own repositories get the answers the canary tests use.
 .golden_graphql <- function(gh) {
   cfg <- AI_QUERY_CANARY
@@ -506,6 +528,7 @@ skip_golden_parity <- function()
       note("gl_graphql", domain, query, as.character(jsonlite::toJSON(variables, auto_unbox = TRUE)))
       .golden_gitlab(domain, query, variables, back) },
     gl_rest = function(domain, path) { note("gl_rest", domain, path); .golden_gl_rest(domain, path) },
+    cb_get = function(path) { note("cb_get", path); .golden_codeberg(path, back) },
     contributors = function(owner, name) { note("contributors", owner, name); .golden_contributors(owner, name) },
     # delay is pacing, not part of the request.
     search_hit = function(owner, name, query, delay = 0) {
@@ -629,11 +652,11 @@ skip_golden_parity <- function()
   ai = .golden_ai,
   backfill = .golden_sharded)
 
-# Stars for the Codeberg repository in the seeded release, so the GitHub-only rosters of the
-# later paths have a signalled row with no collector to leave out. The GitLab rows carry what
-# the daily runs collected.
+# Stars for the r-forge repository in the seeded release, so the GitHub-only rosters of the
+# later paths have a signalled row with no collector to leave out. The GitLab and Codeberg rows
+# carry what the daily runs collected.
 .golden_other_hosts <- function(rel) {
-  ids <- "codeberg.org/someone/cbpkg"
+  ids <- "r-forge.r-project.org/projects/rfpkg"
   stars <- 2L
   for (asset in c("vcs-signals-recent.db", "vcs-signals-summary.db")) {
     con <- DBI::dbConnect(RSQLite::SQLite(), file.path(rel, asset))

@@ -215,6 +215,66 @@ seed_working_db <- function(io, out_dir, working_path) {
   out
 }
 
+# ---- Codeberg -----------------------------------------------------------------
+# Codeberg's locate and then its gauges for one run, through one pacer, until `deadline`. A
+# repository that is not located keeps its values and is asked again next run; none is ever marked
+# gone or sent to repoint_dead_node_ids. A fault in either step is logged and leaves the repositories
+# it covers with their last values. `deferred` and `unreached` are node ids; repositories without
+# one are only counted in the log. `snapshot` has exactly the GitHub gauge columns; `map` is
+# node_id, repo_id.
+.codeberg_pass <- function(io, con, deadline, now, today) {
+  log <- function(m) cat(m, "\n", sep = "")
+  out <- list(snapshot = NULL, deferred = character(0), unresolvable = character(0), unreached = character(0),
+              map = data.frame(node_id = character(0), repo_id = character(0), stringsAsFactors = FALSE))
+  repos <- codeberg_active_repos(con)
+  if (!nrow(repos)) return(out)
+  pacer <- cb_pacer(now = now, sleep = if (is.function(io$sleep)) io$sleep else Sys.sleep)
+  st <- cb_run_state(pacer, log)
+  loc <- tryCatch({
+    l <- cb_locate(io, repos, st, deadline = deadline, now = now)
+    update_repo_node_ids(con, l$ids)
+    l
+  }, error = function(e) {
+    log(sprintf("Codeberg: locating stopped by a fault, every Codeberg repository keeps its last values: %s",
+                conditionMessage(e)))
+    NULL
+  })
+  map <- codeberg_active_repos(con)
+  map <- map[is_codeberg_node(map$node_id), c("node_id", "repo_id"), drop = FALSE]
+  out$map <- map
+  if (is.null(loc)) {
+    out$deferred <- map$node_id
+    return(out)
+  }
+  g <- tryCatch({
+    g <- cb_collect_gauges(io, loc$objects, st, deadline = deadline, now = now, today = today)
+    if (!is.null(g$snapshot)) g$snapshot <- g$snapshot[, names(rows_df_empty_gauges()), drop = FALSE]
+    g
+  }, error = function(e) {
+    log(sprintf("Codeberg: gauges stopped by a fault, every Codeberg repository keeps its last values: %s",
+                conditionMessage(e)))
+    NULL
+  })
+  # Repositories that already had an id and that locate deferred or did not reach.
+  known <- repos[!is.na(repos$node_id) & !repos$node_id %in% names(loc$objects), , drop = FALSE]
+  if (is.null(g)) {
+    out$deferred <- map$node_id
+  } else {
+    out$snapshot <- g$snapshot
+    out$deferred <- unique(c(known$node_id[known$repo_id %in% loc$deferred], g$deferred))
+    out$unreached <- unique(c(known$node_id[known$repo_id %in% loc$unreached], g$unreached))
+  }
+  # Counted by repository; after a gauge fault every located one is deferred.
+  in_gauges <- function(ids) if (is.null(g)) nrow(loc$found) else sum(loc$found$node_id %in% ids)
+  log(sprintf("Codeberg: %d located, %d not located, %d deferred, %d not reached, %d requests, lowest r %s",
+              nrow(loc$found), length(loc$not_located), length(loc$deferred) + in_gauges(g$deferred),
+              length(loc$unreached) + if (is.null(g)) 0L else in_gauges(g$unreached), st$asked, format(st$low_r)))
+  na <- cb_na_counts(out$snapshot)
+  na <- na[na > 0L]
+  if (length(na)) log(sprintf("Codeberg NA by field: %s", paste(names(na), na, collapse = ", ")))
+  out
+}
+
 # ---- the five-stage orchestrator -------------------------------------------
 #' Run one full vcs-signals update pass behind an injected io.
 #'
@@ -324,8 +384,8 @@ run_update <- function(io, out_dir, opts = list()) {
 
   # ---- GitLab: ids, then gauges, once GitHub's pass is done, so GitHub's
   # timing is as it was. Its own allowance runs past GitHub's deadline. ------
-  gl <- .gitlab_pass(io, con, deadline = max(now(), started + 60 * deadline_min) + 60 * GITLAB_DEADLINE_EXTRA_MIN,
-                     now = now)
+  gl_deadline <- max(now(), started + 60 * deadline_min) + 60 * GITLAB_DEADLINE_EXTRA_MIN
+  gl <- .gitlab_pass(io, con, deadline = gl_deadline, now = now)
   step(sprintf("GitLab gauges: collected %d repos, %d deferred, %d not in GitLab's answer, %d not reached",
                if (is.null(gl$snapshot)) 0L else nrow(gl$snapshot), length(gl$deferred),
                length(gl$unresolvable), length(gl$unreached)))
@@ -333,6 +393,31 @@ run_update <- function(io, out_dir, opts = list()) {
   gauges$deferred <- c(gauges$deferred, gl$deferred)
   gauges$unreached <- c(gauges$unreached, gl$unreached)
   repo_map <- rbind(repo_map, gl$map)
+
+  # ---- Codeberg: locate, then gauges, once GitLab is done, with its own allowance past
+  # GitLab's deadline. A fault anywhere here, the merge into the gauge frame included, leaves
+  # every Codeberg repository with its last values and GitHub's and GitLab's rows as they are.
+  # Its ids left out of an answer never reach repoint_dead_node_ids. ----------------------
+  merged <- tryCatch({
+    cb <- .codeberg_pass(io, con, deadline = max(now(), gl_deadline) + 60 * CODEBERG_DEADLINE_EXTRA_MIN,
+                         now = now, today = today)
+    # Silent on a day no Codeberg repository has an id.
+    if (nrow(cb$map))
+      step(sprintf("Codeberg gauges: collected %d repos, %d deferred, %d not reached",
+                   if (is.null(cb$snapshot)) 0L else nrow(cb$snapshot), length(cb$deferred), length(cb$unreached)))
+    list(snapshot = rbind(gauges$snapshot, cb$snapshot), deferred = c(gauges$deferred, cb$deferred),
+         unreached = c(gauges$unreached, cb$unreached), map = rbind(repo_map, cb$map))
+  }, error = function(e) {
+    cat(sprintf("Codeberg: stopped by a fault, every Codeberg repository keeps its last values: %s\n",
+                conditionMessage(e)))
+    NULL
+  })
+  if (!is.null(merged)) {
+    gauges$snapshot <- merged$snapshot
+    gauges$deferred <- merged$deferred
+    gauges$unreached <- merged$unreached
+    repo_map <- merged$map
+  }
   snapshot_long <- gauges_to_long(gauges$snapshot, repo_map)
   cut <- gauge_cut_verdict(length(gauges$unreached), nrow(repo_map))
   if (length(cut$lines)) cat(cut$lines, sep = "\n")
@@ -589,6 +674,7 @@ main <- function(out_dir, io = NULL) {
     acquire = function() rbind(acquire_cran(), acquire_bioc()),
     graphql = default_io(token)$graphql,
     gl_graphql = gl_graphql,
+    cb_get = cb_get,
     release_exists = function() gh_release_exists(RELEASE_REPO),
     generation = function() gh_release_generation(RELEASE_REPO),
     download = function(pattern, dir) gh_release_download(RELEASE_REPO, pattern, dir),

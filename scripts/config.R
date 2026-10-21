@@ -88,7 +88,7 @@ GITLAB_WEEKLY_DEADLINE_MIN <- 200
 # REST calls one repository costs weekly: two for contributors, one for the licence.
 GITLAB_REST_CALLS_PER_REPO <- 3L
 # GitLab runs after the GitHub gauge pass, until this many minutes past the later of that pass's
-# end and its deadline. update.yml caps the job at 170 minutes; the longest recent job took 136.
+# end and its deadline. update.yml caps the job at 185 minutes; the longest recent job took 136.
 GITLAB_DEADLINE_EXTRA_MIN <- 10
 
 # Codeberg (scripts/codeberg.R): anonymous Forgejo REST, one cb_pacer() per run, no token.
@@ -106,10 +106,11 @@ CODEBERG_PAGE <- 50L              # Forgejo's max_response_items
 CODEBERG_OWNER_PAGES <- 10L
 CODEBERG_PR_PAGES <- 10L
 CODEBERG_TOPICS_MAX <- 20L
+# The daily Codeberg pass runs after GitLab's, until this many minutes past the later of its end and its deadline.
 CODEBERG_DEADLINE_EXTRA_MIN <- 15
 
 # Hosts we have an adapter for. This sets repos.supported and routes nothing.
-SUPPORTED_HOSTS <- c("github", "gitlab")
+SUPPORTED_HOSTS <- c("github", "gitlab", "codeberg")
 # Hosts whose repositories go to the GitHub collectors (resolve, gauges, weekly, backfill, AI).
 GITHUB_HOSTS <- c("github")
 
@@ -149,8 +150,8 @@ REVISION_WINDOW<- 10L    # trailing days re-materialized each run (must be < REC
 POINT_RESERVE  <- 1500L  # GraphQL points left unspent as headroom
 BATCH_DELAY_S  <- 0.35   # pause between GraphQL batches, to stay well under secondary rate limits
 # Minutes into update.R after which the gauge pass stops and the run publishes
-# what it has. The job is capped at 170; setup, tests and the stages after the
-# gauges took up to 36 and GitLab may add 10, so 100 leaves ~23 spare.
+# what it has. The job is capped at 185; setup, tests and the stages after the
+# gauges took up to 36, GitLab may add 10 and Codeberg 15, so 100 leaves ~24 spare.
 GAUGE_DEADLINE_MIN <- 100
 # More unresolvable ids than this (or than 1% of the gauged repos) in one run
 # reads as a GitHub fault, not deleted repos, so none are acted on.
