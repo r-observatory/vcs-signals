@@ -243,15 +243,23 @@ run_merge <- function(io, out_dir, parts_dir) {
          license = if (DBI::dbExistsTable(pcon, "license")) DBI::dbReadTable(pcon, "license"))
   }
   # A fault in the GitLab or Codeberg shard skips that file, so the GitHub shards still merge and publish.
+  # Each of the two is named in the log, folded in or skipped.
+  host_shards <- c(GitLab = GITLAB_SHARD_DB, Codeberg = CODEBERG_SHARD_DB)
   read_part_guarded <- function(p) {
-    if (!basename(p) %in% c(GITLAB_SHARD_DB, CODEBERG_SHARD_DB)) return(read_part(p))
-    host <- if (basename(p) == GITLAB_SHARD_DB) "GitLab" else "Codeberg"
-    tryCatch(suppressWarnings(read_part(p)), error = function(e) {
-      message(sprintf("%s shard %s not read, skipped: %s", host, basename(p), substr(conditionMessage(e), 1L, 200L)))
-      list(snapshot = empty_snapshot, license = NULL)
+    host <- names(host_shards)[match(basename(p), host_shards)]
+    if (is.na(host)) return(read_part(p))
+    r <- tryCatch(suppressWarnings(read_part(p)), error = function(e) {
+      message(sprintf("weekly merge: %s shard %s not read, skipped: %s", host, basename(p),
+                      substr(conditionMessage(e), 1L, 200L)))
+      NULL
     })
+    if (is.null(r)) return(list(snapshot = empty_snapshot, license = NULL))
+    message(sprintf("weekly merge: %s shard %s folded in, %d repos", host, basename(p), nrow(r$snapshot)))
+    r
   }
   shard_reads <- lapply(parts, read_part_guarded)
+  for (h in names(host_shards)[!host_shards %in% basename(parts)])
+    message(sprintf("weekly merge: %s shard %s not in the parts, skipped", h, host_shards[[h]]))
   snap_rows <- lapply(shard_reads, function(r) r$snapshot)
   snapshot <- if (length(snap_rows)) do.call(rbind, snap_rows) else empty_snapshot
   snapshot <- snapshot[!duplicated(snapshot$repo_id), , drop = FALSE]

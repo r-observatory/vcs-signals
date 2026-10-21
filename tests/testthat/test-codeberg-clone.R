@@ -160,7 +160,7 @@ test_that("a clone git cannot read is failed with every count NA, and one log li
   expect_match(lines$v, "o/hollow", fixed = TRUE)
 })
 
-test_that("a clone the server did not filter still counts, and one log line names the repository", {
+test_that("a clone the server did not filter keeps its counts, warns by name and closes Codeberg for the run", {
   lines <- new.env(); lines$v <- character(0)
   st <- cb_test_state(log = function(m) lines$v <- c(lines$v, m))
   inner <- cb_local_clone(cb_fixture_repo())
@@ -172,9 +172,15 @@ test_that("a clone the server did not filter still counts, and one log line name
   got <- cb_clone_counts(full, cb_obj(70L, "o/full"), st, withr::local_tempdir())
   expect_identical(c(got$state, as.character(got$commits_total)), c("ok", "6"))
   expect_length(lines$v, 1L)
-  expect_match(lines$v, "o/full", fixed = TRUE)
+  expect_match(lines$v, "^::warning::Codeberg o/full: ")
   expect_match(lines$v, "filter", fixed = TRUE)
   expect_false(grepl("@", lines$v, fixed = TRUE))
+  expect_identical(st$closed, "filter")
+  expect_identical(st$pacer$hourly_budget(CODEBERG_DOMAIN), 0)
+  called <- new.env(); called$n <- 0L
+  counting <- list(cb_clone = function(url, dir) { called$n <- called$n + 1L; list(status = 0L, output = character()) })
+  expect_identical(cb_clone_counts(counting, cb_obj(79L, "o/next"), st, withr::local_tempdir())$state, "stopped")
+  expect_identical(called$n, 0L)
 })
 
 test_that("a failed clone's log line carries no address", {
@@ -378,6 +384,82 @@ test_that("one line gives git's version, and the summary line counts each outcom
   expect_identical(lines[length(lines)], paste(
     "weekly fetch codeberg: 1 read, 1 failed, 1 empty, 1 not located, 1 not reached of 5 repos,",
     "8 requests and clone slots, lowest r 1500, 607 s"))
+})
+
+test_that("the weekly job stops at a clone the server did not filter: that repository keeps its counts and nothing more is cloned or asked", {
+  dir <- withr::local_tempdir()
+  roster <- cbw_roster(dir, c("o/full", "o/good", "o/zed"), sprintf("codeberg:codeberg.org:%d", c(2L, 1L, 4L)))
+  seen <- new.env(); cloned <- new.env(); cloned$urls <- character(0)
+  clone <- cb_local_clone(cb_fixture_repo())
+  io <- list(
+    cb_get = cb_fake(list("/users/o/repos?limit=50&page=1" =
+      cb_list(list(cb_obj(1L, "o/good"), cb_obj(2L, "o/full"), cb_obj(4L, "o/zed")))), seen),
+    cb_clone = function(url, dir) {
+      cloned$urls <- c(cloned$urls, url)
+      r <- clone(url, dir)
+      r$output <- c(r$output, "warning: filtering not recognized by server, ignoring")
+      r
+    })
+  lg <- cbw_logger()
+  run_fetch_codeberg(io, file.path(dir, "out"), roster, now = cb_clock()$now, sleep = function(s) NULL, log = lg$log)
+  expect_identical(cloned$urls, "https://codeberg.org/o/full.git")
+  expect_identical(seen$paths, "/users/o/repos?limit=50&page=1")
+  expect_identical(cbw_snapshot(file.path(dir, "out"))$commits_total, c(6L, NA, NA))
+  lines <- lg$lines()
+  expect_true(any(startsWith(lines, "::warning::Codeberg o/full: ")))
+  expect_match(lines[length(lines)], "1 read, 0 failed, 0 empty, 0 not located, 2 not reached of 3 repos", fixed = TRUE)
+})
+
+# The workflow warnings of a weekly run over o/a to o/d, all listed, with these io members.
+cbw_warnings <- function(clone, get = function(path) cb_list(lapply(1:4, function(i) cb_obj(i, paste0("o/", letters[i])))),
+                         run_budget = CODEBERG_WEEKLY_MAX_REQUESTS) {
+  dir <- withr::local_tempdir()
+  roster <- cbw_roster(dir, paste0("o/", letters[1:4]), sprintf("codeberg:codeberg.org:%d", 1:4))
+  lg <- cbw_logger()
+  run_fetch_codeberg(list(cb_get = get, cb_clone = clone), file.path(dir, "out"), roster, now = cb_clock()$now,
+                     sleep = function(s) NULL, run_budget = run_budget, log = lg$log)
+  grep("^::warning::", lg$lines(), value = TRUE)
+}
+
+test_that("Codeberg closing for the run, by a 429, a low ratelimit, the breaker, the ignored filter or the budget, is a workflow warning", {
+  ok <- cb_local_clone(cb_fixture_repo())
+  says <- function(text) function(url, dir) list(status = 128L, output = text)
+  filtered <- function(url, dir) { r <- ok(url, dir); r$output <- c(r$output, "warning: filtering not recognized by server, ignoring"); r }
+  closed <- function(w) grep("^::warning::Codeberg: closed for the run", w, value = TRUE)
+  expect_length(cbw_warnings(ok), 0L)
+  w <- closed(cbw_warnings(says("fatal: unable to access 'https://codeberg.org/o/a.git/': The requested URL returned error: 429")))
+  expect_identical(w, "::warning::Codeberg: closed for the run (HTTP 429), 4 repositories not reached keep last week's values")
+  w <- closed(cbw_warnings(ok, get = function(path) cb_answer(429L)))
+  expect_identical(w, "::warning::Codeberg: closed for the run (HTTP 429), 4 repositories not reached keep last week's values")
+  w <- closed(cbw_warnings(ok, get = function(path) cb_list(lapply(1:4, function(i) cb_obj(i, paste0("o/", letters[i]))), r = 300L)))
+  expect_identical(w, "::warning::Codeberg: closed for the run (ratelimit under 400), 4 repositories not reached keep last week's values")
+  w <- closed(cbw_warnings(says("fatal: early EOF")))
+  expect_identical(w, "::warning::Codeberg: closed for the run (3 failures in a row), 1 repositories not reached keep last week's values")
+  w <- closed(cbw_warnings(filtered))
+  expect_identical(w, "::warning::Codeberg: closed for the run (the server ignored the clone filter), 3 repositories not reached keep last week's values")
+  w <- closed(cbw_warnings(ok, run_budget = 1L + CODEBERG_CLONE_SLOTS))
+  expect_identical(w, "::warning::Codeberg: closed for the run (the run's request budget is spent), 3 repositories not reached keep last week's values")
+})
+
+test_that("a run that reads none of a non-empty roster is a workflow warning, and a run that reads one is not", {
+  none <- "::warning::Codeberg: 0 of 4 repositories read this run, every one keeps last week's values"
+  expect_identical(cbw_warnings(function(url, dir) list(status = 128L, output = "fatal: repository 'x' not found")), none)
+  expect_true(none %in% cbw_warnings(cb_local_clone(cb_fixture_repo()), get = function(path) cb_answer(429L)))
+  expect_length(cbw_warnings(cb_local_clone(cb_fixture_repo())), 0L)
+})
+
+test_that("fetch-codeberg returns the shard path invisibly, so Rscript prints nothing more", {
+  dir <- withr::local_tempdir()
+  roster <- cbw_roster(dir, "o/good", "codeberg:codeberg.org:1")
+  got <- withVisible(suppressMessages(run_fetch_codeberg(cbw_io(), file.path(dir, "out"), roster, now = cb_clock()$now,
+                                                         sleep = function(s) NULL)))
+  expect_false(got$visible)
+  expect_identical(got$value, file.path(dir, "out", CODEBERG_SHARD_DB))
+  withr::local_envvar(VCS_ROSTER = dir)
+  weekly <- new.env(parent = globalenv())
+  withr::with_dir(.repo_root, sys.source(file.path("scripts", "weekly.R"), envir = weekly))
+  expect_false(withVisible(suppressMessages(weekly$main("fetch-codeberg", file.path(dir, "main"),
+                                                        io = list(cb_get = function(path) stop("offline")))))$visible)
 })
 
 test_that("the Codeberg shard's snapshot table has the GitHub shard's columns", {

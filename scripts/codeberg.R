@@ -16,12 +16,12 @@ cb_pacer <- function(now = function() as.numeric(Sys.time()), sleep = Sys.sleep,
              breaker_after = CODEBERG_BREAKER_AFTER, now = now, sleep = sleep)
 }
 
-# Per-run state: the lowest ratelimit r seen, why Codeberg closed ("429" or "ratelimit") and the
-# number of requests actually sent.
+# Per-run state: the lowest ratelimit r seen, why Codeberg closed ("429", "ratelimit" or, in the
+# weekly job, "filter"), the number of requests actually sent and whether the pacer refused one.
 cb_run_state <- function(pacer, log = NULL) {
   st <- new.env(parent = emptyenv())
   st$pacer <- pacer; st$log <- log
-  st$low_r <- NA_integer_; st$closed <- NA_character_; st$asked <- 0L
+  st$low_r <- NA_integer_; st$closed <- NA_character_; st$asked <- 0L; st$refused <- FALSE
   st
 }
 
@@ -76,7 +76,7 @@ cb_api_path <- function(location) {
 .cb_ask <- function(io, st, path) {
   out <- list(state = "stopped", json = NULL, headers = character(), location = NA_character_,
               status = NA_integer_)
-  if (!isTRUE(st$pacer$before(CODEBERG_DOMAIN))) return(out)
+  if (!isTRUE(st$pacer$before(CODEBERG_DOMAIN))) { st$refused <- TRUE; return(out) }
   st$asked <- st$asked + 1L
   r <- tryCatch(io$cb_get(path), error = function(e) list(status = NA_integer_, error = conditionMessage(e)))
   status <- out$status <- .gl_int(.gl_at(r, "status"))

@@ -68,7 +68,8 @@ cb_identity_counts <- function(lines) {
 #' `scratch`, removed whatever happens. Returns list(state, commits_total, contributors_total,
 #' top_contributor_commits), the values NA unless state is "ok". "failed" logs one line. "stopped"
 #' is a git 429, which closes Codeberg for the run, or a run already closed, deferred or out of
-#' requests, when nothing is cloned.
+#' requests, when nothing is cloned. A clone the server did not filter is counted and closes Codeberg
+#' for the run.
 cb_clone_counts <- function(io, obj, st, scratch) {
   name <- .gl_chr(.gl_at(obj, "full_name"))
   url <- .gl_chr(.gl_at(obj, "clone_url"))
@@ -78,7 +79,7 @@ cb_clone_counts <- function(io, obj, st, scratch) {
   }
   # A clone costs Codeberg about three requests.
   for (k in seq_len(CODEBERG_CLONE_SLOTS))
-    if (!isTRUE(st$pacer$before(CODEBERG_DOMAIN))) return(.cb_clone_result("stopped"))
+    if (!isTRUE(st$pacer$before(CODEBERG_DOMAIN))) { st$refused <- TRUE; return(.cb_clone_result("stopped")) }
   st$asked <- st$asked + CODEBERG_CLONE_SLOTS
   dir <- tempfile("clone-", tmpdir = scratch)
   on.exit(unlink(dir, recursive = TRUE, force = TRUE), add = TRUE)
@@ -96,14 +97,16 @@ cb_clone_counts <- function(io, obj, st, scratch) {
     .cb_close(st, "429", sprintf("Codeberg %s: git clone got HTTP 429, no more requests this run", name))
     return(.cb_clone_result("stopped"))
   }
+  # Without the filter every clone is a whole repository: this one is still counted, and no more are made.
+  if (grepl("filtering not recognized by server", out, fixed = TRUE))
+    .cb_close(st, "filter", sprintf(
+      "::warning::Codeberg %s: the server ignored the clone filter, so this clone was a full one and no more are made this run", name))
   if (!identical(status, 0L)) {
     st$pacer$after(CODEBERG_DOMAIN, grepl(.CB_GIT_ANSWER_RE, out))
     .cb_log(st, sprintf("Codeberg %s: clone failed (exit %s): %s", name, status, .gl_redact(out)))
     return(.cb_clone_result("failed"))
   }
   st$pacer$after(CODEBERG_DOMAIN, TRUE)
-  if (grepl("filtering not recognized by server", out, fixed = TRUE))
-    .cb_log(st, sprintf("Codeberg %s: the server ignored the clone filter, so this clone was a full one", name))
   n <- cb_git_local(dir, c("rev-list", "--count", "HEAD"))
   ok <- n$status == 0L && length(n$lines) == 1L && grepl("^[0-9]+$", n$lines)
   if (!ok) {
@@ -150,20 +153,31 @@ cb_clone_counts <- function(io, obj, st, scratch) {
   invisible(NULL)
 }
 
+# Why Codeberg was closed for the rest of the run, or NA when it never was.
+.cb_closed_why <- function(st) {
+  if (!is.na(st$closed))
+    switch(st$closed, "429" = "HTTP 429", ratelimit = sprintf("ratelimit under %d", CODEBERG_RATELIMIT_FLOOR),
+           filter = "the server ignored the clone filter", st$closed)
+  else if (CODEBERG_DOMAIN %in% st$pacer$deferred()) sprintf("%d failures in a row", CODEBERG_BREAKER_AFTER)
+  else if (isTRUE(st$refused)) "the run's request budget is spent"
+  else NA_character_
+}
+
 #' The weekly Codeberg job. Locates the roster's repositories, then clones each located one that is not
 #' empty, in repo_id order, until the deadline or until Codeberg stops for the run. A fault while
 #' locating, while cloning or in one repository is logged and leaves NA where nothing was read, which
-#' the merge skips. Always writes the snapshot shard with every roster repository, and removes the
-#' scratch root on every path. Keeps no state. Returns the shard path.
+#' the merge skips. Codeberg closing for the run, or a run that reads none of a non-empty roster, is a
+#' workflow warning. Always writes the snapshot shard with every roster repository, and removes the
+#' scratch root on every path. Keeps no state. Returns the shard path, invisibly.
 run_fetch_codeberg <- function(io, out_dir, roster_path, now = function() as.numeric(Sys.time()), sleep = Sys.sleep,
                                deadline_min = CODEBERG_WEEKLY_DEADLINE_MIN, scratch = tempfile("cb-clones-"),
-                               log = message) {
+                               log = message, run_budget = CODEBERG_WEEKLY_MAX_REQUESTS) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   dir.create(scratch, showWarnings = FALSE, recursive = TRUE)
   on.exit(unlink(scratch, recursive = TRUE, force = TRUE), add = TRUE)
   start <- now()
   deadline <- start + 60 * deadline_min
-  st <- cb_run_state(cb_pacer(now, sleep, run_budget = CODEBERG_WEEKLY_MAX_REQUESTS), log)
+  st <- cb_run_state(cb_pacer(now, sleep, run_budget = run_budget), log)
 
   roster <- tryCatch({
     if (!file.exists(roster_path)) stop("no roster file")
@@ -202,9 +216,16 @@ run_fetch_codeberg <- function(io, out_dir, roster_path, now = function() as.num
   export_snapshot_shard(shard_path, rows)
   count <- function(s) sum(acc$state %in% s)
   lost <- if (is.null(loc)) 0L else sum(roster$repo_id %in% loc$not_located)
+  unreached <- n - count(c("ok", "failed", "empty")) - lost
+  why <- .cb_closed_why(st)
+  if (!is.na(why))
+    log(sprintf("::warning::Codeberg: closed for the run (%s), %d repositories not reached keep last week's values",
+                why, unreached))
+  if (n > 0L && count("ok") == 0L)
+    log(sprintf("::warning::Codeberg: 0 of %d repositories read this run, every one keeps last week's values", n))
   log(sprintf(paste("weekly fetch codeberg: %d read, %d failed, %d empty, %d not located, %d not reached of %d repos,",
                     "%d requests and clone slots, lowest r %s, %d s"),
-              count("ok"), count("failed"), count("empty"), lost, n - count(c("ok", "failed", "empty")) - lost, n,
+              count("ok"), count("failed"), count("empty"), lost, unreached, n,
               st$asked, format(st$low_r), as.integer(round(now() - start))))
-  shard_path
+  invisible(shard_path)
 }

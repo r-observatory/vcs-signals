@@ -219,7 +219,7 @@ test_that("a malformed GitLab shard is logged and skipped, and the GitHub shards
     top_contributor_commits = 99L, stringsAsFactors = FALSE))
   writeLines(strrep("not a database ", 200), file.path(p, GITLAB_SHARD_DB))
   msgs <- testthat::capture_messages(.gll_weekly$run_merge(.gll_io(rel), tempfile("gll_wk_"), p))
-  expect_true(any(grepl("GitLab shard", msgs, fixed = TRUE)))
+  expect_true(any(grepl("weekly merge: GitLab shard vcs-signals-shard-gitlab.db not read, skipped", msgs, fixed = TRUE)))
   s <- .gll_read(rel, "SELECT commits_total, contributors_total FROM vcs_signals_summary WHERE package = 'ggplot2'")
   expect_identical(s$commits_total, 4321L)
   expect_identical(s$contributors_total, 9L)
@@ -236,11 +236,27 @@ test_that("a malformed Codeberg shard is logged and skipped, and the GitHub shar
     top_contributor_commits = 99L, stringsAsFactors = FALSE))
   writeLines(strrep("not a database ", 200), file.path(p, CODEBERG_SHARD_DB))
   msgs <- testthat::capture_messages(.gll_weekly$run_merge(.gll_io(rel), tempfile("gll_wk_"), p))
-  expect_true(any(grepl("Codeberg shard vcs-signals-shard-codeberg.db not read, skipped", msgs, fixed = TRUE)))
+  expect_true(any(grepl("weekly merge: Codeberg shard vcs-signals-shard-codeberg.db not read, skipped", msgs, fixed = TRUE)))
   s <- .gll_read(rel, "SELECT commits_total, contributors_total FROM vcs_signals_summary WHERE package = 'ggplot2'")
   expect_identical(s$commits_total, 4321L)
   expect_identical(s$contributors_total, 9L)
   expect_identical(.gll_read(rel, "SELECT COUNT(*) n FROM gitlab_license")$n, 0L)
+})
+
+test_that("the weekly merge log names the GitLab and Codeberg shards it folded in, and one missing from the parts as skipped", {
+  rel <- tempfile("gll_rel_"); dir.create(rel)
+  quiet <- function(expr) invisible(suppressMessages(capture.output(expr)))
+  quiet(run_update(.gll_io(rel), tempfile("gll_out_"), list(force_full = TRUE)))
+  p <- .gll_parts("MIT")
+  export_snapshot_shard(file.path(p, CODEBERG_SHARD_DB), data.frame(repo_id = "codeberg.org/o/r", commits_total = 6L,
+    contributors_total = 4L, top_contributor_commits = 3L, stringsAsFactors = FALSE))
+  msgs <- testthat::capture_messages(capture.output(.gll_weekly$run_merge(.gll_io(rel), tempfile("gll_wk_"), p)))
+  expect_true(any(grepl("weekly merge: GitLab shard vcs-signals-shard-gitlab.db folded in, 1 repos", msgs, fixed = TRUE)))
+  expect_true(any(grepl("weekly merge: Codeberg shard vcs-signals-shard-codeberg.db folded in, 1 repos", msgs, fixed = TRUE)))
+  unlink(file.path(p, CODEBERG_SHARD_DB))
+  msgs <- testthat::capture_messages(capture.output(.gll_weekly$run_merge(.gll_io(rel), tempfile("gll_wk_"), p)))
+  expect_true(any(grepl("weekly merge: GitLab shard vcs-signals-shard-gitlab.db folded in, 1 repos", msgs, fixed = TRUE)))
+  expect_true(any(grepl("weekly merge: Codeberg shard vcs-signals-shard-codeberg.db not in the parts, skipped", msgs, fixed = TRUE)))
 })
 
 # A release as a publish by code older than the table leaves it: the recent shard says since when
