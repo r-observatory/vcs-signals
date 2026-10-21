@@ -2,7 +2,7 @@
 # Pure functions behind an injected io: io$cb_get(path) returns an http_request() result for
 # GET CODEBERG_API<path>. Anonymous, no token. Uses .gl_at, .gl_int and .gl_chr (gitlab.R).
 
-# The real io member. curl runs without -L, so a 301 comes back as a status with its location.
+# The real io member. curl runs without -L, so a 301 or 308 comes back as a status with its location.
 cb_get <- function(path, run = system2) {
   http_request("GET", paste0(CODEBERG_API, path),
                headers = c(paste("User-Agent:", CODEBERG_USER_AGENT), "Accept: application/json"),
@@ -31,10 +31,14 @@ cb_run_state <- function(pacer, log = NULL) {
   unname(headers[[name]])
 }
 
-# r in `ratelimit: "baseline";r=1999;t=600`, or NA.
+# r of the "baseline" policy in `ratelimit: "baseline";r=1999;t=600`, else of the first ratelimit
+# header, or NA. A web filter answer also carries `"search";r=29`, which says nothing about our window.
 cb_ratelimit_r <- function(headers) {
-  h <- .cb_header(headers, "ratelimit")
-  if (is.na(h)) return(NA_integer_)
+  if (!is.character(headers)) return(NA_integer_)
+  h <- unname(headers[names(headers) %in% "ratelimit"])
+  if (!length(h)) return(NA_integer_)
+  base <- h[grepl('^[[:space:]]*"baseline"', h)]
+  h <- if (length(base)) base[1] else h[1]
   m <- regmatches(h, regexec("(^|;)[[:space:]]*r=([0-9]+)", h))[[1]]
   if (length(m) < 3L) NA_integer_ else suppressWarnings(as.integer(m[3]))
 }
@@ -61,15 +65,17 @@ cb_api_path <- function(location) {
   .cb_log(st, msg)
 }
 
-# One paced GET. state is "ok" (200 with JSON), "absent" (404 or 409), "moved" (301, with
-# `location`), "failed" or "stopped" (nothing sent). A 4xx or 301 is an answer, never a breaker
-# failure; a 429 or an r under the floor closes Codeberg for the run and counts toward neither.
+# One paced GET. state is "ok" (200 with JSON), "absent" (403, 404, 409 or 410: an answer about the
+# repository), "moved" (301 or 308, both permanent, with `location`), "failed" or "stopped" (nothing
+# sent). A 4xx or 3xx is an answer, never a breaker failure; a 429 or an r under the floor closes
+# Codeberg for the run and counts toward neither. `status` is the HTTP status, for log lines.
 .cb_ask <- function(io, st, path) {
-  out <- list(state = "stopped", json = NULL, headers = character(), location = NA_character_)
+  out <- list(state = "stopped", json = NULL, headers = character(), location = NA_character_,
+              status = NA_integer_)
   if (!isTRUE(st$pacer$before(CODEBERG_DOMAIN))) return(out)
   st$asked <- st$asked + 1L
   r <- tryCatch(io$cb_get(path), error = function(e) list(status = NA_integer_, error = conditionMessage(e)))
-  status <- .gl_int(.gl_at(r, "status"))
+  status <- out$status <- .gl_int(.gl_at(r, "status"))
   hdr <- .gl_at(r, "headers")
   out$headers <- if (is.character(hdr)) hdr else character()
   rr <- cb_ratelimit_r(out$headers)
@@ -97,11 +103,11 @@ cb_api_path <- function(location) {
     return(out)
   }
   st$pacer$after(CODEBERG_DOMAIN, TRUE)
-  if (status == 301L) {
+  if (status %in% c(301L, 308L)) {
     out$state <- "moved"
     out$location <- .cb_header(out$headers, "location")
   } else {
-    out$state <- if (status %in% c(404L, 409L)) "absent" else "failed"
+    out$state <- if (status %in% c(403L, 404L, 409L, 410L)) "absent" else "failed"
   }
   out
 }
@@ -131,11 +137,11 @@ codeberg_active_repos <- function(con) {
 }
 
 #' Finds each repository's object, and so its id, from its owner's listing; a repository missing
-#' there is asked by path, following one 301 on codeberg.org when the id still matches. `repos` has
-#' repo_id, node_id (NA when not yet known), owner and name. Returns `objects` (by node id), `found`
-#' (repo_id, node_id), `ids` (resolve_node_ids' shape, for repositories that had no node id) and the
-#' repo_ids `not_located` (asked and not found: never marked gone), `deferred` (a failed answer, or
-#' Codeberg stopped for the run) and `unreached` (not asked by `deadline`).
+#' there is asked by path, following one 301 or 308 on codeberg.org when the id still matches.
+#' `repos` has repo_id, node_id (NA when not yet known), owner and name. Returns `objects` (by node
+#' id), `found` (repo_id, node_id), `ids` (resolve_node_ids' shape, for repositories that had no node
+#' id) and the repo_ids `not_located` (asked and not found: never marked gone), `deferred` (a failed
+#' answer, or Codeberg stopped for the run) and `unreached` (not asked by `deadline`).
 cb_locate <- function(io, repos, st, deadline = Inf, now = function() as.numeric(Sys.time())) {
   enc <- function(x) utils::URLencode(x, reserved = TRUE)
   n <- nrow(repos)
@@ -221,7 +227,7 @@ cb_locate <- function(io, repos, st, deadline = Inf, now = function() as.numeric
       if (a$state == "moved") { not_located(i, "moved twice"); next }
     }
     if (a$state == "failed") { s$fate[i] <- "deferred"; next }
-    if (a$state == "absent") { not_located(i, "404"); next }
+    if (a$state == "absent") { not_located(i, sprintf("HTTP %d", a$status)); next }
     obj <- cb_repo_object(a$json)
     if (is.null(obj)) { s$fate[i] <- "deferred"; next }
     if (same_id(i, obj)) take(i, obj) else not_located(i, "the path now holds another repository")

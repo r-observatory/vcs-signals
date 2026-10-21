@@ -161,6 +161,61 @@ test_that("each repository not located is logged by repo_id, a 429 is logged onc
   expect_false(any(grepl("@", logs$lines, fixed = TRUE)))
 })
 
+test_that("the baseline ratelimit r is read in either header order, the first r when none is baseline, and a search r closes nothing", {
+  # The shape of the recon's web filter answer: the search policy first, then the baseline.
+  h <- c(`ratelimit-policy` = '"search";q=30;w=60', ratelimit = '"search";r=29;t=60',
+         `ratelimit-policy` = '"baseline";q=2000;w=600', ratelimit = '"baseline";r=1922;t=600')
+  expect_identical(cb_ratelimit_r(h), 1922L)
+  expect_identical(cb_ratelimit_r(rev(h)), 1922L)
+  expect_identical(cb_ratelimit_r(c(ratelimit = '"other";r=7;t=60', ratelimit = '"more";r=9;t=60')), 7L)
+  st <- cb_test_state()
+  a <- .cb_ask(list(cb_get = function(path) list(status = 200L, error = NA_character_, headers = h, body = "[]")), st, "/x")
+  expect_identical(a$state, "ok")
+  expect_identical(st$closed, NA_character_)
+  expect_identical(st$low_r, 1922L)
+})
+
+test_that("a 308 is a move like a 301, followed once by path with the id check and on a listing to the new owner, while 302 and 307 fail", {
+  seen <- new.env()
+  io <- list(cb_get = cb_fake(list(
+    "/users/old/repos?limit=50&page=1" = cb_answer(308L, headers = c(location = "/api/v1/users/new/repos?limit=50&page=1")),
+    "/users/new/repos?limit=50&page=1" = cb_list(list(cb_obj(51L, "new/kept"))),
+    "/repos/old/moved" = cb_answer(308L, headers = c(location = "https://codeberg.org/api/v1/repos/neworg/moved")),
+    "/repos/neworg/moved" = cb_answer(body = cb_obj(52L, "neworg/moved")),
+    "/repos/old/taken" = cb_answer(308L, headers = c(location = "/api/v1/repos/neworg/taken")),
+    "/repos/neworg/taken" = cb_answer(body = cb_obj(99L, "neworg/taken"))), seen))
+  repos <- cb_repos(c("old/kept", "old/moved", "old/taken"), node_id = c("codeberg:codeberg.org:51", NA, "codeberg:codeberg.org:53"))
+  loc <- cb_locate(io, repos, cb_test_state())
+  expect_identical(loc$found$repo_id, c("codeberg.org/old/kept", "codeberg.org/old/moved"))
+  expect_identical(loc$found$node_id, c("codeberg:codeberg.org:51", "codeberg:codeberg.org:52"))
+  expect_identical(loc$not_located, "codeberg.org/old/taken")
+  expect_identical(seen$paths, c("/users/old/repos?limit=50&page=1", "/users/new/repos?limit=50&page=1",
+    "/repos/old/moved", "/repos/neworg/moved", "/repos/old/taken", "/repos/neworg/taken"))
+  for (s in c(302L, 307L)) {
+    a <- .cb_ask(list(cb_get = function(path) cb_answer(s, headers = c(location = "/api/v1/repos/x/y"))), cb_test_state(), "/repos/a/b")
+    expect_identical(a$state, "failed")
+  }
+})
+
+test_that("a 403 or 410 by path is an answer: the repository is not located and logged, and Codeberg goes on", {
+  logs <- new.env()
+  logs$lines <- character(0)
+  st <- cb_test_state(log = function(m) logs$lines <- c(logs$lines, m))
+  expect_identical(.cb_ask(list(cb_get = function(path) cb_answer(410L)), st, "/repos/a/b")$state, "absent")
+  expect_identical(.cb_ask(list(cb_get = function(path) cb_answer(403L)), st, "/repos/a/b")$state, "absent")
+  io <- list(cb_get = cb_fake(list(
+    "/users/o/repos?limit=50&page=1" = cb_list(list()),
+    "/repos/o/blocked" = cb_answer(403L),
+    "/repos/o/removed" = cb_answer(410L),
+    "/repos/o/here" = cb_answer(body = cb_obj(61L, "o/here")))))
+  loc <- cb_locate(io, cb_repos(c("o/blocked", "o/here", "o/removed")), st)
+  expect_identical(loc$not_located, c("codeberg.org/o/blocked", "codeberg.org/o/removed"))
+  expect_identical(loc$found$repo_id, "codeberg.org/o/here")
+  expect_length(loc$deferred, 0L)
+  expect_true(any(grepl("codeberg.org/o/removed: not located (HTTP 410)", logs$lines, fixed = TRUE)))
+  expect_length(st$pacer$deferred(), 0L)
+})
+
 test_that("codeberg_active_repos lists the active Codeberg rows by repo_id, with or without a node id", {
   con <- new_test_db()
   withr::defer(DBI::dbDisconnect(con))
