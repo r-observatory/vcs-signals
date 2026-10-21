@@ -1,5 +1,10 @@
 # The Bitbucket weekly clone pass (scripts/bitbucket_clone.R), over the fixture repository in
-# helper-codeberg-git.R.
+# helper-codeberg-git.R, and its roster and CLI mode (weekly.R, sourced from the repo root).
+if (!exists("run_weekly_enumerate")) {
+  .bbc_wd <- setwd(.repo_root)
+  source(file.path(.repo_root, "scripts", "weekly.R"))
+  setwd(.bbc_wd)
+}
 NODE2 <- "bitbucket:5f9215a6-5741-4727-b5b6-88e66f6d8e66:11111111-2222-4333-8444-555555555555"
 IDS_Q <- function(node) paste0(bb_ids_path(node), "?fields=full_name,uuid")
 
@@ -213,4 +218,47 @@ test_that("a renamed repository whose second clone is also not found is not loca
              bb_get = bb_fake(setNames(list(bb_answer(200L, list(full_name = "new/name", uuid = RP))), IDS_Q(NODE))))
   got <- bb_clone_counts(io, data.frame(owner = "old", name = "name", node_id = NODE), st, withr::local_tempdir())
   expect_identical(got$state, "not_located")
+})
+
+# ---- the weekly wiring -------------------------------------------------------------
+bbc_summary <- function(path, rows) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), path); on.exit(DBI::dbDisconnect(con))
+  ensure_series_schema(con); ensure_repo_schema(con)
+  DBI::dbExecute(con, "INSERT INTO vcs_signals_summary (package, origin, repo_id, stars, forks, releases_total) VALUES
+    ('data.table', 'cran', 'github.com/rdatatable/data.table', 3400, 960, 9)")
+  DBI::dbExecute(con, paste("INSERT INTO repos VALUES", paste(rows, collapse = ",\n")))
+  path
+}
+bbc_repo <- function(id, node, host, status = "active") sprintf(
+  "('%s', %s, '%s', '%s', '%s', '%s', '%s', 1, 1, '2026-01-01', '2026-10-01', '%s')",
+  id, if (is.na(node)) "NULL" else sprintf("'%s'", node), host, sub("/.*$", "", id),
+  sub("^[^/]*/([^/]*)/.*$", "\\1", id), sub("^.*/", "", id), sub("^[^/]*/", "", id), status)
+
+test_that("enumerate writes a Bitbucket roster of the active Bitbucket repositories with a Bitbucket id", {
+  src <- bbc_summary(withr::local_tempfile(fileext = ".db"), c(
+    bbc_repo("github.com/rdatatable/data.table", "R_dt", "github"),
+    bbc_repo("bitbucket.org/someone/located", NODE, "bitbucket"),
+    bbc_repo("bitbucket.org/someone/new", NA, "bitbucket"),
+    bbc_repo("bitbucket.org/someone/gone", NODE2, "bitbucket", "retired"),
+    bbc_repo("bitbucket.org/someone/odd", "codeberg:codeberg.org:5", "bitbucket")))
+  out <- withr::local_tempdir()
+  suppressMessages(run_weekly_enumerate(list(download = function(name, dir) file.copy(src, file.path(dir, name), overwrite = TRUE)), out))
+  bb <- load_roster(file.path(out, BITBUCKET_ROSTER_DB))
+  expect_identical(names(bb), c("repo_id", "node_id", "owner", "name"))
+  expect_identical(bb$repo_id, "bitbucket.org/someone/located")
+  expect_identical(c(bb$node_id, bb$owner, bb$name), c(NODE, "someone", "located"))
+  expect_identical(load_roster(file.path(out, "vcs-signals-roster.db"))$repo_id, "github.com/rdatatable/data.table")
+})
+
+test_that("main runs fetch-bitbucket on the Bitbucket roster in VCS_ROSTER, and the usage line names it", {
+  dir <- withr::local_tempdir()
+  bbc_roster(dir, "o/good", NODE)
+  withr::local_envvar(VCS_ROSTER = dir)
+  out <- file.path(dir, "out")
+  weekly <- new.env(parent = globalenv())
+  withr::with_dir(.repo_root, sys.source(file.path("scripts", "weekly.R"), envir = weekly))
+  io <- list(bb_clone = function(url, d) cb_local_clone(cb_fixture_repo())(url, d))
+  expect_false(withVisible(suppressMessages(weekly$main("fetch-bitbucket", out, io = io)))$visible)
+  expect_identical(bbc_snapshot(out)$repo_id, "bitbucket.org/o/good")
+  expect_error(weekly$main("no-such-mode", out, io = list()), "fetch-bitbucket", fixed = TRUE)
 })

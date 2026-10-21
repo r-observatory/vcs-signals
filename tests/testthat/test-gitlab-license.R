@@ -259,6 +259,38 @@ test_that("the weekly merge log names the GitLab and Codeberg shards it folded i
   expect_true(any(grepl("weekly merge: Codeberg shard vcs-signals-shard-codeberg.db not in the parts, skipped", msgs, fixed = TRUE)))
 })
 
+test_that("a malformed Bitbucket shard is logged and skipped, and the other shards still merge and publish", {
+  rel <- tempfile("gll_rel_"); dir.create(rel)
+  quiet <- function(expr) invisible(suppressMessages(capture.output(expr)))
+  quiet(run_update(.gll_io(rel), tempfile("gll_out_"), list(force_full = TRUE)))
+  p <- .gll_parts("MIT")
+  export_snapshot_shard(file.path(p, CODEBERG_SHARD_DB), data.frame(repo_id = "codeberg.org/o/r", commits_total = 6L,
+    contributors_total = 4L, top_contributor_commits = 3L, stringsAsFactors = FALSE))
+  writeLines(strrep("not a database ", 200), file.path(p, BITBUCKET_SHARD_DB))
+  msgs <- testthat::capture_messages(capture.output(.gll_weekly$run_merge(.gll_io(rel), tempfile("gll_wk_"), p)))
+  expect_true(any(grepl("weekly merge: Bitbucket shard vcs-signals-shard-bitbucket.db not read, skipped", msgs, fixed = TRUE)))
+  expect_true(any(grepl("weekly merge: GitLab shard vcs-signals-shard-gitlab.db folded in, 1 repos", msgs, fixed = TRUE)))
+  expect_true(any(grepl("weekly merge: Codeberg shard vcs-signals-shard-codeberg.db folded in, 1 repos", msgs, fixed = TRUE)))
+})
+
+test_that("a Bitbucket shard is folded in and logged, and one missing from the parts is skipped", {
+  rel <- tempfile("gll_rel_"); dir.create(rel)
+  quiet <- function(expr) invisible(suppressMessages(capture.output(expr)))
+  quiet(run_update(.gll_io(rel), tempfile("gll_out_"), list(force_full = TRUE)))
+  p <- .gll_parts("MIT")
+  export_snapshot_shard(file.path(p, BITBUCKET_SHARD_DB), data.frame(repo_id = "bitbucket.org/o/r", commits_total = 8L,
+    contributors_total = NA_integer_, top_contributor_commits = NA_integer_, stringsAsFactors = FALSE))
+  msgs <- testthat::capture_messages(capture.output(.gll_weekly$run_merge(.gll_io(rel), tempfile("gll_wk_"), p)))
+  expect_true(any(grepl("weekly merge: Bitbucket shard vcs-signals-shard-bitbucket.db folded in, 1 repos", msgs, fixed = TRUE)))
+  series <- .gll_read(rel, "SELECT metric, value, date FROM signals_series WHERE repo_id = 'bitbucket.org/o/r'", "vcs-signals-recent.db")
+  expect_identical(series$metric, "commits_total")
+  expect_identical(series$value, 8L)
+  expect_identical(series$date, format(Sys.Date()))
+  unlink(file.path(p, BITBUCKET_SHARD_DB))
+  msgs <- testthat::capture_messages(capture.output(.gll_weekly$run_merge(.gll_io(rel), tempfile("gll_wk_"), p)))
+  expect_true(any(grepl("weekly merge: Bitbucket shard vcs-signals-shard-bitbucket.db not in the parts, skipped", msgs, fixed = TRUE)))
+})
+
 # A release as a publish by code older than the table leaves it: the recent shard says since when
 # the licences were published but carries none, the summary has no table, and `prev` is what the
 # previous summary holds.

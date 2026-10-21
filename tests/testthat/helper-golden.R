@@ -499,6 +499,12 @@ skip_golden_parity <- function()
   list(status = 128L, output = sprintf("fatal: repository '%s' not found", url))
 }
 
+# A clone of someone/bbpkg is the same fixture repository; any other is not found, in git's own words.
+.golden_bb_clone <- function(url, dir) {
+  if (identical(url, "https://bitbucket.org/someone/bbpkg.git")) return(cb_local_clone(cb_fixture_repo())(url, dir))
+  list(status = 128L, output = sprintf("fatal: repository '%s' not found", url))
+}
+
 # The weekly documents' and the contents check's own repositories get the answers the canary tests use.
 .golden_graphql <- function(gh) {
   cfg <- AI_QUERY_CANARY
@@ -558,6 +564,7 @@ skip_golden_parity <- function()
     cb_get = function(path) { note("cb_get", path); .golden_codeberg(path, back) },
     bb_get = function(path) { note("bb_get", path); .golden_bitbucket(path, back) },
     cb_clone = function(url, dir) { note("cb_clone", url); .golden_cb_clone(url, dir) },
+    bb_clone = function(url, dir) { note("bb_clone", url); .golden_bb_clone(url, dir) },
     contributors = function(owner, name) { note("contributors", owner, name); .golden_contributors(owner, name) },
     # delay is pacing, not part of the request.
     search_hit = function(owner, name, query, delay = 0) {
@@ -611,11 +618,11 @@ skip_golden_parity <- function()
 
 # weekly.yml and backfill.yml: enumerate, a fetch job per shard reading the roster artifact, and
 # a merge reading every shard artifact. weekly.yml also runs fetch-gitlab on the GitLab roster and
-# fetch-codeberg on the Codeberg roster, and its merge reads their shards and the GitLab cursor state.
+# fetch-codeberg and fetch-bitbucket on their rosters, and its merge reads their shards and the GitLab cursor state.
 # `fn` finds each stage in the path's own environment.
-.golden_sharded <- function(fn, io, jobs, root, gitlab = FALSE, codeberg = FALSE) {
+.golden_sharded <- function(fn, io, jobs, root, gitlab = FALSE, codeberg = FALSE, bitbucket = FALSE) {
   e <- .golden_job(jobs, "enumerate")
-  fn(if (gitlab || codeberg) "run_weekly_enumerate" else "run_enumerate")(io, file.path(e, "out"))
+  fn(if (gitlab || codeberg || bitbucket) "run_weekly_enumerate" else "run_enumerate")(io, file.path(e, "out"))
   for (i in .golden_shards()) {
     f <- .golden_job(jobs, sprintf("fetch-%d", i))
     .golden_artifact(e, "vcs-signals-roster.db", file.path(f, "roster"))
@@ -635,12 +642,20 @@ skip_golden_parity <- function()
     fn("run_fetch_codeberg")(io, file.path(cb, "out"), file.path(cb, "roster", "vcs-signals-roster-codeberg.db"),
                              now = clock$now, sleep = clock$sleep)
   }
+  if (bitbucket) {
+    bb <- .golden_job(jobs, "fetch-bitbucket")
+    .golden_artifact(e, "vcs-signals-roster-bitbucket.db", file.path(bb, "roster"))
+    clock <- .golden_gl_clock()
+    fn("run_fetch_bitbucket")(io, file.path(bb, "out"), file.path(bb, "roster", "vcs-signals-roster-bitbucket.db"),
+                              now = clock$now, sleep = clock$sleep)
+  }
   m <- .golden_job(jobs, "merge")
   for (i in .golden_shards())
     .golden_artifact(file.path(jobs, sprintf("fetch-%d", i)), "vcs-signals-shard-*.db", file.path(m, "parts"))
   if (gitlab)
     for (f in c("vcs-signals-shard-gitlab.db", "vcs-signals-gitlab-state.db")) .golden_artifact(g, f, file.path(m, "parts"))
   if (codeberg) .golden_artifact(cb, "vcs-signals-shard-codeberg.db", file.path(m, "parts"))
+  if (bitbucket) .golden_artifact(bb, "vcs-signals-shard-bitbucket.db", file.path(m, "parts"))
   fn("run_merge")(io, file.path(m, "out"), file.path(m, "parts"))
 }
 
@@ -686,7 +701,7 @@ skip_golden_parity <- function()
 
 .golden_steps <- list(
   daily = function(fn, io, jobs, root) .golden_daily(fn, io, file.path(.golden_job(jobs, "update"), "out"), root, TRUE),
-  weekly = function(fn, io, jobs, root) .golden_sharded(fn, io, jobs, root, gitlab = TRUE, codeberg = TRUE),
+  weekly = function(fn, io, jobs, root) .golden_sharded(fn, io, jobs, root, gitlab = TRUE, codeberg = TRUE, bitbucket = TRUE),
   ai = .golden_ai,
   backfill = .golden_sharded)
 
