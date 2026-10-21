@@ -817,10 +817,10 @@ gitlab_contents_canary <- function(asked, trees) {
 }
 
 #' The message check: a stop message when GITLAB_MESSAGE_CANARY, a repository with many commits crediting
-#' a tool, was searched and none came back; NULL otherwise. Skipped with a log line when that repository
+#' a tool, was searched and none came back; NULL otherwise. Skipped with a warning line when that repository
 #' is not on the roster, its host has no message search, or its search was not read this run.
 gitlab_message_canary <- function(roster, msgs, log = NULL, repo_id = GITLAB_MESSAGE_CANARY) {
-  skip <- function(why) { .gl_log(log, sprintf("GitLab message check: %s %s, skipped", repo_id, why)); NULL }
+  skip <- function(why) { .gl_log(log, sprintf("::warning::GitLab message check: %s %s, skipped", repo_id, why)); NULL }
   i <- match(repo_id, roster$repo_id)
   if (is.na(i)) return(skip("is not on the roster"))
   if (sub(.GL_NODE_RE, "\\1", roster$node_id[i]) %in% msgs$unsupported)
@@ -844,6 +844,41 @@ gitlab_message_canary <- function(roster, msgs, log = NULL, repo_id = GITLAB_MES
 gitlab_rebuilt_repos <- function(log_in) {
   if (is.null(log_in) || !nrow(log_in) || !all(c("source", "mode") %in% names(log_in))) return(character(0))
   unique(log_in$repo_id[log_in$source %in% "search" & log_in$mode %in% "replace"])
+}
+
+# An error's first line as a failure reason. An error can quote the text it failed on, so quoted text and
+# addresses are taken out.
+.gl_error_reason <- function(e) {
+  why <- strsplit(conditionMessage(e), "\n", fixed = TRUE)[[1]][1]
+  why <- gsub("'[^']*'|\"[^\"]*\"|`[^`]*`", "'...'", why)
+  substr(gsub("[[:alnum:]._%+-]+@[[:alnum:].-]+", "<address>", why), 1L, 200L)
+}
+
+# One GitLab repository's rows for the cheap and dev-tooling partials, by table name. `rd` is its message
+# search, NULL when it was not searched.
+.gl_repo_rows <- function(row, tree, rd, today, cran_links) {
+  rid <- row$repo_id
+  out <- list(dev = .ai_dev_tooling_row(tree, rid, today, cran_links))
+  # A project with no read entry was not searched: no log rows, so its counts stay NA.
+  activity <- NULL; complete <- FALSE
+  if (!is.null(rd)) {
+    complete <- isTRUE(rd$complete)
+    activity <- list(prs = NULL, commits = rd$commits)
+    hits <- match_commit_findings(rd$commits)
+    out$search_log <- gl_message_log_rows(hits, rid, today, complete)
+    if (complete) out$models <- read_model_rows(rid, rd$commits, hits, "replace")
+  }
+  if (is.null(tree) && is.null(activity)) return(out)
+  found <- assemble_repo_evidence(tree, activity, NULL, scanned_on = today, whole_history = complete)
+  out$review <- review_rows(found, rid, today)
+  if (!repo_has_ai_signal(found)) return(out)
+  # A read that gave no fork flag may be a fork.
+  out$flagged <- data.frame(repo_id = rid, owner = row$owner, name = row$name, node_id = row$node_id,
+    is_fork = if (isFALSE(tree$is_fork)) 0L else 1L,
+    parent = if (is.null(tree)) NA_character_ else (tree$parent %||% NA_character_),
+    pr_onset_date = NA_character_, stringsAsFactors = FALSE)
+  out$evidence <- cbind(repo_id = rid, found)
+  out
 }
 
 #' The gitlab-contents io: GitLab GraphQL that never sends a token, whatever the environment holds.
@@ -882,34 +917,29 @@ run_gitlab_contents <- function(io, out_dir, roster_path, now = function() as.nu
   sink <- new.env()
   for (nm in c(names(proto), "dev")) sink[[nm]] <- list()
   put <- function(nm, df) if (!is.null(df) && nrow(df)) sink[[nm]][[length(sink[[nm]]) + 1L]] <- df
+  # A repository whose rows cannot be built is a failure row, not a failed job.
+  thrown <- list()
   for (r in seq_len(nrow(roster))) {
-    rid <- roster$repo_id[r]; tree <- contents$trees[[rid]]; rd <- msgs$reads[[rid]]
-    put("dev", .ai_dev_tooling_row(tree, rid, today, cran_links))
-    # A project with no read entry was not searched: no log rows, so its counts stay NA.
-    activity <- NULL; complete <- FALSE
-    if (!is.null(rd)) {
-      complete <- isTRUE(rd$complete)
-      activity <- list(prs = NULL, commits = rd$commits)
-      hits <- match_commit_findings(rd$commits)
-      put("search_log", gl_message_log_rows(hits, rid, today, complete))
-      if (complete) put("models", read_model_rows(rid, rd$commits, hits, "replace"))
+    rid <- roster$repo_id[r]
+    rows <- tryCatch(.gl_repo_rows(roster[r, , drop = FALSE], contents$trees[[rid]], msgs$reads[[rid]], today, cran_links),
+                     error = function(e) e)
+    if (inherits(rows, "error")) {
+      why <- .gl_error_reason(rows)
+      log(sprintf("gitlab contents: %s not processed: %s", rid, why))
+      thrown[[length(thrown) + 1L]] <- .fetch_failed_frame(rid, "gitlab-contents", why, .utc_now())
+      next
     }
-    if (is.null(tree) && is.null(activity)) next
-    found <- assemble_repo_evidence(tree, activity, NULL, scanned_on = today, whole_history = complete)
-    put("review", review_rows(found, rid, today))
-    if (!repo_has_ai_signal(found)) next
-    # A read that gave no fork flag may be a fork.
-    put("flagged", data.frame(repo_id = rid, owner = roster$owner[r], name = roster$name[r],
-      node_id = roster$node_id[r], is_fork = if (isFALSE(tree$is_fork)) 0L else 1L,
-      parent = if (is.null(tree)) NA_character_ else (tree$parent %||% NA_character_),
-      pr_onset_date = NA_character_, stringsAsFactors = FALSE))
-    put("evidence", cbind(repo_id = rid, found))
+    for (nm in names(rows)) put(nm, rows[[nm]])
   }
+  thrown <- .ai_bind_like(.fetch_failed_frame(), thrown)
+  # The contents check again, a repository that could not be processed counting as not come back.
+  stop_msg <- gitlab_contents_canary(sum(ok), contents$trees[setdiff(names(contents$trees), thrown$repo_id)])
+  if (!is.null(stop_msg)) stop(stop_msg, call. = FALSE)
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   tables <- lapply(stats::setNames(names(proto), names(proto)), function(nm) .ai_bind_like(proto[[nm]], sink[[nm]]))
   write_cheap_partial(file.path(out_dir, "vcs-ai-cheap-gitlab.db"), tables)
   dev_df <- if (length(sink$dev)) do.call(rbind, sink$dev) else .devtool_empty_shard()
-  f <- .ai_bind_like(.fetch_failed_frame(), list(contents$failed, msgs$failed))
+  f <- .ai_bind_like(.fetch_failed_frame(), list(contents$failed, msgs$failed, thrown))
   write_dev_tooling_partial(file.path(out_dir, "vcs-dev-tooling-gitlab.db"), dev_df, f)
 
   dom <- sub(.GL_NODE_RE, "\\1", roster$node_id)

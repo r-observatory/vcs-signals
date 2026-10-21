@@ -315,17 +315,87 @@ test_that("the GitLab read stops before writing when a repository known to credi
   expect_true(any(grepl("GitLab message check: passed", ok$log, fixed = TRUE)))
 })
 
-test_that("the message check is skipped, not failed, when its repository is not on the roster or its host has no search", {
+test_that("the message check is skipped with a warning, not failed, when its repository is not on the roster or its host has no search", {
+  skipped <- function(log, why) grep(paste0("^::warning::GitLab message check: .*", why, ", skipped$"), log, value = TRUE)
   off <- gla_canary_run(credits = FALSE, on_roster = FALSE)
   expect_null(off$err); expect_length(off$files, 2L)
-  expect_true(any(grepl("not on the roster, skipped", off$log, fixed = TRUE)))
+  expect_length(skipped(off$log, "is not on the roster"), 1L)
   bare <- gla_canary_run(credits = FALSE, unsupported = TRUE)
   expect_null(bare$err); expect_length(bare$files, 2L)
-  expect_true(any(grepl("without the message search, skipped", bare$log, fixed = TRUE)))
+  expect_length(skipped(bare$log, "without the message search"), 1L)
   roster <- data.frame(repo_id = GITLAB_MESSAGE_CANARY, node_id = "gitlab:gitlab.com:85027327", stringsAsFactors = FALSE)
   lg <- gla_log()
   expect_null(gitlab_message_canary(roster, list(reads = list(), unsupported = character(0)), lg$log))
-  expect_true(any(grepl("not read this run, skipped", lg$lines(), fixed = TRUE)))
+  expect_length(skipped(lg$lines(), "was not read this run"), 1L)
+  expect_false(any(grepl("::warning::", gla_canary_run(credits = TRUE)$log, fixed = TRUE)))
+})
+
+# Until the calling test ends, the .gitlab-ci.yml classifier throws on a file holding "boom", and on one
+# holding "quote" with an error that quotes an address.
+gla_ci_throws <- function(env = parent.frame()) {
+  real <- gitlab_ci_columns
+  assign("gitlab_ci_columns", function(root_entries, repo) {
+    txt <- repo$gitlab_ci$text %||% ""
+    if (grepl("boom", txt, fixed = TRUE)) stop("the CI file could not be read\nat line 2")
+    if (grepl("quote", txt, fixed = TRUE)) stop("cannot read 'Maintainer: A B <a.b@example.org>' at a.b@example.org")
+    real(root_entries, repo)
+  }, envir = globalenv())
+  withr::defer(assign("gitlab_ci_columns", real, envir = globalenv()), envir = env)
+}
+# A contents answer whose .gitlab-ci.yml says `ci[[node]]` for the projects named there, else runs a check;
+# every message search is empty.
+gla_ci_world <- function(ci) fake_gitlab(function(domain, query, variables) {
+  gids <- unlist(variables$ids)
+  if (!is.null(variables$re)) return(gl_ok(lapply(gids, function(g) gla_commits(g, list()))))
+  said <- stats::setNames(unname(ci), .gl_gid(names(ci)))
+  gl_ok(lapply(gids, function(g) {
+    n <- gla_node(g, root = c("CLAUDE.md", ".gitlab-ci.yml"))
+    n$repository$blobs$nodes <- c(n$repository$blobs$nodes, list(list(path = ".gitlab-ci.yml",
+      rawTextBlob = if (g %in% names(said)) paste("script:", said[[g]]) else "script: R CMD check")))
+    n
+  }))
+})
+
+test_that("a repository whose CI file makes the classifier throw becomes a failure row, and the rest are written", {
+  gla_ci_throws()
+  dir <- withr::local_tempdir(); out <- file.path(dir, "out")
+  ids <- c("gitlab.com/o/a", "gitlab.com/o/bad", "gitlab.com/o/quoted")
+  roster_path <- gla_roster(dir, ids, sprintf("gitlab:gitlab.com:%d", 1:3))
+  lg <- gla_log(); clock <- gla_clock()
+  world <- gla_ci_world(c("gitlab:gitlab.com:2" = "boom", "gitlab:gitlab.com:3" = "quote"))
+  expect_no_error(run_gitlab_contents(world$io, out, roster_path, now = clock$now, sleep = clock$sleep, log = lg$log))
+  fails <- read_scan_failures(file.path(out, "vcs-dev-tooling-gitlab.db"))
+  expect_identical(fails[c("repo_id", "query", "error")], data.frame(repo_id = ids[2:3], query = "gitlab-contents",
+    error = c("the CI file could not be read", "cannot read '...' at <address>"), stringsAsFactors = FALSE))
+  dev <- read_dev_tooling(file.path(out, "vcs-dev-tooling-gitlab.db"))
+  expect_identical(dev$repo_id, ids[1]); expect_identical(dev$gitlab_ci_rcmdcheck, 1L)
+  cheap <- file.path(out, "vcs-ai-cheap-gitlab.db")
+  expect_identical(read_flagged(cheap)$flagged$repo_id, ids[1])
+  for (t in c("evidence", "search_log"))
+    expect_identical(unique(.ai_part_table(cheap, t)$repo_id), ids[1], info = t)
+  expect_true(any(grepl("gitlab contents: gitlab.com/o/bad not processed: the CI file could not be read", lg$lines(), fixed = TRUE)))
+  expect_true(any(grepl("2 repositories failed a read (contents 2, messages 0)", lg$lines(), fixed = TRUE)))
+  expect_false(any(grepl(gla_email, lg$lines())))
+  gla_expect_no_email(out)
+})
+
+test_that("the contents check counts a repository that could not be processed as not come back", {
+  gla_ci_throws()
+  dir <- withr::local_tempdir(); out <- file.path(dir, "out")
+  n <- GITLAB_CANARY_MIN_ASKED
+  nodes <- sprintf("gitlab:gitlab.com:%d", seq_len(n))
+  roster_path <- gla_roster(dir, sprintf("gitlab.com/o/p%02d", seq_len(n)), nodes)
+  clock <- gla_clock()
+  boom <- function(at) stats::setNames(rep("boom", length(at)), at)
+  # Every project comes back, and all but the first throw.
+  expect_error(run_gitlab_contents(gla_ci_world(boom(nodes[-1]))$io, out, roster_path, now = clock$now,
+                                   sleep = clock$sleep, log = function(...) NULL),
+               sprintf("1 of %d projects asked came back", n), fixed = TRUE)
+  expect_length(list.files(out), 0L)
+  # Half of them throwing is still a run.
+  expect_no_error(run_gitlab_contents(gla_ci_world(boom(nodes[seq_len(n / 2)]))$io, out, roster_path, now = clock$now,
+                                      sleep = clock$sleep, log = function(...) NULL))
+  expect_length(read_dev_tooling(file.path(out, "vcs-dev-tooling-gitlab.db"))$repo_id, n / 2)
 })
 
 test_that("a missing or empty GitLab roster logs a line and writes nothing", {
