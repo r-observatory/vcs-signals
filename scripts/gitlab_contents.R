@@ -163,6 +163,10 @@ gl_parse_duo <- function(res, wanted) {
   tryCatch(io$gl_graphql(domain, query, variables), error = function(e) list(error = conditionMessage(e)))
 }
 
+# Why the pacer refused a request: the breaker deferred the host, or the run's request cap was reached.
+.gl_refused_why <- function(pacer, key)
+  if (key %in% pacer$deferred()) "host deferred after repeated failures" else "request cap"
+
 .gl_answered <- function(res) {
   e <- .gl_at(res, "error")
   is.list(res) && (is.null(e) || is.na(.gl_chr(e))) && !is.null(.gl_nodes(res))
@@ -188,7 +192,7 @@ gl_parse_duo <- function(res, wanted) {
 .gl_halving <- function(pacer, key, rows, ask, take, lost) {
   res <- ask(rows)
   if (identical(res, "done")) return(invisible())
-  if (is.null(res)) return(lost(rows, "request cap", NULL))
+  if (is.null(res)) return(lost(rows, .gl_refused_why(pacer, key), NULL))
   if (.gl_answered(res)) { pacer$after(key, TRUE); return(take(res, rows)) }
   if (nrow(rows) == 1L) { pacer$after(key, FALSE); return(lost(rows, .gl_why(res), res)) }
   h <- ceiling(nrow(rows) / 2)
@@ -290,7 +294,7 @@ gl_collect_contents <- function(io, roster, pacer, log = NULL) {
         if (!is.null(res)) pacer$after(.gl_key(d), FALSE)
         .gl_log(log, sprintf("GitLab %s: Duo files of %d projects not read", d, nrow(w)))
         trees[w$repo_id] <- NULL
-        fail(w, if (is.null(res)) "request cap" else paste("Duo files not read:", .gl_why(res)))
+        fail(w, if (is.null(res)) .gl_refused_why(pacer, .gl_key(d)) else paste("Duo files not read:", .gl_why(res)))
         next
       }
       pacer$after(.gl_key(d), TRUE)
@@ -434,7 +438,7 @@ gl_collect_messages <- function(io, roster, pacer, log = NULL) {
         cursor <- .gl_chr(.gl_at(cm, "pageInfo", "endCursor"))
         if (is.na(cursor)) return(fail(row, "no cursor for the next page"))
         res <- page(row, cursor)
-        if (is.null(res)) return(fail(row, "request cap"))
+        if (is.null(res)) return(fail(row, .gl_refused_why(pacer, key)))
         if (!.gl_answered(res)) {
           pacer$after(key, FALSE)
           .gl_log(log, sprintf("GitLab %s: commit messages of %s not read: %s", d, row$repo_id, .gl_why(res)))

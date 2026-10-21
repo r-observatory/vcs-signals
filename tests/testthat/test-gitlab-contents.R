@@ -135,6 +135,33 @@ test_that("a project is failed with a request cap reason when the pacer refuses 
   expect_identical(got$failed$repo_id, hyd1d_row$repo_id); expect_identical(got$failed$error, "request cap")
 })
 
+# The reason each project failed, in roster order.
+why_failed <- function(got, ids) unname(stats::setNames(got$failed$error, got$failed$repo_id)[ids])
+deferred_why <- "host deferred after repeated failures"
+
+test_that("projects refused after the breaker deferred their host say so, not request cap", {
+  roster <- one(sprintf("gitlab.com/o/r%02d", 1:5), sprintf("gitlab:gitlab.com:%d", 101:105))
+  down <- fake_gitlab(function(domain, query, variables) list(error = "HTTP 502", status = 502L))
+  # r01 to r03 fail one at a time and defer the host; r04 and r05 are never asked.
+  expect_identical(why_failed(gl_collect_contents(down$io, roster, gl_free_pacer()), roster$repo_id),
+                   c(rep("HTTP 502", 3), rep(deferred_why, 2)))
+  expect_identical(why_failed(gl_collect_messages(down$io, roster, gl_free_pacer()), roster$repo_id),
+                   c(rep("HTTP 502", 3), rep(deferred_why, 2)))
+})
+
+test_that("a follow-up page refused after the breaker deferred the host says so, and one past the cap says request cap", {
+  roster <- one(sprintf("gitlab.com/o/r%02d", 1:4), sprintf("gitlab:gitlab.com:%d", 101:104))
+  f <- fake_gitlab(function(domain, query, variables) {
+    if (!is.null(variables$after)) return(list(error = "HTTP 502", status = 502L))
+    gl_ok(lapply(unlist(variables$ids), function(gid) list(id = gid, repository = list(commits = list(
+      pageInfo = list(hasNextPage = TRUE, endCursor = "c1"), nodes = list())))))
+  })
+  expect_identical(why_failed(gl_collect_messages(f$io, roster, gl_free_pacer()), roster$repo_id),
+                   c(rep("HTTP 502", 3), deferred_why))
+  capped <- gl_pacer(now = function() 0, sleep = function(s) NULL, run_budget = 1L)
+  expect_identical(why_failed(gl_collect_messages(f$io, roster[1, ], capped), roster$repo_id[1]), "request cap")
+})
+
 duo_node <- function() {
   node <- hyd1d()
   node$repository$gitlab$trees$nodes <- list(list(name = "duo"))
@@ -182,6 +209,20 @@ test_that("GitLab Duo files are read in a second request where .gitlab lists duo
   f <- fake_gitlab(function(domain, query, variables) gl_ok(list(hyd1d())))
   gl_collect_contents(f$io, hyd1d_row, gl_free_pacer())
   expect_length(f$calls$graphql, 1L)
+})
+
+test_that("a Duo read refused after the breaker deferred the host says so, and one past the cap says request cap", {
+  roster <- rbind(hyd1d_row, one(sprintf("gitlab.opencode.de/o/r%d", 2:4), sprintf("gitlab:gitlab.opencode.de:%d", 2:4)))
+  f <- fake_gitlab(function(domain, query, variables) {
+    if (!is.null(variables$paths)) return(duo_answer(duo_node(), ".gitlab/duo/chat-rules.md"))
+    if (identical(unlist(variables$ids), duo_node()$id)) gl_ok(list(duo_node())) else list(error = "HTTP 502", status = 502L)
+  })
+  # hyd1d is read, then r2 to r4 fail one at a time and defer the host before its Duo files are asked.
+  got <- gl_collect_contents(f$io, roster, gl_free_pacer())
+  expect_length(got$trees, 0L)
+  expect_identical(why_failed(got, roster$repo_id), c(deferred_why, rep("HTTP 502", 3)))
+  capped <- gl_pacer(now = function() 0, sleep = function(s) NULL, run_budget = 1L)
+  expect_identical(why_failed(gl_collect_contents(f$io, hyd1d_row, capped), hyd1d_row$repo_id), "request cap")
 })
 
 # A host that answers GitLab's complexity error for any query asking more than `max_first` projects.
