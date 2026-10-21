@@ -216,8 +216,8 @@ run_weekly_enumerate <- function(io, out_dir) {
 #' likewise built from WEEKLY_METRICS alone. A repo unchanged since the last
 #' weekly run contributes no new signals_series row for that metric. The GitLab
 #' shard's licence readings go into gitlab_license, which every summary build
-#' reads for GitLab rows. A GitLab or Codeberg shard that cannot be read is
-#' skipped. The GitLab cursor state in parts_dir, when fetch-gitlab supplied
+#' reads for GitLab rows. A GitLab, Codeberg or Bitbucket shard that cannot be
+#' read is skipped. The GitLab cursor state in parts_dir, when fetch-gitlab supplied
 #' it, is uploaded after the publish.
 run_merge <- function(io, out_dir, parts_dir) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)

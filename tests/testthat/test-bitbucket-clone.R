@@ -65,7 +65,7 @@ test_that("a not-found clone then an ids answer with the same uuid and a working
   expect_identical(seen$urls, c("https://bitbucket.org/old/name.git", "https://bitbucket.org/new/name.git"))
   expect_identical(api$paths, IDS_Q(NODE))
   expect_identical(bbc_snapshot(file.path(dir, "out"))$commits_total, 6L)
-  expect_match(lg$lines()[length(lg$lines())], "1 read, 0 failed, 0 not located, 0 not reached of 1 repos, 1 API requests", fixed = TRUE)
+  expect_match(lg$lines()[length(lg$lines())], "1 read, 0 failed, 0 empty, 0 not located, 0 not reached of 1 repos, 1 API requests", fixed = TRUE)
 })
 
 test_that("an ids answer with another uuid is not located, with no second clone", {
@@ -79,7 +79,7 @@ test_that("an ids answer with another uuid is not located, with no second clone"
   bbc_run(io, roster, lg)
   expect_length(seen$urls, 1L)
   expect_true(is.na(bbc_snapshot(file.path(dir, "out"))$commits_total))
-  expect_match(lg$lines()[length(lg$lines())], "0 read, 0 failed, 1 not located, 0 not reached of 1 repos", fixed = TRUE)
+  expect_match(lg$lines()[length(lg$lines())], "0 read, 0 failed, 0 empty, 1 not located, 0 not reached of 1 repos", fixed = TRUE)
 })
 
 test_that("a repository without a Bitbucket node id is not located when git says not found, and nothing is asked", {
@@ -105,7 +105,7 @@ test_that("a clone the server did not filter closes Bitbucket with one warning a
   expect_identical(seen$urls, "https://bitbucket.org/o/a.git")
   expect_identical(bbc_snapshot(file.path(dir, "out"))$commits_total, c(6L, NA, NA))
   expect_length(grep("^::warning::", lg$lines()), 1L)
-  expect_match(lg$lines()[length(lg$lines())], "1 read, 0 failed, 0 not located, 2 not reached of 3 repos", fixed = TRUE)
+  expect_match(lg$lines()[length(lg$lines())], "1 read, 0 failed, 0 empty, 0 not located, 2 not reached of 3 repos", fixed = TRUE)
 })
 
 test_that("git answering 429 closes Bitbucket with one warning", {
@@ -117,8 +117,8 @@ test_that("git answering 429 closes Bitbucket with one warning", {
   lg <- bbc_logger()
   bbc_run(io, roster, lg)
   expect_length(seen$urls, 1L)
-  expect_length(grep("^::warning::", lg$lines()), 1L)
-  expect_match(lg$lines()[length(lg$lines())], "0 read, 0 failed, 0 not located, 2 not reached of 2 repos", fixed = TRUE)
+  expect_length(grep("^::warning::Bitbucket [^:]*: git clone", lg$lines()), 1L)
+  expect_match(lg$lines()[length(lg$lines())], "0 read, 0 failed, 0 empty, 0 not located, 2 not reached of 2 repos", fixed = TRUE)
 })
 
 test_that("three clone failures in a row close Bitbucket with a warning, and an answer about a repository does not count", {
@@ -129,10 +129,10 @@ test_that("three clone failures in a row close Bitbucket with a warning, and an 
   lg <- bbc_logger()
   bbc_run(io, roster, lg)
   expect_length(seen$urls, 3L)
-  w <- grep("^::warning::", lg$lines(), value = TRUE)
+  w <- grep("^::warning::Bitbucket: closed", lg$lines(), value = TRUE)
   expect_length(w, 1L)
   expect_match(w, "3 failures in a row", fixed = TRUE)
-  expect_match(lg$lines()[length(lg$lines())], "0 read, 3 failed, 0 not located, 2 not reached of 5 repos", fixed = TRUE)
+  expect_match(lg$lines()[length(lg$lines())], "0 read, 3 failed, 0 empty, 0 not located, 2 not reached of 5 repos", fixed = TRUE)
   dir2 <- withr::local_tempdir()
   seen2 <- new.env(); seen2$urls <- character()
   io2 <- list(bb_clone = bbc_clone(seen2, function(url, d) bbc_gone(url)))
@@ -167,7 +167,7 @@ test_that("the shard holds exactly the roster's repo_ids, git's version is logge
   l <- lg$lines()
   expect_identical(l[1], "weekly fetch bitbucket: 2 repos")
   expect_identical(sum(grepl("^weekly fetch bitbucket: git version [0-9]", l)), 1L)
-  expect_match(l[length(l)], "^weekly fetch bitbucket: 1 read, 1 failed, 0 not located, 0 not reached of 2 repos, 0 API requests, [0-9]+ s$")
+  expect_match(l[length(l)], "^weekly fetch bitbucket: 1 read, 1 failed, 0 empty, 0 not located, 0 not reached of 2 repos, 0 API requests, [0-9]+ s$")
   expect_false(any(grepl("@", l, fixed = TRUE)))
 })
 
@@ -210,8 +210,8 @@ test_that("a renamed repository whose second clone is also not found is not loca
     bbc_run(io, roster, lg)
     expect_length(seen$urls, 2L)
     expect_true(is.na(bbc_snapshot(file.path(dir, "out"))$commits_total))
-    expect_match(lg$lines()[length(lg$lines())], if (case == "gone") "0 read, 0 failed, 1 not located, 0 not reached of 1 repos"
-                                                 else "0 read, 1 failed, 0 not located, 0 not reached of 1 repos", fixed = TRUE)
+    expect_match(lg$lines()[length(lg$lines())], if (case == "gone") "0 read, 0 failed, 0 empty, 1 not located, 0 not reached of 1 repos"
+                                                 else "0 read, 1 failed, 0 empty, 0 not located, 0 not reached of 1 repos", fixed = TRUE)
   }
   st <- bb_test_state()
   io <- list(bb_clone = function(url, d) bbc_gone(url),
@@ -261,4 +261,72 @@ test_that("main runs fetch-bitbucket on the Bitbucket roster in VCS_ROSTER, and 
   expect_false(withVisible(suppressMessages(weekly$main("fetch-bitbucket", out, io = io)))$visible)
   expect_identical(bbc_snapshot(out)$repo_id, "bitbucket.org/o/good")
   expect_error(weekly$main("no-such-mode", out, io = list()), "fetch-bitbucket", fixed = TRUE)
+})
+
+test_that("a pass that reads none of its repositories warns once", {
+  dir <- withr::local_tempdir()
+  roster <- bbc_roster(dir, c("o/a", "o/b"), c("unlocated", "unlocated"))
+  io <- list(bb_clone = function(url, d) list(status = 128L, output = "fatal: could not read Username for 'https://bitbucket.org'"))
+  lg <- bbc_logger()
+  bbc_run(io, roster, lg)
+  expect_identical(grep("^::warning::", lg$lines(), value = TRUE),
+                   "::warning::Bitbucket: 0 of 2 repositories read this run, every one keeps last week's values")
+  dir2 <- withr::local_tempdir()
+  lg2 <- bbc_logger()
+  bbc_run(list(bb_clone = cb_local_clone(cb_fixture_repo())), bbc_roster(dir2, "o/a", "unlocated"), lg2)
+  expect_length(grep("^::warning::", lg2$lines()), 0L)
+})
+
+test_that("an API 429 on a fallback ask closes the API only, and cloning goes on", {
+  dir <- withr::local_tempdir()
+  roster <- bbc_roster(dir, c("o/a-gone", "o/b", "o/c"), c(NODE, "unlocated", "unlocated"))
+  ok <- cb_local_clone(cb_fixture_repo())
+  io <- list(bb_clone = function(url, d) if (grepl("a-gone", url)) bbc_gone(url) else ok(url, d),
+             bb_get = function(path) bb_answer(429L))
+  lg <- bbc_logger()
+  bbc_run(io, roster, lg)
+  expect_identical(bbc_snapshot(file.path(dir, "out"))$commits_total, c(NA, 6L, 6L))
+  expect_match(lg$lines()[length(lg$lines())], "2 read, 0 failed, 0 empty, 0 not located, 1 not reached of 3 repos, 1 API requests", fixed = TRUE)
+})
+
+test_that("an empty repository is empty with NA values, and a clone that is no repository is a failure", {
+  dir <- withr::local_tempdir()
+  bare <- file.path(withr::local_tempdir(), "empty.git")
+  .cb_fixture_git(dirname(bare), c("init", "--bare", "--quiet", shQuote(bare)))
+  roster <- bbc_roster(dir, "o/empty", "unlocated")
+  lg <- bbc_logger()
+  bbc_run(list(bb_clone = cb_local_clone(bare)), roster, lg)
+  s <- bbc_snapshot(file.path(dir, "out"))
+  expect_true(is.na(s$commits_total))
+  expect_match(lg$lines()[length(lg$lines())], "0 read, 0 failed, 1 empty, 0 not located, 0 not reached of 1 repos", fixed = TRUE)
+  expect_false(any(grepl("clone failed|failed \\(exit", lg$lines())))
+  dir2 <- withr::local_tempdir()
+  lg2 <- bbc_logger()
+  bbc_run(list(bb_clone = function(url, d) { dir.create(d); list(status = 0L, output = character()) }),
+          bbc_roster(dir2, "o/hollow", "unlocated"), lg2)
+  expect_match(lg2$lines()[length(lg2$lines())], "0 read, 1 failed, 0 empty", fixed = TRUE)
+})
+
+test_that("an ids lookup answering 500 leaves the repository failed and logs the status", {
+  dir <- withr::local_tempdir()
+  roster <- bbc_roster(dir, "old/name", NODE)
+  io <- list(bb_clone = function(url, d) bbc_gone(url),
+             bb_get = bb_fake(setNames(list(bb_answer(500L)), IDS_Q(NODE))))
+  lg <- bbc_logger()
+  bbc_run(io, roster, lg)
+  expect_true(any(grepl("the id lookup got HTTP 500", lg$lines(), fixed = TRUE)))
+  expect_match(lg$lines()[length(lg$lines())], "0 read, 1 failed, 0 empty, 0 not located, 0 not reached of 1 repos", fixed = TRUE)
+})
+
+test_that("a deadline that passes partway leaves the rest not reached, and the shard holds every roster repository", {
+  dir <- withr::local_tempdir()
+  roster <- bbc_roster(dir, c("o/a", "o/b", "o/c"), rep("unlocated", 3))
+  clock <- bb_clock(); ok <- cb_local_clone(cb_fixture_repo())
+  io <- list(bb_clone = function(url, d) { clock$env$t <- clock$env$t + 600; ok(url, d) })
+  lg <- bbc_logger()
+  run_fetch_bitbucket(io, file.path(dir, "out"), roster, now = clock$now, sleep = clock$sleep, deadline_min = 5, log = lg$log)
+  s <- bbc_snapshot(file.path(dir, "out"))
+  expect_identical(s$repo_id, c("bitbucket.org/o/a", "bitbucket.org/o/b", "bitbucket.org/o/c"))
+  expect_identical(s$commits_total, c(6L, NA, NA))
+  expect_match(lg$lines()[length(lg$lines())], "1 read, 0 failed, 0 empty, 0 not located, 2 not reached of 3 repos", fixed = TRUE)
 })

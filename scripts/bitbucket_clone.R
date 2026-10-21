@@ -2,9 +2,11 @@
 # a treeless bare clone of each repository's default branch. The clone is the io member
 # io$bb_clone(url, dir), returning list(status, output); local git commands are never io members.
 # Anonymous git requests do not count toward Bitbucket's API limit, so clones need no budget; only
-# the not-found fallback ask does. Uses .bb_ask, bb_ids_path, bb_path, .bb_uuid, bb_pacer (bitbucket.R),
-# the git helpers of codeberg_clone.R, cb_run_state and .cb_log (codeberg.R), .gl_chr, .gl_int, .gl_at
-# (gitlab.R), and .gl_redact and .gl_load_roster (gitlab_weekly.R).
+# the not-found fallback ask does. Uses .bb_ask, .bb_uuid, bb_ids_path, bb_path, is_bitbucket_node and
+# bb_pacer (bitbucket.R), .cb_git, .cb_partial_clone, .cb_local_counts, cb_identity_counts,
+# cb_git_local, write_codeberg_roster and .CB_GIT_ANSWER_RE (codeberg_clone.R), cb_run_state, .cb_log
+# and .cb_status (codeberg.R), .gl_chr, .gl_int and .gl_at (gitlab.R), .gl_redact and .gl_load_roster
+# (gitlab_weekly.R), and export_snapshot_shard (helpers.R).
 
 BITBUCKET_ROSTER_DB <- "vcs-signals-roster-bitbucket.db"
 BITBUCKET_SHARD_DB <- "vcs-signals-shard-bitbucket.db"
@@ -52,6 +54,10 @@ bb_git_clone <- function(url, dir, run = system2) {
     return(list(kind = if (gone) "gone" else "failed"))
   }
   st$pacer$after(BITBUCKET_DOMAIN, TRUE)
+  # A clone that is a repository with no commit is empty. A clone that is no repository is a failure.
+  repo <- cb_git_local(dir, c("rev-parse", "--git-dir"))
+  head <- cb_git_local(dir, c("rev-parse", "--verify", "-q", "HEAD"))
+  if (repo$status == 0L && head$status == 1L) return(list(kind = "empty"))
   got <- .cb_local_counts(dir)
   if (!is.null(got$why)) {
     .cb_log(st, sprintf("Bitbucket %s: %s", label, got$why))
@@ -68,7 +74,7 @@ bb_git_clone <- function(url, dir, run = system2) {
 }
 
 #' One repository's commit total and identity counts. state is "ok" (counts set), "failed",
-#' "not_located" (git said not found and the stored node id did not find it again), "stopped"
+#' "empty" (a repository with no commit), "not_located" (git said not found and the stored node id did not find it again), "stopped"
 #' (Bitbucket is closed or deferred for the run, nothing cloned) or "skipped" (the fallback ask was
 #' refused by the request cap). The clone directory is removed whatever happens.
 bb_clone_counts <- function(io, repo, st, scratch) {
@@ -85,11 +91,16 @@ bb_clone_counts <- function(io, repo, st, scratch) {
     # Every kind maps to a state; a second clone that is still not found is not located.
     done <- function(c, gone = "not_located") switch(c$kind,
       ok = .bb_clone_result("ok", c$total, c$ids), gone = .bb_clone_result(gone),
-      stopped = .bb_clone_result("stopped"), .bb_clone_result("failed"))
+      empty = .bb_clone_result("empty"), stopped = .bb_clone_result("stopped"), .bb_clone_result("failed"))
     c1 <- .bb_clone_once(io, st, label, url, dir)
     if (c1$kind != "gone") return(done(c1, "failed"))
     if (!is_bitbucket_node(repo$node_id)) return(.bb_clone_result("not_located"))
     a <- .bb_ask(io, st, paste0(bb_ids_path(repo$node_id), "?fields=full_name,uuid"))
+    # An API 429 closes the API only: git does not count toward its limit, so cloning goes on.
+    if (a$state == "stopped" && identical(a$status, 429L) && identical(st$closed, "429")) {
+      st$closed <- NA_character_
+      return(.bb_clone_result("skipped"))
+    }
     if (a$state == "stopped")
       return(.bb_clone_result(if (!is.na(st$closed) || BITBUCKET_DOMAIN %in% st$pacer$deferred()) "stopped" else "skipped"))
     if (a$state == "failed") {
@@ -107,7 +118,8 @@ bb_clone_counts <- function(io, repo, st, scratch) {
   })
 }
 
-# Why Bitbucket was closed for the rest of the run, or NA when it never was.
+# The reason to warn for at the end: only the breaker. A 429 or an ignored filter warned when it closed
+# the run, so st$closed set means NA here.
 .bb_closed_why <- function(st) {
   if (!is.na(st$closed)) NA_character_
   else if (BITBUCKET_DOMAIN %in% st$pacer$deferred()) sprintf("%d failures in a row", BITBUCKET_BREAKER_AFTER)
@@ -173,13 +185,15 @@ run_fetch_bitbucket <- function(io, out_dir, roster_path, now = function() as.nu
   shard_path <- file.path(out_dir, BITBUCKET_SHARD_DB)
   export_snapshot_shard(shard_path, rows)
   count <- function(s) sum(acc$state %in% s)
-  unreached <- n - count(c("ok", "failed", "not_located"))
+  unreached <- n - count(c("ok", "failed", "empty", "not_located"))
   why <- .bb_closed_why(st)
   if (!is.na(why))
     log(sprintf("::warning::Bitbucket: closed for the run (%s), %d repositories not reached keep last week's values",
                 why, unreached))
-  log(sprintf("weekly fetch bitbucket: %d read, %d failed, %d not located, %d not reached of %d repos, %d API requests, %d s",
-              count("ok"), count("failed"), count("not_located"), unreached, n, st$asked,
+  if (n > 0L && count("ok") == 0L)
+    log(sprintf("::warning::Bitbucket: 0 of %d repositories read this run, every one keeps last week's values", n))
+  log(sprintf("weekly fetch bitbucket: %d read, %d failed, %d empty, %d not located, %d not reached of %d repos, %d API requests, %d s",
+              count("ok"), count("failed"), count("empty"), count("not_located"), unreached, n, st$asked,
               as.integer(round(now() - start))))
   invisible(shard_path)
 }
