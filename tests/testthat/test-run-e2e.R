@@ -967,17 +967,29 @@ test_that("the real daily io reaches Bitbucket through bb_get", {
   expect_true(grepl("bb_get\\s*=\\s*bb_get", src))
 })
 
-test_that("two package rows for one Bitbucket repository give one value each and no duplicate key", {
-  acquire <- function() data.frame(package = c("ggplot2", "depower", "depower2"), origin = "cran",
+test_that("two repos rows that resolve to one Bitbucket repository each get the value, with no duplicate key", {
+  acquire <- function() data.frame(package = c("ggplot2", "depower", "depowerold"), origin = "cran",
     url_raw = c("https://github.com/tidyverse/ggplot2", "https://bitbucket.org/bklamer/depower",
-                "https://bitbucket.org/bklamer/depower"), bugreports_raw = NA, stringsAsFactors = FALSE)
+                "https://bitbucket.org/bklamer/depower-old"), bugreports_raw = NA, stringsAsFactors = FALSE)
+  # The old name answers the same repository, as a renamed one does.
+  routes <- c(.e2e_bb_routes(), setNames(list(bb_answer(200L, bb_obj())),
+                                         bb_fields("/repositories/bklamer/depower-old")))
   out <- tempfile("out_bb_two"); dir.create(out); rel <- tempfile("rel_bb_two"); dir.create(rel)
   seen <- new.env()
-  io <- .e2e_bb_io(rel, seen, acquire = acquire)
-  suppressMessages(capture.output(run_update(io, out, list(force_full = TRUE))))
+  io <- .e2e_bb_io(rel, seen, acquire = acquire, routes = routes)
+  log <- capture.output(suppressMessages(run_update(io, out, list(force_full = TRUE))))
   expect_true("manifest.json" %in% io$uploaded())
-  expect_equal(.e2e_summary(rel, "depower")$forks, 2L)
-  expect_length(seen$bb, 6L)
-  n <- .e2e_read(rel, "SELECT COUNT(*) n FROM series_latest WHERE repo_id LIKE 'bitbucket.org/%' AND metric = 'forks'")$n
-  expect_identical(n, 1L)
+  # Both rows are unlocated, so each is read once (6 requests each); the second adds no snapshot row.
+  expect_length(seen$bb, 12L)
+  expect_true(any(grepl("^Bitbucket gauges: collected 1 repos", log)))
+  ids <- c("bitbucket.org/bklamer/depower", "bitbucket.org/bklamer/depower-old")
+  lat <- .e2e_read(rel, "SELECT repo_id, value FROM series_latest WHERE metric = 'forks' AND repo_id LIKE 'bitbucket.org/%' ORDER BY repo_id")
+  expect_identical(lat$repo_id, ids)
+  expect_equal(lat$value, c(2, 2))
+  sm <- .e2e_read(rel, "SELECT repo_id, forks FROM vcs_signals_summary WHERE repo_id LIKE 'bitbucket.org/%' ORDER BY repo_id",
+                  "vcs-signals-summary.db")
+  expect_identical(sm$repo_id, ids)
+  expect_identical(sm$forks, c(2L, 2L))
+  dup <- .e2e_read(rel, "SELECT COUNT(*) n FROM (SELECT repo_id, date, metric FROM signals_series GROUP BY 1, 2, 3 HAVING COUNT(*) > 1)")$n
+  expect_identical(dup, 0L)
 })
