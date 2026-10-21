@@ -1,4 +1,5 @@
 repo_id	package	origin	resolved_from
+bitbucket.org/someone/bbpkg	bbpkg	cran	url
 code.usgs.gov/water/toxics/usgspkg	usgspkg	cran	url
 codeberg.org/someone/cbpkg	cbpkg	cran	url
 github.com/acoppock/ri2	ri2	cran	url

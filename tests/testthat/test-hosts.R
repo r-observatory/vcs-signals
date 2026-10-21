@@ -9,14 +9,14 @@ test_that("no script filters on a literal host any more", {
   expect_false(any(grepl("host = 'github'|host='github'|LIKE 'github\\.com/%'", src)))
 })
 
-test_that("every host filter selects the GitHub hosts, except the daily run's two GitLab stages, the GitLab roster, the GitLab licence and the Codeberg roster", {
+test_that("every host filter selects the GitHub hosts, except the daily run's two GitLab stages, the GitLab roster, the GitLab licence the Codeberg roster and the Bitbucket roster", {
   calls_in <- function(f) {
     src <- readLines(f)
     unlist(regmatches(src, gregexpr("host_predicate\\([^)]*\\)", src)))
   }
   files <- list.files("../../scripts", "\\.R$", full.names = TRUE)
   calls <- unlist(lapply(files, calls_in))
-  expect_length(calls, 11L)
+  expect_length(calls, 12L)
   expect_equal(sum(grepl("^host_predicate\\(GITHUB_HOSTS[,)]", calls)), 6L)
   gl <- calls[grepl("^host_predicate\\(GITLAB_HOSTS[,)]", calls)]
   expect_length(gl, 4L)
@@ -27,6 +27,8 @@ test_that("every host filter selects the GitHub hosts, except the daily run's tw
   expect_length(grep("GITLAB_HOSTS", calls_in("../../scripts/helpers.R")), 1L)
   expect_equal(sum(grepl("^host_predicate\\(CODEBERG_HOSTS[,)]", calls)), 1L)
   expect_length(grep("CODEBERG_HOSTS", calls_in("../../scripts/codeberg.R")), 1L)
+  expect_equal(sum(grepl("^host_predicate\\(BITBUCKET_HOSTS[,)]", calls)), 1L)
+  expect_length(grep("BITBUCKET_HOSTS", calls_in("../../scripts/bitbucket.R")), 1L)
 })
 
 test_that("a gitlab repository never reaches the GitHub collectors, even when gitlab is a supported host", {
@@ -69,4 +71,30 @@ test_that("a gitlab repository never reaches the GitHub collectors, even when gi
   expect_identical(gl$status, "active")
   expect_true(length(seen$queries) > 0)
   expect_false(any(grepl("outbreaks|linelist", seen$queries)))
+})
+
+test_that("a bitbucket repository never reaches the GitHub collectors", {
+  out <- tempfile("out"); dir.create(out)
+  rel <- tempfile("rel"); dir.create(rel)
+  seen <- new.env()
+  seen$queries <- character(0)
+  io <- local_release_io(rel,
+    acquire = function() data.frame(package = c("ggplot2", "depower"), origin = "cran",
+      url_raw = c("https://github.com/tidyverse/ggplot2", "https://bitbucket.org/bklamer/depower"),
+      bugreports_raw = NA, stringsAsFactors = FALSE),
+    graphql = function(query) {
+      seen$queries <- c(seen$queries, query)
+      f <- if (grepl("followRenames", query)) "resolve_one.json"
+           else if (grepl("history \\{ totalCount", query)) "commits.json" else "gauges_one.json"
+      jsonlite::fromJSON(readLines(file.path("fixtures", f), warn = FALSE), simplifyVector = FALSE)
+    })
+  invisible(capture.output(suppressMessages(run_update(io, out, list(force_full = TRUE)))))
+  pub <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-signals-recent.db"))
+  withr::defer(DBI::dbDisconnect(pub))
+  bb <- DBI::dbGetQuery(pub, "SELECT node_id, status FROM repos WHERE host = 'bitbucket'")
+  expect_identical(nrow(bb), 1L)
+  expect_true(is.na(bb$node_id))
+  expect_identical(bb$status, "active")
+  expect_true(length(seen$queries) > 0)
+  expect_false(any(grepl("bklamer|depower", seen$queries)))
 })

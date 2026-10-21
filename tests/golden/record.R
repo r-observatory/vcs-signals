@@ -13,7 +13,7 @@ if (!is.null(attr(porcelain, "status")) || length(porcelain))
 
 suppressPackageStartupMessages({ library(testthat); library(DBI); library(RSQLite) })
 # The same scripts, in the same order, as tests/testthat.R.
-for (f in c("config.R", "hosts.R", "http.R", "pacing.R", "helpers.R", "github.R", "gitlab.R", "gitlab_weekly.R", "gitlab_contents.R", "codeberg.R", "codeberg_clone.R", "ai_signals.R", "dev_tooling.R"))
+for (f in c("config.R", "hosts.R", "http.R", "pacing.R", "helpers.R", "github.R", "gitlab.R", "gitlab_weekly.R", "gitlab_contents.R", "codeberg.R", "codeberg_clone.R", "bitbucket.R", "ai_signals.R", "dev_tooling.R"))
   source(file.path("scripts", f))
 # The helpers and the fixture paths are relative to tests/testthat, as when the suite runs.
 setwd(file.path("tests", "testthat"))

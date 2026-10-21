@@ -867,3 +867,143 @@ test_that("the real daily io reaches Codeberg through cb_get", {
   src <- paste(readLines(file.path(.repo_root, "scripts", "update.R"), warn = FALSE), collapse = "\n")
   expect_true(grepl("cb_get\\s*=\\s*cb_get", src))
 })
+
+# ---- Bitbucket after Codeberg --------------------------------------------------------
+.e2e_bb_acquire <- function() data.frame(package = c("ggplot2", "depower"), origin = "cran",
+  url_raw = c("https://github.com/tidyverse/ggplot2", "https://bitbucket.org/bklamer/depower"),
+  bugreports_raw = NA, stringsAsFactors = FALSE)
+.e2e_bb_routes <- function(by = "path", merged = 16L) {
+  obj <- if (by == "path") bb_fields("/repositories/bklamer/depower") else bb_fields(bb_ids_path(NODE))
+  c(setNames(list(bb_answer(200L, bb_obj())), obj), bb_routes(merged = bb_count(merged)))
+}
+# Bitbucket as it answers `routes`; each request is kept in seen$bb and seen$all.
+.e2e_bitbucket <- function(seen, routes = .e2e_bb_routes()) {
+  fake <- bb_fake(routes); seen$bb <- character(0)
+  function(path) { seen$bb <- c(seen$bb, path); seen$all <- c(seen$all, paste("bitbucket", path)); fake(path) }
+}
+.e2e_bb_io <- function(rel, seen = new.env(), acquire = .e2e_bb_acquire, ...) {
+  seen$all <- character(0)
+  local_release_io(rel, acquire = acquire, graphql = .e2e_github(seen), bb_get = .e2e_bitbucket(seen, ...))
+}
+.e2e_bb_first_run <- function(tag) {
+  out <- tempfile(paste0("out_", tag)); dir.create(out)
+  rel <- tempfile(paste0("rel_", tag)); dir.create(rel)
+  seen <- new.env()
+  log <- capture.output(suppressMessages(run_update(.e2e_bb_io(rel, seen), out, list(force_full = TRUE))))
+  list(out = out, rel = rel, seen = seen, log = log)
+}
+
+test_that("the daily run collects a Bitbucket repository after GitHub, writes its points and summary and stores its node id", {
+  d <- .e2e_bb_first_run("bb")
+  s <- .e2e_summary(d$rel, "depower")
+  expect_identical(s$repo_id, "bitbucket.org/bklamer/depower")
+  expect_identical(c(s$forks, s$prs_open), c(2L, 1L))
+  expect_equal(s$pr_merge_ratio, 84)
+  expect_identical(c(s$last_commit_date, s$repo_created_at), c("2026-06-15T02:37:55Z", "2024-02-18T22:04:37Z"))
+  expect_true(is.na(s$stars)); expect_true(is.na(s$license)); expect_true(is.na(s$issues_open))
+  expect_equal(.e2e_latest(d$rel, "bitbucket.org/bklamer/depower")[c("forks", "prs_open", "prs_merged", "prs_closed", "size_kb")],
+               c(forks = 2, prs_open = 1, prs_merged = 16, prs_closed = 3, size_kb = 4631))
+  expect_identical(.e2e_read(d$rel, "SELECT node_id, status FROM repos WHERE host = 'bitbucket'"),
+                   data.frame(node_id = NODE, status = "active", stringsAsFactors = FALSE))
+  expect_gt(min(grep("^bitbucket ", d$seen$all)), max(which(d$seen$all == "github gauges")))
+  expect_length(d$seen$bb, 6L)
+  expect_false(any(grepl("depower|bklamer", d$seen$gh)))
+  expect_true(any(grepl("^Bitbucket: 1 read, 0 not located, 0 deferred, 0 left for later runs, 6 requests$", d$log)))
+  expect_true(any(grepl("^Bitbucket gauges: collected 1 repos, 0 deferred, 0 not reached", d$log)))
+
+  # The next run asks by id, and a 500 on the object keeps every value.
+  seen <- new.env()
+  routes <- .e2e_bb_routes("id", merged = 40L)
+  routes[[bb_fields(bb_ids_path(NODE))]] <- bb_answer(500L)
+  log <- capture.output(suppressMessages(run_update(.e2e_bb_io(d$rel, seen, routes = routes), d$out, list())))
+  expect_identical(seen$bb, bb_fields(bb_ids_path(NODE)))
+  expect_identical(.e2e_summary(d$rel, "depower")$forks, 2L)
+  expect_equal(.e2e_latest(d$rel, "bitbucket.org/bklamer/depower")[["prs_merged"]], 16)
+  expect_true(any(grepl("^Bitbucket: 0 read, 0 not located, 1 deferred", log)))
+
+  # And a later one with every answer reads the new count.
+  seen2 <- new.env()
+  io <- .e2e_bb_io(d$rel, seen2, routes = .e2e_bb_routes("id", merged = 40L))
+  suppressMessages(capture.output(run_update(io, d$out, list())))
+  expect_equal(.e2e_latest(d$rel, "bitbucket.org/bklamer/depower")[["prs_merged"]], 40)
+})
+
+test_that("a fault in the Bitbucket pass leaves GitHub, GitLab and Codeberg as they were and the run publishes", {
+  acquire <- function() rbind(.e2e_gl_acquire(), .e2e_cb_acquire()()[2, , drop = FALSE], .e2e_bb_acquire()[2, , drop = FALSE])
+  mk <- function(rel, seen = new.env(), ...) {
+    seen$all <- character(0)
+    local_release_io(rel, acquire = acquire, graphql = .e2e_github(seen), gl_graphql = .e2e_gitlab(seen),
+                     cb_get = .e2e_codeberg(seen), bb_get = .e2e_bitbucket(seen, ...))
+  }
+  out <- tempfile("out_bb_fault"); dir.create(out)
+  rel <- tempfile("rel_bb_fault"); dir.create(rel)
+  suppressMessages(capture.output(run_update(mk(rel), out, list(force_full = TRUE))))
+  before <- lapply(c("ggplot2", "rurl", "inlpubs", "sandwich", "depower"), function(p) .e2e_summary(rel, p))
+  expect_identical(.e2e_summary(rel, "depower")$forks, 2L)
+  old <- .bitbucket_pass
+  assign(".bitbucket_pass", function(...) stop("simulated Bitbucket fault"), envir = globalenv())
+  withr::defer(assign(".bitbucket_pass", old, envir = globalenv()))
+  io <- mk(rel, routes = .e2e_bb_routes("id", merged = 40L))
+  log <- capture.output(suppressMessages(run_update(io, out, list())))
+  expect_true(any(grepl("^Bitbucket: stopped by a fault.*simulated Bitbucket fault", log)))
+  expect_true("manifest.json" %in% io$uploaded())
+  expect_identical(.e2e_summary(rel, "depower")$forks, 2L)
+  expect_identical(.e2e_summary(rel, "ggplot2")$stars, before[[1]]$stars)
+  expect_identical(.e2e_summary(rel, "rurl")$stars, before[[2]]$stars)
+  expect_identical(.e2e_summary(rel, "sandwich")$stars, before[[4]]$stars)
+})
+
+test_that("a day with no Bitbucket repository asks Bitbucket nothing and needs no Bitbucket io", {
+  out <- tempfile("out_no_bb"); dir.create(out); rel <- tempfile("rel_no_bb"); dir.create(rel)
+  seen <- new.env(); seen$all <- character(0)
+  io <- local_release_io(rel, acquire = function() .e2e_bb_acquire()[1, , drop = FALSE], graphql = .e2e_github(seen))
+  log <- capture.output(suppressMessages(run_update(io, out, list(force_full = TRUE))))
+  expect_false(any(grepl("^Bitbucket", log)))
+  expect_true("manifest.json" %in% io$uploaded())
+})
+
+test_that("the real daily io reaches Bitbucket through bb_get", {
+  src <- paste(readLines(file.path(.repo_root, "scripts", "update.R"), warn = FALSE), collapse = "\n")
+  expect_true(grepl("bb_get\\s*=\\s*bb_get", src))
+})
+
+test_that("two repos rows that resolve to one Bitbucket repository each get the value, with no duplicate key", {
+  acquire <- function() data.frame(package = c("ggplot2", "depower", "depowerold"), origin = "cran",
+    url_raw = c("https://github.com/tidyverse/ggplot2", "https://bitbucket.org/bklamer/depower",
+                "https://bitbucket.org/bklamer/depower-old"), bugreports_raw = NA, stringsAsFactors = FALSE)
+  # The old name answers the same repository, as a renamed one does.
+  routes <- c(.e2e_bb_routes(), setNames(list(bb_answer(200L, bb_obj())),
+                                         bb_fields("/repositories/bklamer/depower-old")))
+  out <- tempfile("out_bb_two"); dir.create(out); rel <- tempfile("rel_bb_two"); dir.create(rel)
+  seen <- new.env()
+  io <- .e2e_bb_io(rel, seen, acquire = acquire, routes = routes)
+  log <- capture.output(suppressMessages(run_update(io, out, list(force_full = TRUE))))
+  expect_true("manifest.json" %in% io$uploaded())
+  # Both rows are unlocated, so each is read once (6 requests each); the second adds no snapshot row.
+  expect_length(seen$bb, 12L)
+  expect_true(any(grepl("^Bitbucket gauges: collected 1 repos", log)))
+  ids <- c("bitbucket.org/bklamer/depower", "bitbucket.org/bklamer/depower-old")
+  lat <- .e2e_read(rel, "SELECT repo_id, value FROM series_latest WHERE metric = 'forks' AND repo_id LIKE 'bitbucket.org/%' ORDER BY repo_id")
+  expect_identical(lat$repo_id, ids)
+  expect_equal(lat$value, c(2, 2))
+  sm <- .e2e_read(rel, "SELECT repo_id, forks FROM vcs_signals_summary WHERE repo_id LIKE 'bitbucket.org/%' ORDER BY repo_id",
+                  "vcs-signals-summary.db")
+  expect_identical(sm$repo_id, ids)
+  expect_identical(sm$forks, c(2L, 2L))
+  dup <- .e2e_read(rel, "SELECT COUNT(*) n FROM (SELECT repo_id, date, metric FROM signals_series GROUP BY 1, 2, 3 HAVING COUNT(*) > 1)")$n
+  expect_identical(dup, 0L)
+})
+
+test_that("a 429 on Bitbucket's first request gives one warning and keeps every value", {
+  d <- .e2e_bb_first_run("bb_429")
+  routes <- .e2e_bb_routes("id", merged = 40L)
+  routes[[bb_fields(bb_ids_path(NODE))]] <- bb_answer(429L)
+  seen <- new.env()
+  io <- .e2e_bb_io(d$rel, seen, routes = routes)
+  log <- capture.output(suppressMessages(run_update(io, d$out, list())))
+  expect_length(grep("::warning::Bitbucket", log), 1L)
+  expect_length(seen$bb, 1L)
+  expect_true(any(grepl("^Bitbucket: 0 read, 0 not located, 0 deferred, 1 left for later runs, 1 requests$", log)))
+  expect_true("manifest.json" %in% io$uploaded())
+  expect_identical(.e2e_summary(d$rel, "depower")$forks, 2L)
+})

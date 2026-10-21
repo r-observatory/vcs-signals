@@ -2,7 +2,7 @@ test_that("config constants load with expected shape", {
   expect_length(VIEWS_URLS, 4)
   expect_identical(unname(KNOWN_FORGES["github.com"]), "github")
   expect_true("doi.org" %in% NON_REPO_DENYLIST)
-  expect_identical(SUPPORTED_HOSTS, c("github", "gitlab", "codeberg"))
+  expect_identical(SUPPORTED_HOSTS, c("github", "gitlab", "codeberg", "bitbucket"))
   expect_identical(GITLAB_HOSTS, "gitlab")
   expect_identical(unname(GITLAB_DOMAINS["gitlab.com"]), "https://gitlab.com")
   expect_identical(unname(GITLAB_DOMAINS["forgemia.inra.fr"]), "https://forge.inrae.fr")

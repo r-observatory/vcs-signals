@@ -1,4 +1,9 @@
 repo_id	metric	value
+bitbucket.org/someone/bbpkg	forks	3
+bitbucket.org/someone/bbpkg	prs_closed	2
+bitbucket.org/someone/bbpkg	prs_merged	6
+bitbucket.org/someone/bbpkg	prs_open	1
+bitbucket.org/someone/bbpkg	size_kb	2400
 code.usgs.gov/water/toxics/usgspkg	forks	1
 code.usgs.gov/water/toxics/usgspkg	issues_closed	5
 code.usgs.gov/water/toxics/usgspkg	issues_open	2

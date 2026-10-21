@@ -18,6 +18,7 @@ source("scripts/helpers.R")
 source("scripts/github.R")
 source("scripts/gitlab.R")
 source("scripts/codeberg.R")
+source("scripts/bitbucket.R")
 if (!exists("build_ai_rollups")) source("scripts/ai_signals.R")
 if (!exists("url_points_into")) source("scripts/dev_tooling.R")
 suppressPackageStartupMessages({ library(DBI); library(RSQLite) })
@@ -275,6 +276,44 @@ seed_working_db <- function(io, out_dir, working_path) {
   out
 }
 
+# ---- Bitbucket ----------------------------------------------------------------
+# Bitbucket's rotating slice for one run, through one pacer, until `deadline`. A repository not
+# read keeps its last values and none is ever marked gone. A fault is logged and leaves every
+# Bitbucket repository with its last values. Returns what .codeberg_pass returns.
+.bitbucket_pass <- function(io, con, deadline, now, today) {
+  log <- function(m) cat(m, "\n", sep = "")
+  out <- list(snapshot = NULL, deferred = character(0), unresolvable = character(0), unreached = character(0),
+              map = data.frame(node_id = character(0), repo_id = character(0), stringsAsFactors = FALSE))
+  repos <- bitbucket_active_repos(con)
+  if (!nrow(repos)) return(out)
+  pacer <- bb_pacer(now = now, sleep = if (is.function(io$sleep)) io$sleep else Sys.sleep)
+  st <- cb_run_state(pacer, log)
+  res <- tryCatch({
+    r <- bb_collect(io, repos, st, deadline = deadline, now = now, today = today)
+    update_repo_node_ids(con, r$ids)
+    r
+  }, error = function(e) {
+    log(sprintf("Bitbucket: stopped by a fault, every Bitbucket repository keeps its last values: %s",
+                conditionMessage(e)))
+    NULL
+  })
+  map <- bitbucket_active_repos(con)
+  map <- map[is_bitbucket_node(map$node_id), c("node_id", "repo_id"), drop = FALSE]
+  out$map <- map
+  if (is.null(res)) {
+    out$deferred <- map$node_id
+    return(out)
+  }
+  if (!is.null(res$snapshot)) out$snapshot <- res$snapshot[, names(rows_df_empty_gauges()), drop = FALSE]
+  out$deferred <- res$deferred
+  out$unreached <- res$unreached
+  log(sprintf("Bitbucket: %d read, %d not located, %d deferred, %d left for later runs, %d requests",
+              res$read, length(res$not_located), res$n_deferred, res$later, st$asked))
+  if (length(pacer$deferred()))
+    log("::warning::Bitbucket: 3 failures in a row, no more requests this run")
+  out
+}
+
 # ---- the five-stage orchestrator -------------------------------------------
 #' Run one full vcs-signals update pass behind an injected io.
 #'
@@ -398,9 +437,9 @@ run_update <- function(io, out_dir, opts = list()) {
   # GitLab's deadline. A fault anywhere here, the merge into the gauge frame included, leaves
   # every Codeberg repository with its last values and GitHub's and GitLab's rows as they are.
   # Its ids left out of an answer never reach repoint_dead_node_ids. ----------------------
+  cb_deadline <- max(now(), gl_deadline) + 60 * CODEBERG_DEADLINE_EXTRA_MIN
   merged <- tryCatch({
-    cb <- .codeberg_pass(io, con, deadline = max(now(), gl_deadline) + 60 * CODEBERG_DEADLINE_EXTRA_MIN,
-                         now = now, today = today)
+    cb <- .codeberg_pass(io, con, deadline = cb_deadline, now = now, today = today)
     # Silent on a day no Codeberg repository has an id.
     if (nrow(cb$map))
       step(sprintf("Codeberg gauges: collected %d repos, %d deferred, %d not reached",
@@ -409,6 +448,27 @@ run_update <- function(io, out_dir, opts = list()) {
          unreached = c(gauges$unreached, cb$unreached), map = rbind(repo_map, cb$map))
   }, error = function(e) {
     cat(sprintf("Codeberg: stopped by a fault, every Codeberg repository keeps its last values: %s\n",
+                conditionMessage(e)))
+    NULL
+  })
+  if (!is.null(merged)) {
+    gauges$snapshot <- merged$snapshot
+    gauges$deferred <- merged$deferred
+    gauges$unreached <- merged$unreached
+    repo_map <- merged$map
+  }
+  # ---- Bitbucket: its rotating slice, once Codeberg is done, with its own allowance, under the
+  # same fault isolation. ----------------------------------------------------------------
+  merged <- tryCatch({
+    bb <- .bitbucket_pass(io, con, deadline = max(now(), cb_deadline) + 60 * BITBUCKET_DEADLINE_EXTRA_MIN,
+                          now = now, today = today)
+    if (nrow(bb$map))
+      step(sprintf("Bitbucket gauges: collected %d repos, %d deferred, %d not reached",
+                   if (is.null(bb$snapshot)) 0L else nrow(bb$snapshot), length(bb$deferred), length(bb$unreached)))
+    list(snapshot = rbind(gauges$snapshot, bb$snapshot), deferred = c(gauges$deferred, bb$deferred),
+         unreached = c(gauges$unreached, bb$unreached), map = rbind(repo_map, bb$map))
+  }, error = function(e) {
+    cat(sprintf("Bitbucket: stopped by a fault, every Bitbucket repository keeps its last values: %s\n",
                 conditionMessage(e)))
     NULL
   })
@@ -675,6 +735,7 @@ main <- function(out_dir, io = NULL) {
     graphql = default_io(token)$graphql,
     gl_graphql = gl_graphql,
     cb_get = cb_get,
+    bb_get = bb_get,
     release_exists = function() gh_release_exists(RELEASE_REPO),
     generation = function() gh_release_generation(RELEASE_REPO),
     download = function(pattern, dir) gh_release_download(RELEASE_REPO, pattern, dir),

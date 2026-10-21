@@ -24,17 +24,17 @@ skip_golden_parity <- function()
 .golden_acquire <- function(back = 0L) {
   df <- data.frame(
     package = c("forcats", "goodpractice", "bqmm", "ri2", "linelist", "linelist", "cfr", "usgspkg",
-                "cbpkg", "rfpkg", "data.table"),
-    origin = c("cran", "cran", "cran", "cran", "cran", "bioc", "bioc", "cran", "cran", "cran", "cran"),
+                "cbpkg", "rfpkg", "data.table", "bbpkg"),
+    origin = c("cran", "cran", "cran", "cran", "cran", "bioc", "bioc", "cran", "cran", "cran", "cran", "cran"),
     url_raw = c("https://forcats.tidyverse.org, https://github.com/tidyverse/forcats",
                 "https://docs.ropensci.org/goodpractice/ https://github.com/ropensci-review-tools/goodpractice",
                 "https://github.com/kvenkita/bqmm-r", "https://github.com/acoppock/ri2",
                 "https://github.com/epiverse-trace/linelist", "https://gitlab.com/epiverse/outbreaks/linelist",
                 "https://github.com/epiverse-trace/cfr", "https://code.usgs.gov/water/toxics/usgspkg",
                 "https://codeberg.org/someone/cbpkg", "https://r-forge.r-project.org/projects/rfpkg/",
-                "https://github.com/Rdatatable/data.table"),
+                "https://github.com/Rdatatable/data.table", "https://bitbucket.org/someone/bbpkg"),
     bugreports_raw = c("https://github.com/tidyverse/forcats/issues", NA, NA, NA,
-                       "https://github.com/epiverse-trace/linelist/issues", NA, NA, NA, NA, NA, NA),
+                       "https://github.com/epiverse-trace/linelist/issues", NA, NA, NA, NA, NA, NA, NA),
     stringsAsFactors = FALSE)
   if (back > 0L) df[df$package != "cfr", , drop = FALSE] else df
 }
@@ -472,6 +472,26 @@ skip_golden_parity <- function()
     cb_answer(404L, list(message = "The target couldn't be found.")))
 }
 
+# ---- the fake Bitbucket -------------------------------------------------------
+# someone/bbpkg as Bitbucket answers `back` daily runs before the recorded day: the earlier run (back 1)
+# has no stored id yet, so it reads the object by its path (6 requests) and stores the id; the recorded
+# day (back 0) reads it by its two uuids (6 requests). Two forks and one open pull request more per run
+# back, and a main branch. Any other path is a 404. No answer carries an address.
+.golden_bitbucket <- function(path, back = 0L) {
+  ws <- "{3c1f0a52-7d7e-4b1c-9a55-0e5f1c1d2a10}"; rp <- "{9b6d4e21-58a3-4f0e-8d37-6a2c7b5e1f44}"
+  obj <- list(uuid = rp, full_name = "someone/bbpkg", created_on = "2023-04-02T08:15:00.000000+00:00",
+              size = 2457600L, mainbranch = list(name = "main"), workspace = list(uuid = ws))
+  base <- "/repositories/someone/bbpkg"
+  by_id <- "/repositories/%7B3c1f0a52-7d7e-4b1c-9a55-0e5f1c1d2a10%7D/%7B9b6d4e21-58a3-4f0e-8d37-6a2c7b5e1f44%7D"
+  routes <- list(bb_answer(200L, obj), bb_count(3L + 2L * back), bb_count(1L + back), bb_count(6L - back),
+                 bb_count(2L), bb_answer(200L, list(target = list(date = "2026-09-28T14:20:00+00:00"))))
+  names(routes) <- c(paste0(if (back > 0L) base else by_id, "?fields=", BITBUCKET_REPO_FIELDS),
+    paste0(base, c("/forks?pagelen=1&fields=size",
+                   paste0("/pullrequests?state=", c("OPEN", "MERGED", "DECLINED"), "&pagelen=1&fields=size"),
+                   "/refs/branches/main?fields=target.date")))
+  if (is.null(hit <- routes[[path]])) bb_answer(404L, list(type = "error")) else hit
+}
+
 # A clone of someone/cbpkg is the fixture repository of helper-codeberg-git.R; any other is not found,
 # in git's own words.
 .golden_cb_clone <- function(url, dir) {
@@ -536,6 +556,7 @@ skip_golden_parity <- function()
       .golden_gitlab(domain, query, variables, back) },
     gl_rest = function(domain, path) { note("gl_rest", domain, path); .golden_gl_rest(domain, path) },
     cb_get = function(path) { note("cb_get", path); .golden_codeberg(path, back) },
+    bb_get = function(path) { note("bb_get", path); .golden_bitbucket(path, back) },
     cb_clone = function(url, dir) { note("cb_clone", url); .golden_cb_clone(url, dir) },
     contributors = function(owner, name) { note("contributors", owner, name); .golden_contributors(owner, name) },
     # delay is pacing, not part of the request.
