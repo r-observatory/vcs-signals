@@ -335,3 +335,66 @@ test_that("two unlocated rows answering one uuid pair give one snapshot row and 
   expect_identical(r$ids$repo_id, repos$repo_id)
   expect_identical(r$ids$node_id, rep(bb_nid(1), 2L))
 })
+
+# ---- final review wave ------------------------------------------------------------
+test_that("a day that reads only part of its slice still turns over every located repository", {
+  repos <- bb_many(29)
+  days <- as.Date("2026-10-20") + 0:11
+  # Room for 6 of the 8 in a slice: the first 6 of each day's order are read. The order turns by one
+  # a cycle, so three cycles reach every position.
+  read <- unlist(lapply(days, function(d) bb_slice(repos, d, budget = 50L)[1:6]))
+  expect_setequal(read, repos$repo_id)
+  # The same day always gives the same order.
+  expect_identical(bb_slice(repos, days[1]), bb_slice(repos, days[1]))
+})
+
+test_that("a branch call answering 403 defers, a 404 reads with no head date", {
+  branch <- "/repositories/bklamer/depower/refs/branches/master?fields=target.date"
+  base <- c(setNames(list(bb_answer(200L, bb_obj())), bb_obj_path), bb_routes(main = NULL))
+  e <- new.env(); e$logged <- character(0)
+  st <- bb_test_state(log = function(m) e$logged <- c(e$logged, m))
+  r <- bb_read_repo(list(bb_get = bb_fake(c(base, setNames(list(bb_answer(403L)), branch)))), bb_repo(), st)
+  expect_identical(r$state, "deferred")
+  expect_length(grep("deferred", e$logged), 1L)
+  r <- bb_read_repo(list(bb_get = bb_fake(c(base, setNames(list(bb_answer(404L)), branch)))), bb_repo(), bb_test_state())
+  expect_identical(r$state, "ok")
+  expect_true(is.na(r$row$head_committed_at))
+})
+
+test_that("every row considered is counted once: read, not located, deferred or left for later", {
+  repos <- bb_many(3, located = 0)
+  routes <- bb_many_routes(3)
+  routes[[bb_fields("/repositories/o/r02")]] <- bb_answer(500L)
+  r <- bb_collect(list(bb_get = bb_fake(routes)), repos, bb_test_state(), now = function() 0,
+                  today = as.Date("2026-10-21"))
+  expect_identical(c(r$read, length(r$not_located), r$n_deferred, r$later), c(2L, 0L, 1L, 0L))
+  # Unlocated rows cut by the deadline are left for later.
+  r <- bb_collect(list(bb_get = function(p) stop("asked")), repos, bb_test_state(), deadline = 1, now = function() 2,
+                  today = as.Date("2026-10-21"))
+  expect_identical(c(r$read, r$n_deferred, r$later), c(0L, 0L, 3L))
+})
+
+test_that("a 429 after the object answered gives no row, no deferral and counts the repository as later", {
+  routes <- bb_many_routes(2)
+  for (nm in c("r01", "r02"))
+    routes[[paste0("/repositories/o/", nm, "/pullrequests?state=OPEN&pagelen=1&fields=size")]] <- bb_answer(429L)
+  e <- new.env(); e$logged <- character(0)
+  st <- bb_test_state(log = function(m) e$logged <- c(e$logged, m))
+  r <- bb_collect(list(bb_get = bb_fake(routes)), bb_many(2), st, now = function() 0, today = as.Date("2026-10-21"))
+  expect_identical(c(r$read, r$n_deferred, r$later), c(0L, 0L, 2L))
+  expect_null(r$snapshot); expect_length(r$deferred, 0L); expect_length(r$ids$repo_id, 0L)
+  expect_length(grep("::warning::", e$logged), 1L)
+})
+
+test_that("a second row with the stored id of a row not located is not read again", {
+  repos <- bb_many(2)
+  repos$node_id[2] <- repos$node_id[1]
+  seen <- new.env()
+  routes <- bb_many_routes(2)
+  for (nm in c("r01", "r02")) routes[[bb_fields(paste0("/repositories/o/", nm))]] <- bb_answer(404L)
+  routes[[bb_fields(bb_ids_path(repos$node_id[1]))]] <- bb_answer(404L)
+  r <- bb_collect(list(bb_get = bb_fake(routes, seen)), repos, bb_test_state(), now = function() 0,
+                  today = as.Date("2026-10-21"))
+  expect_length(r$not_located, 1L)
+  expect_length(seen$paths, 2L)
+})

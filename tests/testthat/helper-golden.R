@@ -473,9 +473,10 @@ skip_golden_parity <- function()
 }
 
 # ---- the fake Bitbucket -------------------------------------------------------
-# someone/bbpkg as Bitbucket answers `back` daily runs before the recorded day: an earlier run finds it
-# by its path, a later one by its two uuids; two forks and one open pull request more per run back, and a
-# main branch. Any other path is a 404. No answer carries an address.
+# someone/bbpkg as Bitbucket answers `back` daily runs before the recorded day: the earlier run (back 1)
+# has no stored id yet, so it reads the object by its path (6 requests) and stores the id; the recorded
+# day (back 0) reads it by its two uuids (6 requests). Two forks and one open pull request more per run
+# back, and a main branch. Any other path is a 404. No answer carries an address.
 .golden_bitbucket <- function(path, back = 0L) {
   ws <- "{3c1f0a52-7d7e-4b1c-9a55-0e5f1c1d2a10}"; rp <- "{9b6d4e21-58a3-4f0e-8d37-6a2c7b5e1f44}"
   obj <- list(uuid = rp, full_name = "someone/bbpkg", created_on = "2023-04-02T08:15:00.000000+00:00",

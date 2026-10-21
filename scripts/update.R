@@ -308,7 +308,7 @@ seed_working_db <- function(io, out_dir, working_path) {
   out$deferred <- res$deferred
   out$unreached <- res$unreached
   log(sprintf("Bitbucket: %d read, %d not located, %d deferred, %d left for later runs, %d requests",
-              res$read, length(res$not_located), length(res$deferred), res$later, st$asked))
+              res$read, length(res$not_located), res$n_deferred, res$later, st$asked))
   if (length(pacer$deferred()))
     log("::warning::Bitbucket: 3 failures in a row, no more requests this run")
   out

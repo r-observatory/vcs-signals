@@ -92,7 +92,8 @@ jobs:
     # In minutes: update.R stops the GitHub gauge pass at GAUGE_DEADLINE_MIN
     # (125), GitLab may add GITLAB_DEADLINE_EXTRA_MIN (10) plus one 30 s
     # request, Codeberg may add CODEBERG_DEADLINE_EXTRA_MIN (15), Bitbucket may
-    # add BITBUCKET_DEADLINE_EXTRA_MIN (5), and setup, tests and the stages
+    # add BITBUCKET_DEADLINE_EXTRA_MIN (5) plus up to one repository past it (6
+    # requests, about 3.5 minutes at most), and setup, tests and the stages
     # through the publish took up to 42 more (longest recent job 148). That is
     # about 197, so 220 leaves ~23.
     timeout-minutes: 220

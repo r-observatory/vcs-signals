@@ -1,8 +1,10 @@
 # scripts/bitbucket.R - Bitbucket Cloud collectors: the transport, the pacer, the ask and the
 # repository identity. Pure functions behind an injected io: io$bb_get(path) returns an
 # http_request() result for GET BITBUCKET_API<path>. Anonymous, no token. Bitbucket sends no
-# rate-limit header, so only a 429 closes it for the run. Uses .gl_at, .gl_int, .gl_chr (gitlab.R)
-# and cb_run_state (codeberg.R).
+# rate-limit header, so only a 429 closes it for the run. Uses .gl_at, .gl_int, .gl_chr, .gl_utc
+# (gitlab.R), cb_run_state, .cb_log, .cb_status, .cb_enc (codeberg.R), http_request (http.R),
+# host_pacer (pacing.R), host_predicate (hosts.R), rows_df_empty_gauges and update_repo_node_ids
+# (helpers.R).
 
 # The real io member. curl runs without -L, so a redirect comes back as a status.
 bb_get <- function(path, run = system2) {
@@ -184,14 +186,15 @@ bb_read_repo <- function(io, repo, st) {
     a <- .bb_ask(io, st, p)
     if (a$state == "stopped") return(out("stopped", node_id = nid, moved = moved))
     if (a$state == "ok") counts$head_committed_at <- .gl_utc(.gl_at(a$json, "target", "date"))
-    else if (a$state != "absent") return(fail(p, a))
+    else if (!(a$state == "absent" && identical(a$status, 404L))) return(fail(p, a))
   }
   out("ok", bb_gauge_row(obj, counts), nid, moved)
 }
 
 #' The repo_ids to read today, in order: every repository without a Bitbucket node id, then one
 #' part of the located ones, chosen by the day. A budget that reads `per_run` repositories a day
-#' needs `parts` days to turn over every located repository once. Pure.
+#' needs `parts` days to turn over every located repository once. Inside the part the order turns
+#' by cycle, so a day that runs out of budget does not skip the same tail every cycle. Pure.
 bb_slice <- function(repos, today, budget = BITBUCKET_MAX_REQUESTS) {
   if (!nrow(repos)) return(character(0))
   repos <- repos[order(repos$repo_id, method = "radix"), , drop = FALSE]
@@ -199,7 +202,12 @@ bb_slice <- function(repos, today, budget = BITBUCKET_MAX_REQUESTS) {
   ids <- repos$repo_id[located]
   per_run <- max(1L, floor(budget / BITBUCKET_CALLS_PER_REPO))
   parts <- max(1L, ceiling(length(ids) / per_run))
-  c(repos$repo_id[!located], ids[(seq_along(ids) - 1L) %% parts == as.integer(today) %% parts])
+  sel <- ids[(seq_along(ids) - 1L) %% parts == as.integer(today) %% parts]
+  if (length(sel)) {
+    k <- (as.integer(today) %/% parts) %% length(sel)
+    sel <- sel[(seq_along(sel) + k - 1L) %% length(sel) + 1L]
+  }
+  c(repos$repo_id[!located], sel)
 }
 
 #' Read today's slice. Stops at `deadline` (the rest is `unreached`), when fewer than
@@ -212,12 +220,14 @@ bb_collect <- function(io, repos, st, deadline = Inf, now = function() as.numeri
   stored <- stats::setNames(repos$node_id, repos$repo_id)
   rows <- list(); ids <- list()
   deferred <- unreached <- not_located <- character(0)
-  later <- 0L
+  later <- n_deferred <- 0L
   tried <- character(0)  # node ids already read or deferred this run: one read per repository
   for (i in seq_along(slice)) {
     rest <- slice[i:length(slice)]
     if (now() >= deadline) {
-      unreached <- stored[rest][is_bitbucket_node(stored[rest])]
+      isloc <- is_bitbucket_node(stored[rest])
+      unreached <- unique(stored[rest][isloc])
+      later <- sum(!isloc)
       break
     }
     if (budget - st$asked < BITBUCKET_CALLS_PER_REPO) { later <- length(rest); break }
@@ -234,11 +244,15 @@ bb_collect <- function(io, repos, st, deadline = Inf, now = function() as.numeri
           name_with_owner = r$row$name_with_owner, status = "active", stringsAsFactors = FALSE)
       }
     } else if (r$state == "deferred") {
+      n_deferred <- n_deferred + 1L
       if (is_bitbucket_node(stored[[id]])) { deferred <- c(deferred, stored[[id]]); tried <- c(tried, stored[[id]]) }
-    } else not_located <- c(not_located, id)
+    } else {
+      not_located <- c(not_located, id)
+      if (is_bitbucket_node(stored[[id]])) tried <- c(tried, stored[[id]])
+    }
   }
   list(snapshot = if (length(rows)) do.call(rbind, rows) else NULL, deferred = deferred,
        unresolvable = character(0), unreached = unname(unreached),
        ids = if (length(ids)) do.call(rbind, ids) else NULL,
-       not_located = not_located, read = length(rows), later = later)
+       not_located = not_located, read = length(rows), later = later, n_deferred = n_deferred)
 }

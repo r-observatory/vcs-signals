@@ -993,3 +993,17 @@ test_that("two repos rows that resolve to one Bitbucket repository each get the 
   dup <- .e2e_read(rel, "SELECT COUNT(*) n FROM (SELECT repo_id, date, metric FROM signals_series GROUP BY 1, 2, 3 HAVING COUNT(*) > 1)")$n
   expect_identical(dup, 0L)
 })
+
+test_that("a 429 on Bitbucket's first request gives one warning and keeps every value", {
+  d <- .e2e_bb_first_run("bb_429")
+  routes <- .e2e_bb_routes("id", merged = 40L)
+  routes[[bb_fields(bb_ids_path(NODE))]] <- bb_answer(429L)
+  seen <- new.env()
+  io <- .e2e_bb_io(d$rel, seen, routes = routes)
+  log <- capture.output(suppressMessages(run_update(io, d$out, list())))
+  expect_length(grep("::warning::Bitbucket", log), 1L)
+  expect_length(seen$bb, 1L)
+  expect_true(any(grepl("^Bitbucket: 0 read, 0 not located, 0 deferred, 1 left for later runs, 1 requests$", log)))
+  expect_true("manifest.json" %in% io$uploaded())
+  expect_identical(.e2e_summary(d$rel, "depower")$forks, 2L)
+})
