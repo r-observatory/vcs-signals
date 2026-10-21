@@ -1127,8 +1127,9 @@ fold_account_counts <- function(prior, incoming, counted_repos) {
 }
 
 #' Fold this run's searches and reads into the log. A weekly add counts only from the stored watermark, and only
-#' a read to the first commit in rebuilt_repos replaces the repository's msg., name. and review. rows. Pure.
-fold_search_log <- function(prior, incoming, rebuilt_repos = NULL, reads = NULL) {
+#' a read to the first commit in rebuilt_repos replaces the repository's msg., name. and review. rows. A cut-off
+#' search of a repository in gitlab_repos keeps the stored row's larger count and its first date. Pure.
+fold_search_log <- function(prior, incoming, rebuilt_repos = NULL, reads = NULL, gitlab_repos = character(0)) {
   empty <- .ai_empty_log()
   pri <- .ai_bind_like(empty, list(prior))
   local_key <- grepl("^(msg|name|review)\\.", pri$rule_key)
@@ -1144,6 +1145,15 @@ fold_search_log <- function(prior, incoming, rebuilt_repos = NULL, reads = NULL)
   if (any(is_replace) && is.null(rebuilt_repos))
     stop("fold_search_log: a read to the first commit needs rebuilt_repos, and it is NULL")
   inc <- .ai_bind_like(empty, list(incoming))
+  # A capped GitLab search read only the newest commits, so it never lowers a count or forgets a first date.
+  capped <- which(inc$repo_id %in% gitlab_repos & inc$source %in% "search" & inc$incomplete %in% 1L & !is_add)
+  for (i in capped) {
+    k <- which(pri$repo_id == inc$repo_id[i] & pri$rule_key == inc$rule_key[i])[1]
+    if (is.na(k)) next
+    if (!is.na(pri$total_count[k]) && (is.na(inc$total_count[i]) || pri$total_count[k] > inc$total_count[i]))
+      inc$total_count[i] <- pri$total_count[k]
+    inc$first_hit_on[i] <- .ai_earliest_chr(c(pri$first_hit_on[k], inc$first_hit_on[i]))
+  }
   add <- inc[is_add, , drop = FALSE]
   # A read to the first commit that the read state did not keep saw less than the log already counts.
   all <- rbind(inc[!is_add & !(is_replace & !(inc$repo_id %in% rebuilt_repos)), , drop = FALSE], pri)

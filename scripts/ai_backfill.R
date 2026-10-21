@@ -418,6 +418,66 @@ write_flagged_partial <- function(path, flagged_df, evidence_df, work = NULL, ca
   if (DBI::dbExistsTable(con, table)) DBI::dbReadTable(con, table) else NULL
 }
 
+# The columns of each partial table the gate and the merge fold that may never be NULL.
+.AI_PART_KEYS <- list(
+  flagged = c("repo_id", "node_id"), evidence = c("repo_id", "tool", "tier", "marker", "onset_censored"),
+  repo_reads = "repo_id",
+  search_log = c("repo_id", "rule_key", "rule_rev", "ruleset_version", "asked_on", "outcome", "source"),
+  account_counts = c("repo_id", "tool", "identity_set", "commits", "measured_on"),
+  review = c("repo_id", "tool", "first_seen_censored"),
+  outside_prs = c("repo_id", "pr_number", "tool", "found_via", "created_at", "from_fork", "author_association",
+                  "last_confirmed_date"),
+  models = c("repo_id", "tool", "window_complete"), vcs_ai_models = c("repo_id", "tool", "window_complete"),
+  vcs_ai_signals = c("repo_id", "tool", "first_seen_censored", "authored"),
+  vcs_dev_tooling = "repo_id", failures = c("repo_id", "query"))
+# Values the published search log accepts.
+.AI_PART_VALUES <- list(search_log = list(outcome = c("hit", "none", "refused"), source = c("search", "read")))
+
+# Why one table read from a partial cannot be folded, or NULL. `empty` gives each column's type.
+.ai_table_fault <- function(t, df, empty) {
+  kind <- function(x) if (is.character(x)) "text" else "numbers"
+  for (cn in .AI_PART_KEYS[[t]]) {
+    if (!cn %in% names(df)) return(sprintf("%s has no %s column", t, cn))
+    if (anyNA(df[[cn]])) return(sprintf("%s has a NULL %s", t, cn))
+  }
+  for (cn in intersect(names(empty), names(df)))
+    if (!all(is.na(df[[cn]])) && kind(df[[cn]]) != kind(empty[[cn]]))
+      return(sprintf("%s.%s holds %s, not %s", t, cn, kind(df[[cn]]), kind(empty[[cn]])))
+  for (cn in intersect(names(.AI_PART_VALUES[[t]]), names(df)))
+    if (!all(df[[cn]] %in% .AI_PART_VALUES[[t]][[cn]]))
+      return(sprintf("%s.%s holds a value other than %s", t, cn, paste(.AI_PART_VALUES[[t]][[cn]], collapse = ", ")))
+  NULL
+}
+
+# Why one partial cannot be folded, or NULL. `tables` names each table to check with its empty frame; a
+# table the file lacks passes, as the folds read it as empty. A warning while reading counts as a fault.
+.ai_part_fault <- function(path, tables) {
+  first_line <- function(m) strsplit(m, "\n", fixed = TRUE)[[1]][1]
+  con <- NULL
+  on.exit(if (!is.null(con)) DBI::dbDisconnect(con), add = TRUE)
+  tryCatch(withCallingHandlers({
+    con <- DBI::dbConnect(RSQLite::SQLite(), path)
+    have <- intersect(names(tables), DBI::dbListTables(con))
+    faults <- lapply(have, function(t) .ai_table_fault(t, DBI::dbReadTable(con, t), tables[[t]]))
+    unlist(faults)[1]
+  }, warning = function(w) stop(conditionMessage(w), call. = FALSE)),
+  error = function(e) first_line(conditionMessage(e)))
+}
+
+#' The partials among `paths` the gate or the merge can fold: every GitHub one as it is, and each GitLab one
+#' (named *-gitlab.db) that opens and whose `tables` hold no NULL key and no value of the wrong type. A GitLab
+#' partial that fails is left out with a ::warning:: line, so a broken GitLab file never stops GitHub data.
+sound_partials <- function(paths, tables, log = message) {
+  keep <- vapply(paths, function(p) {
+    if (!grepl("-gitlab\\.db$", basename(p))) return(TRUE)
+    why <- .ai_part_fault(p, tables)
+    if (is.null(why)) return(TRUE)
+    log(sprintf("::warning::%s left out: %s", basename(p), why))
+    FALSE
+  }, logical(1))
+  paths[keep]
+}
+
 read_flagged <- function(path) {
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
@@ -895,7 +955,8 @@ run_gitlab_contents <- function(io, out_dir, roster_path, now = function() as.nu
 #' A full gate works on a campaign: the stored one, or one dated today.
 run_gate <- function(io, out_dir, parts_dir, full = TRUE) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
-  parts <- list.files(parts_dir, pattern = "^vcs-ai-cheap-.*\\.db$", full.names = TRUE)
+  parts <- sound_partials(list.files(parts_dir, pattern = "^vcs-ai-cheap-.*\\.db$", full.names = TRUE),
+                          .ai_cheap_tables()[c("flagged", "evidence", "repo_reads")])
   fr <- lapply(parts, read_flagged)
   flagged_df <- .ai_bind_like(.ai_empty_flagged(), lapply(fr, `[[`, "flagged"))
   flagged_df <- flagged_df[!duplicated(flagged_df$repo_id), , drop = FALSE]
@@ -1264,8 +1325,16 @@ run_merge <- function(io, out_dir, parts_dir) {
     DBI::dbExecute(con, sprintf('DELETE FROM "%s"', t))
     if (nrow(df)) DBI::dbWriteTable(con, t, df, append = TRUE)
   }
-  deep <- list.files(parts_dir, pattern = "^vcs-ai-shard-.*\\.db$", full.names = TRUE)
-  cheap <- list.files(parts_dir, pattern = "^vcs-ai-cheap-.*\\.db$", full.names = TRUE)
+  listed <- function(kind) list.files(parts_dir, pattern = sprintf("^vcs-%s-.*\\.db$", kind), full.names = TRUE)
+  deep <- sound_partials(listed("ai-shard"), list(vcs_ai_signals = .ai_empty_signals(), account_counts = .ai_empty_counts(),
+    search_log = .ai_empty_log(), vcs_ai_models = .ai_empty_models(), campaign = data.frame(since = character())))
+  cheap <- sound_partials(listed("ai-cheap"), .ai_cheap_tables())
+  dev_parts <- sound_partials(listed("dev-tooling"), list(vcs_dev_tooling = .devtool_empty_shard(),
+                                                          failures = .fetch_failed_frame()))
+  is_gl <- function(paths) grepl("-gitlab\\.db$", basename(paths))
+  folded <- function(paths) if (any(is_gl(paths))) "yes" else "no"
+  message(sprintf("ai merge: GitLab partials folded: cheap %s, dev tooling %s, dating %s",
+                  folded(cheap), folded(dev_parts), folded(deep)))
   from <- function(paths, t, empty) .ai_bind_like(empty, lapply(paths, .ai_part_table, table = t))
   # A cheap partial from before the weekly read has no read state, and its findings carry no dates.
   current <- cheap[vapply(cheap, function(p) !is.null(.ai_part_table(p, "repo_reads")), logical(1))]
@@ -1293,7 +1362,8 @@ run_merge <- function(io, out_dir, parts_dir) {
                                                                 reads_in$repo_id[counted]))
   log <- fold_search_log(have("vcs_ai_search_log", .ai_empty_log()),
                          rbind(cheap_log, from(deep, "search_log", log_in)),
-                         rebuilt_repos = rebuilt, reads = reads_prior)
+                         rebuilt_repos = rebuilt, reads = reads_prior,
+                         gitlab_repos = unique(from(cheap[is_gl(cheap)], "search_log", log_in)$repo_id))
   review <- fold_review_rows(have("vcs_ai_review_signals", .ai_empty_review()), from(cheap, "review", .ai_empty_review()))
   outside <- fold_outside_prs(have("vcs_ai_outside_prs", .ai_empty_outside()), from(cheap, "outside_prs", .ai_empty_outside()))
 
@@ -1374,9 +1444,10 @@ run_merge <- function(io, out_dir, parts_dir) {
   # preserves un-scanned repos, exactly as ai_onset_reducer protects vcs_ai_signals. A presence
   # snapshot has no onset reduce and no node_id reconcile. Runs before publish() so it rides the
   # existing summary/recent embedding. Independent of the AI onset path above.
-  dev_parts <- list.files(parts_dir, pattern = "^vcs-dev-tooling-.*\\.db$", full.names = TRUE)
   dev_list <- lapply(dev_parts, read_dev_tooling)
-  dev_df <- if (length(dev_list)) do.call(rbind, dev_list) else .devtool_empty_shard()
+  dev_df <- if (any(!is_gl(dev_parts))) do.call(rbind, dev_list[!is_gl(dev_parts)]) else .devtool_empty_shard()
+  # A GitLab partial whose columns differ from the GitHub shards' still stacks.
+  for (d in dev_list[is_gl(dev_parts)]) dev_df <- bind_dev_tooling(dev_df, d)
   prior_dev <- if (DBI::dbExistsTable(con, "vcs_dev_tooling"))
     DBI::dbReadTable(con, "vcs_dev_tooling") else .devtool_empty_shard()
   merged_dev <- bind_dev_tooling(prior_dev, dev_df)
@@ -1388,8 +1459,7 @@ run_merge <- function(io, out_dir, parts_dir) {
   message(sprintf("ai merge: %d dev-tooling rows (%d incoming across %d shard(s))",
                   nrow(merged_dev), nrow(dev_df), length(dev_parts)))
 
-  fail_list <- lapply(dev_parts, read_scan_failures)
-  all_fails <- if (length(fail_list)) do.call(rbind, fail_list) else .fetch_failed_frame()
+  all_fails <- .ai_bind_like(.fetch_failed_frame(), lapply(dev_parts, read_scan_failures))
   # The share counts GitHub reads against the GitHub roster; a GitLab fault never stops GitHub data.
   gitlab <- grepl("^gitlab-", all_fails$query)
   fails <- all_fails[!gitlab, , drop = FALSE]

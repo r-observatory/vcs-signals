@@ -566,6 +566,144 @@ test_that("after the merge a repository on a host without the message search rea
   expect_setequal(gla_pub(io, "vcs_dev_tooling")$repo_id, c("github.com/o/r", "gitlab.com/o/a", "git.sc.uni-leipzig.de/o/b"))
 })
 
+# ---- broken GitLab partials ------------------------------------------------------
+gla_sql <- function(path, sql) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con))
+  DBI::dbExecute(con, sql)
+}
+# Sound GitLab partials of each kind for gitlab.com/o/a.
+gla_good <- list(
+  cheap = function(path) write_cheap_partial(path, list(
+    flagged = data.frame(repo_id = "gitlab.com/o/a", owner = "o", name = "a", node_id = "gitlab:gitlab.com:1", is_fork = 0L,
+                         parent = NA_character_, pr_onset_date = NA_character_, stringsAsFactors = FALSE),
+    evidence = cbind(repo_id = "gitlab.com/o/a", .ai_found("claude", "D", "CLAUDE.md",
+                                                           onset = paste0(format(Sys.Date()), "T23:59:59Z"))))),
+  dev = function(path) write_dev_tooling_partial(path, gla_dev_row("gitlab.com/o/a", format(Sys.Date()))),
+  shard = function(path) export_ai_shard(path, .ai_bind_like(.ai_empty_signals(), list(data.frame(
+    repo_id = "gitlab.com/o/a", tool = "claude", first_seen_date = "2026-01-02T10:00:00Z", first_seen_censored = 0L,
+    evidence_tiers = "D", markers = "CLAUDE.md", authored = 0L, last_confirmed_date = format(Sys.Date()),
+    stringsAsFactors = FALSE)))))
+gla_gl_file <- c(cheap = "vcs-ai-cheap-gitlab.db", dev = "vcs-dev-tooling-gitlab.db", shard = "vcs-ai-shard-gitlab.db")
+# Ways a GitLab partial comes out broken: not a database, cut short, a key left NULL, text where a number belongs.
+gla_broken <- list(
+  garbage = function(path, kind) writeLines("not a database at all", path),
+  truncated = function(path, kind) {
+    gla_good[[kind]](path)
+    b <- readBin(path, "raw", file.size(path))
+    writeBin(b[seq_len(length(b) %/% 2)], path)
+  },
+  `NULL node_id` = function(path, kind) { gla_good$cheap(path); gla_sql(path, "UPDATE flagged SET node_id = NULL") },
+  `NULL rule_key` = function(path, kind) {
+    gla_good$cheap(path)
+    gla_sql(path, paste("INSERT INTO search_log (repo_id, rule_key, rule_rev, ruleset_version, asked_on, outcome,",
+                        "total_count, source, mode) VALUES ('gitlab.com/o/a', NULL, 1, '2026-09-27', '2026-10-18', 'hit',",
+                        "1, 'search', 'replace')"))
+  },
+  `text onset_censored` = function(path, kind) { gla_good$cheap(path); gla_sql(path, "UPDATE evidence SET onset_censored = 'x'") })
+# GitHub parts, with each GitLab partial sound except `broken`, which `case` breaks.
+gla_mixed_parts <- function(broken = NULL, case = NULL) {
+  parts <- gla_github_parts(withr::local_tempdir(.local_envir = parent.frame()))
+  for (kind in names(gla_gl_file)) {
+    path <- file.path(parts, gla_gl_file[[kind]])
+    if (identical(kind, broken)) gla_broken[[case]](path, kind) else gla_good[[kind]](path)
+  }
+  parts
+}
+gla_gate <- function(parts) {
+  out <- tempfile("gate_")
+  msgs <- testthat::capture_messages(run_gate(list(download = function(pattern, dir) FALSE,
+                                                   release_exists = function() FALSE), out, parts, full = FALSE))
+  list(flagged = read_flagged(file.path(out, "vcs-ai-flagged-roster.db"))$flagged$repo_id, msgs = msgs)
+}
+gla_merge <- function(parts, io = gla_release()) {
+  got <- new.env()
+  utils::capture.output(msgs <- testthat::capture_messages(tryCatch(run_merge(io, tempfile("m_"), parts),
+    error = function(e) got$err <- conditionMessage(e))))
+  list(io = io, err = got$err, msgs = msgs)
+}
+gla_warned <- function(msgs, file) grep(sprintf("^::warning::%s left out: ", file), msgs, value = TRUE)
+
+test_that("the gate leaves out a broken GitLab partial with a warning and still plans the GitHub repositories", {
+  sound <- gla_gate(gla_mixed_parts())
+  expect_setequal(sound$flagged, c("github.com/o/r", "gitlab.com/o/a"))
+  expect_false(any(grepl("::warning::", sound$msgs, fixed = TRUE)))
+  for (case in c("garbage", "truncated", "NULL node_id", "text onset_censored")) {
+    run <- gla_gate(gla_mixed_parts("cheap", case))
+    expect_identical(run$flagged, "github.com/o/r", info = case)
+    expect_length(gla_warned(run$msgs, "vcs-ai-cheap-gitlab.db"), 1L)
+  }
+  # A GitLab table the gate does not fold does not cost it the partial.
+  expect_setequal(gla_gate(gla_mixed_parts("cheap", "NULL rule_key"))$flagged, c("github.com/o/r", "gitlab.com/o/a"))
+})
+
+test_that("the merge leaves out a broken GitLab partial with a warning and still publishes the GitHub rows", {
+  sound <- gla_merge(gla_mixed_parts())
+  expect_null(sound$err)
+  expect_false(any(grepl("left out:", sound$msgs, fixed = TRUE)))
+  expect_setequal(gla_pub(sound$io, "vcs_dev_tooling")$repo_id, c("github.com/o/r", "gitlab.com/o/a"))
+  expect_true("gitlab.com/o/a" %in% gla_pub(sound$io, "vcs_ai_signals")$repo_id)
+  cases <- list(c("cheap", "garbage"), c("cheap", "truncated"), c("cheap", "NULL node_id"), c("cheap", "NULL rule_key"),
+                c("cheap", "text onset_censored"), c("dev", "garbage"), c("dev", "truncated"), c("shard", "garbage"),
+                c("shard", "truncated"))
+  for (k in cases) {
+    run <- gla_merge(gla_mixed_parts(k[1], k[2]))
+    info <- paste(k, collapse = " ")
+    expect_null(run$err, info = info)
+    expect_length(gla_warned(run$msgs, gla_gl_file[[k[1]]]), 1L)
+    expect_identical(gla_pub(run$io, "vcs_ai_repo_reads")$repo_id, "github.com/o/r", info = info)
+    dev <- gla_pub(run$io, "vcs_dev_tooling")$repo_id
+    expect_true("github.com/o/r" %in% dev, info = info)
+    expect_identical("gitlab.com/o/a" %in% dev, k[1] != "dev", info = info)
+  }
+})
+
+test_that("the merge log says which GitLab partials it folded", {
+  folded <- function(run) grep("GitLab partials folded: ", run$msgs, value = TRUE)
+  expect_match(folded(gla_merge(gla_mixed_parts())), "GitLab partials folded: cheap yes, dev tooling yes, dating yes",
+               fixed = TRUE)
+  expect_match(folded(gla_merge(gla_github_parts(withr::local_tempdir()))),
+               "GitLab partials folded: cheap no, dev tooling no, dating no", fixed = TRUE)
+  expect_match(folded(gla_merge(gla_mixed_parts("cheap", "garbage"))),
+               "GitLab partials folded: cheap no, dev tooling yes, dating yes", fixed = TRUE)
+  expect_match(folded(gla_merge(gla_mixed_parts("shard", "garbage"))),
+               "GitLab partials folded: cheap yes, dev tooling yes, dating no", fixed = TRUE)
+})
+
+# ---- a capped message search -------------------------------------------------------
+# n commits crediting Claude, an hour apart from 2026-01-24 12:00 UTC.
+gla_credits <- function(n) gl_message_commits(lapply(seq_len(n), function(i) list(sha = sprintf("c%04d", i),
+  committedDate = format(as.POSIXct("2026-01-24 12:00:00", tz = "UTC") + i * 3600, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
+  message = gla_credit)))
+
+test_that("a capped GitLab search keeps the whole search's first date and the larger count", {
+  gl <- "gitlab.com/o/a"; key <- "msg.claude.coauthor"
+  # Last week a whole search read 990 credits from 2026-01-24.
+  whole <- gl_message_log_rows(match_commit_findings(gla_credits(990)), gl, "2026-10-25", complete = TRUE)
+  io <- gla_release(function(con) DBI::dbWriteTable(con, "vcs_ai_search_log", whole[names(.ai_empty_log())], append = TRUE))
+  # This week the page cap stops the search at the newest 1,000 of 1,040.
+  newest <- gla_credits(1040)[1040:41, ]
+  capped <- gl_message_log_rows(match_commit_findings(newest), gl, "2026-11-01", complete = FALSE)
+  parts <- gla_github_parts(withr::local_tempdir())
+  write_cheap_partial(file.path(parts, "vcs-ai-cheap-gitlab.db"), list(search_log = capped))
+  expect_null(gla_merge(parts, io)$err)
+  lg <- gla_pub(io, "vcs_ai_search_log")
+  row <- lg[lg$repo_id == gl & lg$rule_key == key, c("outcome", "total_count", "verified", "incomplete", "first_hit_on",
+                                                       "source", "asked_on")]
+  rownames(row) <- NULL
+  expect_identical(row, data.frame(outcome = "hit", total_count = 1000L, verified = 1L, incomplete = 1L,
+    first_hit_on = "2026-01-24", source = "search", asked_on = "2026-11-01", stringsAsFactors = FALSE))
+  # A smaller capped count keeps the larger one.
+  low <- capped[capped$rule_key == key, ]; low$total_count <- 500L
+  again <- fold_search_log(lg, low, rebuilt_repos = character(0), gitlab_repos = gl)
+  got <- again[again$repo_id == gl & again$rule_key == key, ]
+  expect_identical(list(got$total_count, got$first_hit_on), list(1000L, "2026-01-24"))
+  # A cut-off search outside GitLab replaces its row as before.
+  other <- fold_search_log(lg, low, rebuilt_repos = character(0))
+  got <- other[other$repo_id == gl & other$rule_key == key, ]
+  expect_identical(list(got$total_count, got$first_hit_on), list(500L, NA_character_))
+})
+
 # ---- dating GitLab findings over REST ---------------------------------------------
 # A flagged roster of GitLab repositories with these node ids, each with CLAUDE.md, and one dating item each.
 gla_flagged <- function(dir, repo_ids, node_ids) {
