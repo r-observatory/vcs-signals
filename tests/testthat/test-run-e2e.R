@@ -693,6 +693,9 @@ test_that("the daily run collects a Codeberg repository after GitHub, with no li
   expect_false(any(grepl("sandwich|zeileis", d$seen$gh)))
   expect_false(any(grepl("@", d$log, fixed = TRUE)))
   expect_true(any(grepl("^Codeberg: 1 located, 0 not located, 0 deferred, 0 not reached, 4 requests, lowest r 1990$", d$log)))
+  # Only the fields this repository could have filled: releases are off.
+  expect_identical(grep("^Codeberg NA by field", d$log, value = TRUE),
+                   "Codeberg NA by field: releases_total 1, last_release_at 1, last_release_tag 1")
   # No address in any table the run published.
   for (f in c("vcs-signals-recent.db", "vcs-signals-summary.db")) {
     con <- DBI::dbConnect(RSQLite::SQLite(), file.path(d$rel, f))
@@ -700,6 +703,19 @@ test_that("the daily run collects a Codeberg repository after GitHub, with no li
     DBI::dbDisconnect(con)
     expect_false(any(grepl("@", cells, fixed = TRUE)), info = f)
   }
+})
+
+test_that("a 403 from Codeberg's commit list keeps every last value of the repository, its commit date among them, and is logged", {
+  d <- .e2e_cb_first_run("cb_403")
+  expect_identical(.e2e_summary(d$rel, "sandwich")$last_commit_date, "2026-10-11T22:19:58Z")
+  routes <- .e2e_cb_routes(stars = 9L)
+  routes[["/repos/zeileis/sandwich/commits?limit=1&stat=false&verification=false&files=false"]] <- cb_answer(403L)
+  log <- capture.output(suppressMessages(run_update(.e2e_cb_io(d$rel, routes = routes), d$out, list())))
+  s <- .e2e_summary(d$rel, "sandwich")
+  expect_identical(s$last_commit_date, "2026-10-11T22:19:58Z")
+  expect_identical(s$stars, 1L)
+  expect_true(any(grepl("^Codeberg /repos/zeileis/sandwich/commits[?].*: HTTP 403, the repository is deferred$", log)))
+  expect_true(any(grepl("^Codeberg: 1 located, 0 not located, 1 deferred, 0 not reached", log)))
 })
 
 test_that("a GitHub budget below the reserve skips only GitHub, and Codeberg is still collected", {

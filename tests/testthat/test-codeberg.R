@@ -216,6 +216,23 @@ test_that("a 403 or 410 by path is an answer: the repository is not located and 
   expect_length(st$pacer$deferred(), 0L)
 })
 
+test_that("a repository deferred while asked by path is logged by repo_id with what it got", {
+  logs <- new.env()
+  logs$lines <- character(0)
+  st <- cb_test_state(log = function(m) logs$lines <- c(logs$lines, m))
+  io <- list(cb_get = cb_fake(list(
+    "/users/o/repos?limit=50&page=1" = cb_list(list()),
+    "/repos/o/s" = cb_answer(503L),
+    "/repos/o/t" = function() stop("Timeout was reached"),
+    "/repos/o/w" = cb_answer(body = list(message = "not a repository")),
+    "/repos/o/x" = cb_answer(302L, headers = c(location = "/api/v1/repos/o/y")),
+    "/repos/o/z" = cb_answer(401L))))
+  loc <- cb_locate(io, cb_repos(c("o/s", "o/t", "o/w", "o/x", "o/z")), st)
+  expect_identical(loc$deferred, paste0("codeberg.org/o/", c("s", "t", "w", "x", "z")))
+  expect_identical(logs$lines, sprintf("Codeberg codeberg.org/o/%s: deferred (%s), asked again next run", c("s", "t", "w", "x", "z"),
+                                       c("HTTP 503", "no answer", "HTTP 200, not a repository", "HTTP 302", "HTTP 401")))
+})
+
 test_that("codeberg_active_repos lists the active Codeberg rows by repo_id, with or without a node id", {
   con <- new_test_db()
   withr::defer(DBI::dbDisconnect(con))
@@ -338,6 +355,35 @@ test_that("a count list without x-total-count, a move or a body of the wrong sha
   }
 })
 
+test_that("only a 404 from the newest release and a 409 from the commit list are answers: any other 4xx fails the repository and is logged", {
+  issues <- "/repos/o/w/issues?state=closed&type=issues&limit=1"
+  pulls <- "/repos/o/w/issues?state=closed&type=pulls&limit=50&page=1"
+  latest <- "/repos/o/w/releases/latest"
+  commits <- "/repos/o/w/commits?limit=1&stat=false&verification=false&files=false"
+  cases <- list(list(commits, 403L), list(commits, 410L), list(commits, 404L), list(issues, 404L), list(issues, 403L),
+                list(issues, 409L), list(pulls, 404L), list(pulls, 410L), list(latest, 403L), list(latest, 410L),
+                list(latest, 409L))
+  for (k in cases) {
+    routes <- cb_gauge_routes("o/w")
+    routes[[k[[1]]]] <- cb_answer(k[[2]])
+    seen <- new.env()
+    logs <- new.env()
+    logs$lines <- character(0)
+    st <- cb_test_state(log = function(m) logs$lines <- c(logs$lines, m))
+    a <- cb_repo_extras(list(cb_get = cb_fake(routes, seen)), cb_obj(95L, "o/w"), st)
+    info <- paste(k[[2]], k[[1]])
+    expect_identical(a$state, "failed", info = info)
+    expect_identical(utils::tail(seen$paths, 1L), k[[1]], info = info)
+    expect_identical(logs$lines, sprintf("Codeberg %s: HTTP %d, the repository is deferred", k[[1]], k[[2]]), info = info)
+  }
+  for (k in list(list(latest, 404L), list(commits, 409L))) {
+    routes <- cb_gauge_routes("o/w")
+    routes[[k[[1]]]] <- cb_answer(k[[2]])
+    a <- cb_repo_extras(list(cb_get = cb_fake(routes)), cb_obj(95L, "o/w"), cb_test_state())
+    expect_identical(a$state, "ok", info = k[[1]])
+  }
+})
+
 test_that("a migrated or mirrored repository has no created date, topics stop at 20, and a missing field is NA, never 0", {
   expect_true(is.na(cb_gauge_row(cb_obj(101L, "o/m", original_url = "https://github.com/o/m"))$created_at))
   expect_true(is.na(cb_gauge_row(cb_obj(102L, "o/n", mirror = TRUE))$created_at))
@@ -347,6 +393,9 @@ test_that("a migrated or mirrored repository has no created date, topics stop at
   row <- cb_gauge_row(gone)
   expect_true(is.na(row$stars)); expect_true(is.na(row$releases_total))
   expect_identical(cb_na_counts(row)[["stars"]], 1L)
+  # The columns Codeberg never fills are left out, so a jump in one that it fills shows.
+  never <- c("owner_login", "owner_type", "owner_node_id", "license", "pushed_at")
+  expect_identical(names(cb_na_counts(row)), setdiff(names(rows_df_empty_gauges()), never))
 })
 
 test_that("a created date is kept only when original_url and mirror are readable and say the repository was not moved", {
@@ -368,15 +417,21 @@ test_that("topics that are not a JSON array of strings read NA, never one topic"
   expect_identical(cb_gauge_row(cb_obj(131L, "o/r"))$topics, "r,stats")
 })
 
-test_that("cb_collect_gauges leaves a repository with any failed call out of the snapshot, and keeps one whose unit answered 404", {
-  routes <- c(cb_gauge_routes("o/a", latest = cb_answer(500L)), cb_gauge_routes("o/b"))
-  routes[["/repos/o/b/issues?state=closed&type=issues&limit=1"]] <- cb_answer(404L)
-  g <- cb_collect_gauges(list(cb_get = cb_fake(routes)), cb_objects(cb_obj(71L, "o/a"), cb_obj(72L, "o/b")), cb_test_state(),
-                         today = as.Date("2026-10-20"))
+test_that("cb_collect_gauges leaves a repository with a failed call or a 403 out of the snapshot, and keeps one whose newest release answered 404", {
+  routes <- c(cb_gauge_routes("o/a", latest = cb_answer(500L)), cb_gauge_routes("o/b", latest = cb_answer(404L)),
+              cb_gauge_routes("o/c", commit = cb_answer(403L)))
+  logs <- new.env()
+  logs$lines <- character(0)
+  st <- cb_test_state(log = function(m) logs$lines <- c(logs$lines, m))
+  g <- cb_collect_gauges(list(cb_get = cb_fake(routes)), cb_objects(cb_obj(71L, "o/a"), cb_obj(72L, "o/b"), cb_obj(73L, "o/c")),
+                         st, today = as.Date("2026-10-20"))
   expect_identical(g$snapshot$node_id, "codeberg:codeberg.org:72")
-  expect_true(is.na(g$snapshot$issues_closed))
-  expect_identical(g$deferred, "codeberg:codeberg.org:71")
+  expect_identical(g$snapshot$issues_closed, 1L)
+  expect_true(is.na(g$snapshot$last_release_tag)); expect_true(is.na(g$snapshot$last_release_at))
+  expect_setequal(g$deferred, c("codeberg:codeberg.org:71", "codeberg:codeberg.org:73"))
   expect_identical(c(g$unreached, g$unresolvable), character(0))
+  expect_true("Codeberg /repos/o/c/commits?limit=1&stat=false&verification=false&files=false: HTTP 403, the repository is deferred" %in%
+              logs$lines)
 })
 
 test_that("repositories are visited in rotate_by_day order, and the deadline leaves the rest unreached", {
