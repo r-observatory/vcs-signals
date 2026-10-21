@@ -226,6 +226,23 @@ test_that("a malformed GitLab shard is logged and skipped, and the GitHub shards
   expect_identical(.gll_read(rel, "SELECT COUNT(*) n FROM gitlab_license")$n, 0L)
 })
 
+test_that("a malformed Codeberg shard is logged and skipped, and the GitHub shards still merge and publish", {
+  rel <- tempfile("gll_rel_"); dir.create(rel)
+  quiet <- function(expr) invisible(suppressMessages(capture.output(expr)))
+  quiet(run_update(.gll_io(rel), tempfile("gll_out_"), list(force_full = TRUE)))
+  p <- tempfile("gll_bad_"); dir.create(p)
+  export_snapshot_shard(file.path(p, "vcs-signals-shard-0.db"), data.frame(
+    repo_id = "github.com/tidyverse/ggplot2", commits_total = 4321L, contributors_total = 9L,
+    top_contributor_commits = 99L, stringsAsFactors = FALSE))
+  writeLines(strrep("not a database ", 200), file.path(p, CODEBERG_SHARD_DB))
+  msgs <- testthat::capture_messages(.gll_weekly$run_merge(.gll_io(rel), tempfile("gll_wk_"), p))
+  expect_true(any(grepl("Codeberg shard vcs-signals-shard-codeberg.db not read, skipped", msgs, fixed = TRUE)))
+  s <- .gll_read(rel, "SELECT commits_total, contributors_total FROM vcs_signals_summary WHERE package = 'ggplot2'")
+  expect_identical(s$commits_total, 4321L)
+  expect_identical(s$contributors_total, 9L)
+  expect_identical(.gll_read(rel, "SELECT COUNT(*) n FROM gitlab_license")$n, 0L)
+})
+
 # A release as a publish by code older than the table leaves it: the recent shard says since when
 # the licences were published but carries none, the summary has no table, and `prev` is what the
 # previous summary holds.

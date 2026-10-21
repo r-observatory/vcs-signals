@@ -1,11 +1,24 @@
-# scripts/codeberg_clone.R - the weekly Codeberg pass: commit totals and commit identity counts from a
-# treeless bare clone of each repository's default branch. The clone is the io member
-# io$cb_clone(url, dir), returning list(status, output); local git commands are never io members.
-# Uses cb_run_state, cb_pacer, .cb_log and .cb_close (codeberg.R), .gl_at, .gl_chr and .gl_int
-# (gitlab.R) and .gl_redact (gitlab_weekly.R).
+# scripts/codeberg_clone.R - the weekly Codeberg pass (weekly.R fetch-codeberg): commit totals and commit
+# identity counts from a treeless bare clone of each repository's default branch. The clone is the io
+# member io$cb_clone(url, dir), returning list(status, output); local git commands are never io members.
+# Uses cb_run_state, cb_pacer, cb_locate, .cb_log, .cb_close and .cb_stop_why (codeberg.R), .gl_at,
+# .gl_chr and .gl_int (gitlab.R), and .gl_redact and .gl_load_roster (gitlab_weekly.R).
 
 CODEBERG_ROSTER_DB <- "vcs-signals-roster-codeberg.db"
 CODEBERG_SHARD_DB <- "vcs-signals-shard-codeberg.db"
+
+#' The roster fetch-codeberg reads, as weekly.R's enumerate writes it.
+write_codeberg_roster <- function(path, roster_df) {
+  if (file.exists(path)) unlink(path)
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  DBI::dbExecute(con, "PRAGMA journal_mode=DELETE")
+  DBI::dbExecute(con, "CREATE TABLE roster (repo_id TEXT PRIMARY KEY, node_id TEXT NOT NULL,
+    owner TEXT NOT NULL, name TEXT NOT NULL)")
+  if (nrow(roster_df) > 0)
+    DBI::dbWriteTable(con, "roster", roster_df[c("repo_id", "node_id", "owner", "name")], append = TRUE)
+  invisible(path)
+}
 
 # Every git command runs with no prompt, no lazy fetch and no config file.
 .CB_GIT_ENV <- c("GIT_TERMINAL_PROMPT=0", "GIT_NO_LAZY_FETCH=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
@@ -106,4 +119,90 @@ cb_clone_counts <- function(io, obj, st, scratch) {
     return(.cb_clone_result("failed"))
   }
   .cb_clone_result("ok", total, cb_identity_counts(who$lines))
+}
+
+# Clones the located repositories in roster order, into acc by roster row, until the deadline (checked
+# before each clone) or until Codeberg stops for the run. A fault in one repository leaves it NA.
+.cb_clone_all <- function(io, roster, objects, ids, st, scratch, deadline, now, acc) {
+  todo <- which(!is.na(ids))
+  for (i in todo) if (isTRUE(.gl_at(objects[[ids[i]]], "empty"))) acc$state[i] <- "empty"
+  todo <- todo[is.na(acc$state[todo])]
+  for (k in seq_along(todo)) {
+    i <- todo[k]
+    left <- length(todo) - k + 1L
+    if (now() >= deadline) {
+      .cb_log(st, sprintf("Codeberg: the deadline passed, %d repositories left for the next run", left))
+      break
+    }
+    r <- tryCatch(cb_clone_counts(io, objects[[ids[i]]], st, scratch), error = function(e) {
+      .cb_log(st, sprintf("Codeberg %s: not counted, stopped by a fault: %s", roster$repo_id[i], .gl_redact(conditionMessage(e))))
+      .cb_clone_result("failed")
+    })
+    if (identical(r$state, "stopped")) {
+      .cb_log(st, sprintf("Codeberg: %s, %d repositories left for the next run", .cb_stop_why(st), left))
+      break
+    }
+    acc$state[i] <- r$state
+    acc$commits[i] <- r$commits_total
+    acc$contributors[i] <- r$contributors_total
+    acc$top[i] <- r$top_contributor_commits
+  }
+  invisible(NULL)
+}
+
+#' The weekly Codeberg job. Locates the roster's repositories, then clones each located one that is not
+#' empty, in repo_id order, until the deadline or until Codeberg stops for the run. A fault while
+#' locating, while cloning or in one repository is logged and leaves NA where nothing was read, which
+#' the merge skips. Always writes the snapshot shard with every roster repository, and removes the
+#' scratch root on every path. Keeps no state. Returns the shard path.
+run_fetch_codeberg <- function(io, out_dir, roster_path, now = function() as.numeric(Sys.time()), sleep = Sys.sleep,
+                               deadline_min = CODEBERG_WEEKLY_DEADLINE_MIN, scratch = tempfile("cb-clones-"),
+                               log = message) {
+  dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+  dir.create(scratch, showWarnings = FALSE, recursive = TRUE)
+  on.exit(unlink(scratch, recursive = TRUE, force = TRUE), add = TRUE)
+  start <- now()
+  deadline <- start + 60 * deadline_min
+  st <- cb_run_state(cb_pacer(now, sleep, run_budget = CODEBERG_WEEKLY_MAX_REQUESTS), log)
+
+  roster <- tryCatch({
+    if (!file.exists(roster_path)) stop("no roster file")
+    .gl_load_roster(roster_path)[c("repo_id", "node_id", "owner", "name")]
+  }, error = function(e) {
+    log(sprintf("::warning::Codeberg: the roster could not be read, so no repository is read this run: %s",
+                .gl_redact(conditionMessage(e))))
+    data.frame(repo_id = character(), node_id = character(), owner = character(), name = character(),
+               stringsAsFactors = FALSE)
+  })
+  roster <- roster[order(roster$repo_id, method = "radix"), , drop = FALSE]
+  n <- nrow(roster)
+  log(sprintf("weekly fetch codeberg: %d repos", n))
+  v <- .cb_git(system2, "--version", stderr = TRUE, timeout = CODEBERG_LOCAL_GIT_TIMEOUT_S)
+  log(if (identical(v$status, 0L)) paste("weekly fetch codeberg:", .gl_redact(paste(v$output, collapse = " ")))
+      else sprintf("weekly fetch codeberg: git --version failed (exit %d)", v$status))
+
+  acc <- new.env(parent = emptyenv())
+  acc$state <- rep(NA_character_, n)
+  acc$commits <- acc$contributors <- acc$top <- rep(NA_integer_, n)
+  loc <- tryCatch(cb_locate(io, roster, st, deadline = deadline, now = now), error = function(e) {
+    log(sprintf("Codeberg: locating stopped by a fault, no repository is read this run: %s", .gl_redact(conditionMessage(e))))
+    NULL
+  })
+  if (!is.null(loc))
+    tryCatch(.cb_clone_all(io, roster, loc$objects, loc$found$node_id[match(roster$repo_id, loc$found$repo_id)],
+                           st, scratch, deadline, now, acc),
+             error = function(e) log(sprintf("Codeberg: cloning stopped by a fault, the repositories not read keep their last values: %s",
+                                             .gl_redact(conditionMessage(e)))))
+
+  rows <- data.frame(repo_id = roster$repo_id, commits_total = acc$commits, contributors_total = acc$contributors,
+                     top_contributor_commits = acc$top, top_contributor_bot = rep(NA_integer_, n), stringsAsFactors = FALSE)
+  shard_path <- file.path(out_dir, CODEBERG_SHARD_DB)
+  export_snapshot_shard(shard_path, rows)
+  count <- function(s) sum(acc$state %in% s)
+  lost <- if (is.null(loc)) 0L else sum(roster$repo_id %in% loc$not_located)
+  log(sprintf(paste("weekly fetch codeberg: %d read, %d failed, %d empty, %d not located, %d not reached of %d repos,",
+                    "%d requests and clone slots, lowest r %s, %d s"),
+              count("ok"), count("failed"), count("empty"), lost, n - count(c("ok", "failed", "empty")) - lost, n,
+              st$asked, format(st$low_r), as.integer(round(now() - start))))
+  shard_path
 }

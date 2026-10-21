@@ -1,4 +1,10 @@
-# The Codeberg clone readers (scripts/codeberg_clone.R), over the fixture repository in helper-codeberg-git.R.
+# The Codeberg clone readers and the weekly job (scripts/codeberg_clone.R), over the fixture repository in
+# helper-codeberg-git.R, and the Codeberg roster (weekly.R). weekly.R is sourced from the repo root.
+if (!exists("run_weekly_enumerate")) {
+  .cbw_wd <- setwd(.repo_root)
+  source(file.path(.repo_root, "scripts", "weekly.R"))
+  setwd(.cbw_wd)
+}
 
 test_that("identity counts are distinct name and address pairs and the top count, and nothing else is returned", {
   lines <- c("Ann\x1fann@example.invalid", "Ann\x1fann@example.invalid", "Ann\x1fann.b@example.invalid", "Bo\x1fbo@example.invalid")
@@ -178,4 +184,203 @@ test_that("a failed clone's log line carries no address", {
   cb_clone_counts(bad, cb_obj(69L, "o/r"), st, withr::local_tempdir())
   expect_gt(length(lines$v), 0L)
   expect_false(any(grepl("@", lines$v, fixed = TRUE)))
+})
+
+# ---- the weekly job ----------------------------------------------------------------
+cbw_roster <- function(dir, slugs, ids) {
+  path <- file.path(dir, CODEBERG_ROSTER_DB)
+  write_codeberg_roster(path, data.frame(repo_id = paste0("codeberg.org/", tolower(slugs)), node_id = ids,
+    owner = sub("/.*$", "", slugs), name = sub("^.*/", "", slugs), stringsAsFactors = FALSE))
+  path
+}
+cbw_io <- function(clone = cb_local_clone(cb_fixture_repo())) list(
+  cb_get = cb_fake(list("/users/o/repos?limit=50&page=1" = cb_list(list(cb_obj(1L, "o/good"), cb_obj(3L, "o/bad"))))),
+  cb_clone = function(url, dir) if (grepl("/o/bad\\.git$", url)) list(status = 128L, output = "fatal: early EOF") else clone(url, dir))
+cbw_snapshot <- function(out) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, CODEBERG_SHARD_DB)); on.exit(DBI::dbDisconnect(con))
+  DBI::dbReadTable(con, "snapshot")
+}
+cbw_logger <- function() {
+  e <- new.env(); e$v <- character(0)
+  list(log = function(m) e$v <- c(e$v, m), lines = function() e$v)
+}
+# A summary as the release holds it: data.table on GitHub, with stars, and these repos rows.
+cbw_summary <- function(path, rows) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), path); on.exit(DBI::dbDisconnect(con))
+  ensure_series_schema(con); ensure_repo_schema(con)
+  DBI::dbExecute(con, "INSERT INTO vcs_signals_summary (package, origin, repo_id, stars, forks, releases_total) VALUES
+    ('data.table', 'cran', 'github.com/rdatatable/data.table', 3400, 960, 9)")
+  DBI::dbExecute(con, paste("INSERT INTO repos VALUES", paste(rows, collapse = ",\n")))
+  path
+}
+# One repos row, owner and name taken from the repo_id.
+cbw_repo <- function(id, node, host, status = "active") sprintf(
+  "('%s', %s, '%s', '%s', '%s', '%s', '%s', 1, 1, '2026-01-01', '2026-10-01', '%s')",
+  id, if (is.na(node)) "NULL" else sprintf("'%s'", node), host, sub("/.*$", "", id),
+  sub("^[^/]*/([^/]*)/.*$", "\\1", id), sub("^.*/", "", id), sub("^[^/]*/", "", id), status)
+cbw_download <- function(src) list(download = function(name, dir) file.copy(src, file.path(dir, name), overwrite = TRUE))
+
+test_that("enumerate writes a Codeberg roster of the active Codeberg repositories with a Codeberg id", {
+  src <- cbw_summary(withr::local_tempfile(fileext = ".db"), c(
+    cbw_repo("github.com/rdatatable/data.table", "R_dt", "github"),
+    cbw_repo("codeberg.org/zeileis/zoo", "codeberg:codeberg.org:2277662", "codeberg"),
+    cbw_repo("codeberg.org/someone/new", NA, "codeberg"),
+    cbw_repo("codeberg.org/someone/gone", "codeberg:codeberg.org:9", "codeberg", "retired"),
+    cbw_repo("codeberg.org/someone/odd", "gitlab:gitlab.com:5", "codeberg")))
+  out <- withr::local_tempdir()
+  suppressMessages(run_weekly_enumerate(cbw_download(src), out))
+  cb <- load_roster(file.path(out, CODEBERG_ROSTER_DB))
+  expect_identical(names(cb), c("repo_id", "node_id", "owner", "name"))
+  expect_identical(cb$repo_id, "codeberg.org/zeileis/zoo")
+  expect_identical(c(cb$node_id, cb$owner, cb$name), c("codeberg:codeberg.org:2277662", "zeileis", "zoo"))
+  expect_identical(load_roster(file.path(out, "vcs-signals-roster.db"))$repo_id, "github.com/rdatatable/data.table")
+})
+
+test_that("a Codeberg roster that cannot be written is logged, and the GitHub and GitLab rosters are still written", {
+  src <- cbw_summary(withr::local_tempfile(fileext = ".db"), c(
+    cbw_repo("github.com/rdatatable/data.table", "R_dt", "github"),
+    cbw_repo("gitlab.com/g/p", "gitlab:gitlab.com:5", "gitlab"),
+    cbw_repo("codeberg.org/zeileis/zoo", "codeberg:codeberg.org:2277662", "codeberg")))
+  out <- withr::local_tempdir()
+  # A directory where the roster goes makes writing it fail.
+  dir.create(file.path(out, CODEBERG_ROSTER_DB))
+  msgs <- testthat::capture_messages(run_weekly_enumerate(cbw_download(src), out))
+  expect_true(any(grepl("enumerate: no codeberg roster", msgs, fixed = TRUE)))
+  expect_identical(load_roster(file.path(out, "vcs-signals-roster.db"))$repo_id, "github.com/rdatatable/data.table")
+  expect_identical(load_roster(file.path(out, "vcs-signals-roster-gitlab.db"))$repo_id, "gitlab.com/g/p")
+})
+
+test_that("the weekly job reads each located repository and leaves NA where a clone failed or nothing was found", {
+  dir <- withr::local_tempdir(); scratch <- file.path(dir, "scratch")
+  roster <- cbw_roster(dir, c("o/good", "o/bad", "o/lost"), sprintf("codeberg:codeberg.org:%d", c(1L, 3L, 5L)))
+  clock <- cb_clock()
+  suppressMessages(run_fetch_codeberg(cbw_io(), file.path(dir, "out"), roster, now = clock$now, sleep = clock$sleep, scratch = scratch))
+  s <- cbw_snapshot(file.path(dir, "out"))
+  expect_identical(s$repo_id, c("codeberg.org/o/bad", "codeberg.org/o/good", "codeberg.org/o/lost"))
+  expect_identical(s$commits_total, c(NA, 6L, NA))
+  expect_identical(s$contributors_total, c(NA, 4L, NA))
+  expect_identical(s$top_contributor_commits, c(NA, 3L, NA))
+  expect_true(all(is.na(s$top_contributor_bot)))
+  expect_false(dir.exists(scratch))
+})
+
+test_that("a failing clone or a fault outside any answer still writes the shard, and a fault in one clone loses only that repository", {
+  dir <- withr::local_tempdir()
+  a <- file.path(dir, "a"); dir.create(a)
+  suppressMessages(run_fetch_codeberg(cbw_io(), file.path(a, "out"), cbw_roster(a, "o/bad", "codeberg:codeberg.org:3"),
+                                      now = cb_clock()$now, sleep = function(s) NULL))
+  s <- cbw_snapshot(file.path(a, "out"))
+  expect_identical(s$repo_id, "codeberg.org/o/bad")
+  expect_true(is.na(s$commits_total))
+
+  # The pause before the second listing throws, outside any answer, and locating stops.
+  b <- file.path(dir, "b"); dir.create(b); scratch <- file.path(b, "scratch")
+  lg <- cbw_logger()
+  run_fetch_codeberg(cbw_io(), file.path(b, "out"), cbw_roster(b, c("o/good", "p/x"), sprintf("codeberg:codeberg.org:%d", 1:2)),
+                     now = cb_clock()$now, sleep = function(s) stop("simulated pause fault"), scratch = scratch, log = lg$log)
+  s <- cbw_snapshot(file.path(b, "out"))
+  expect_identical(s$repo_id, c("codeberg.org/o/good", "codeberg.org/p/x"))
+  expect_true(all(is.na(s$commits_total)))
+  expect_true(any(grepl("locating stopped by a fault", lg$lines(), fixed = TRUE)))
+  expect_false(dir.exists(scratch))
+
+  # The pause before o/next's clone throws; o/good and o/zed are still read.
+  d <- file.path(dir, "d"); dir.create(d)
+  clock <- cb_clock(); arm <- new.env(); arm$on <- FALSE
+  clone <- cb_local_clone(cb_fixture_repo())
+  io <- list(cb_get = cb_fake(list("/users/o/repos?limit=50&page=1" =
+               cb_list(list(cb_obj(1L, "o/good"), cb_obj(2L, "o/next"), cb_obj(4L, "o/zed"))))),
+             cb_clone = function(url, dir) { r <- clone(url, dir); arm$on <- grepl("/o/good\\.git$", url); r })
+  sleep <- function(s) { if (arm$on) { arm$on <- FALSE; stop("simulated pause fault") }; clock$sleep(s) }
+  lg <- cbw_logger()
+  run_fetch_codeberg(io, file.path(d, "out"), cbw_roster(d, c("o/good", "o/next", "o/zed"), sprintf("codeberg:codeberg.org:%d", c(1L, 2L, 4L))),
+                     now = clock$now, sleep = sleep, log = lg$log)
+  expect_identical(cbw_snapshot(file.path(d, "out"))$commits_total, c(6L, NA, 6L))
+  expect_true(any(grepl("o/next", lg$lines(), fixed = TRUE) & grepl("fault", lg$lines(), fixed = TRUE)))
+})
+
+test_that("past the deadline no clone starts, and those repositories read NA", {
+  dir <- withr::local_tempdir()
+  roster <- cbw_roster(dir, c("o/good", "o/bad"), sprintf("codeberg:codeberg.org:%d", c(1L, 3L)))
+  clock <- cb_clock()
+  io <- cbw_io(); inner <- io$cb_clone
+  started <- new.env(); started$urls <- character(0)
+  io$cb_clone <- function(url, dir) { started$urls <- c(started$urls, url); clock$env$t <- clock$env$t + 600; inner(url, dir) }
+  suppressMessages(run_fetch_codeberg(io, file.path(dir, "out"), roster, now = clock$now, sleep = clock$sleep, deadline_min = 5))
+  expect_identical(sum(!is.na(cbw_snapshot(file.path(dir, "out"))$commits_total)), 0L)
+  expect_identical(started$urls, "https://codeberg.org/o/bad.git")
+})
+
+test_that("one line gives git's version, and the summary line counts each outcome, the requests with clone slots and the lowest r", {
+  dir <- withr::local_tempdir()
+  roster <- cbw_roster(dir, c("o/bad", "o/empty", "o/good", "o/lost", "o/zed"),
+                       sprintf("codeberg:codeberg.org:%d", c(3L, 7L, 1L, 5L, 9L)))
+  clock <- cb_clock()
+  clone <- cb_local_clone(cb_fixture_repo())
+  io <- list(
+    cb_get = cb_fake(list("/users/o/repos?limit=50&page=1" = cb_list(list(cb_obj(1L, "o/good"), cb_obj(3L, "o/bad"),
+      cb_obj(7L, "o/empty", empty = TRUE), cb_obj(9L, "o/zed")), r = 1500L))),
+    cb_clone = function(url, dir) {
+      if (grepl("/o/bad\\.git$", url)) return(list(status = 128L, output = "fatal: early EOF"))
+      r <- clone(url, dir)
+      if (grepl("/o/good\\.git$", url)) clock$env$t <- clock$env$t + 600
+      r
+    })
+  lg <- cbw_logger()
+  run_fetch_codeberg(io, file.path(dir, "out"), roster, now = clock$now, sleep = clock$sleep, deadline_min = 5, log = lg$log)
+  lines <- lg$lines()
+  expect_identical(sum(grepl("^weekly fetch codeberg: git version [0-9]", lines)), 1L)
+  expect_identical(lines[length(lines)], paste(
+    "weekly fetch codeberg: 1 read, 1 failed, 1 empty, 1 not located, 1 not reached of 5 repos,",
+    "8 requests and clone slots, lowest r 1500, 607 s"))
+})
+
+test_that("the Codeberg shard's snapshot table has the GitHub shard's columns", {
+  dir <- withr::local_tempdir()
+  write_roster(file.path(dir, "vcs-signals-roster.db"), data.frame(repo_id = "github.com/a/ok", owner = "a",
+    name = "ok", stars = 1L, done = 0L, stringsAsFactors = FALSE))
+  gh_io <- list(graphql = function(query) list(data = list(r0 = list(defaultBranchRef = list(target = list(history = list(totalCount = 100)))))),
+                contributors = function(owner, name) list(count = 7L, top_commits = 5L, top_type = "User"))
+  gh <- suppressMessages(run_fetch_shard(gh_io, file.path(dir, "gh"), file.path(dir, "vcs-signals-roster.db"), 0, 1,
+                                         commit_delay = 0, contributor_delay = 0))
+  roster <- cbw_roster(dir, "o/good", "codeberg:codeberg.org:1")
+  cb <- suppressMessages(run_fetch_codeberg(cbw_io(), file.path(dir, "cb"), roster, now = cb_clock()$now, sleep = function(s) NULL))
+  schema <- function(p) { con <- DBI::dbConnect(RSQLite::SQLite(), p); on.exit(DBI::dbDisconnect(con))
+    DBI::dbGetQuery(con, "SELECT sql FROM sqlite_master WHERE name = 'snapshot'")$sql }
+  expect_identical(schema(cb), schema(gh))
+  snap <- cbw_snapshot(file.path(dir, "cb"))
+  for (m in c("top_contributor_bot", "median_days_to_close_issue", "median_days_to_close_pr", "median_open_issue_age_days"))
+    expect_true(is.na(snap[[m]]), info = m)
+})
+
+test_that("no @ reaches any table the job writes or any line it logs", {
+  dir <- withr::local_tempdir()
+  roster <- cbw_roster(dir, c("o/good", "o/bad"), sprintf("codeberg:codeberg.org:%d", c(1L, 3L)))
+  io <- cbw_io()
+  io$cb_clone <- function(url, dir) if (grepl("bad", url)) list(status = 128L, output = "fatal: by Ann <ann@example.invalid>")
+                                    else cb_local_clone(cb_fixture_repo())(url, dir)
+  lg <- cbw_logger()
+  msgs <- testthat::capture_messages(run_fetch_codeberg(io, file.path(dir, "out"), roster, now = cb_clock()$now,
+    sleep = function(s) NULL, log = lg$log))
+  expect_gt(length(lg$lines()), 0L)
+  expect_false(any(grepl("@", c(lg$lines(), msgs), fixed = TRUE)))
+  dbs <- c(roster, list.files(file.path(dir, "out"), pattern = "\\.db$", full.names = TRUE))
+  expect_length(dbs, 2L)
+  for (db in dbs) {
+    con <- DBI::dbConnect(RSQLite::SQLite(), db)
+    for (t in DBI::dbListTables(con))
+      expect_false(any(grepl("@", unlist(lapply(DBI::dbReadTable(con, t), as.character)), fixed = TRUE)), info = t)
+    DBI::dbDisconnect(con)
+  }
+})
+
+test_that("main runs fetch-codeberg on the Codeberg roster in VCS_ROSTER, and the usage line names it", {
+  dir <- withr::local_tempdir()
+  cbw_roster(dir, "o/good", "codeberg:codeberg.org:1")
+  withr::local_envvar(VCS_ROSTER = dir)
+  out <- file.path(dir, "out")
+  # The listing fails, so nothing more is asked and no pause is taken.
+  suppressMessages(main("fetch-codeberg", out, io = list(cb_get = function(path) stop("offline"))))
+  expect_identical(cbw_snapshot(out)$repo_id, "codeberg.org/o/good")
+  expect_error(main("no-such-mode", out, io = list()), "fetch-codeberg", fixed = TRUE)
 })

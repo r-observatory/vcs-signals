@@ -51,6 +51,7 @@ jobs:
           path: |
             out/vcs-signals-roster.db
             out/vcs-signals-roster-gitlab.db
+            out/vcs-signals-roster-codeberg.db
 
   fetch:
     needs: enumerate
@@ -136,9 +137,41 @@ jobs:
           path: out/vcs-signals-gitlab-state.db
           if-no-files-found: ignore
 
+  fetch-codeberg:
+    needs: enumerate
+    runs-on: ubuntu-latest
+    # The pass stops itself at CODEBERG_WEEKLY_DEADLINE_MIN (100), so the shard is written inside this cap.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: |
+            any::DBI
+            any::RSQLite
+            any::jsonlite
+            any::testthat
+      - uses: actions/download-artifact@v8
+        with:
+          name: roster
+          path: roster
+      - name: Collect Codeberg commit totals and commit identities
+        env:
+          VCS_OUT: out
+          VCS_ROSTER: roster
+        run: Rscript scripts/weekly.R fetch-codeberg
+      - uses: actions/upload-artifact@v7
+        with:
+          name: shard-codeberg
+          path: out/vcs-signals-shard-codeberg.db
+          if-no-files-found: ignore
+
   merge:
-    needs: [fetch, fetch-gitlab]
-    # A failed or cancelled GitLab job never holds back the GitHub publish.
+    needs: [fetch, fetch-gitlab, fetch-codeberg]
+    # A failed or cancelled GitLab or Codeberg job never holds back the GitHub publish.
     if: ${{ !cancelled() && needs.fetch.result == 'success' }}
     # One lock for every job that seeds from release "current" and later
     # uploads whole tables back over it: update, and the merge in weekly,
