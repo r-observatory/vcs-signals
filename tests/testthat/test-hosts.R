@@ -72,3 +72,29 @@ test_that("a gitlab repository never reaches the GitHub collectors, even when gi
   expect_true(length(seen$queries) > 0)
   expect_false(any(grepl("outbreaks|linelist", seen$queries)))
 })
+
+test_that("a bitbucket repository never reaches the GitHub collectors", {
+  out <- tempfile("out"); dir.create(out)
+  rel <- tempfile("rel"); dir.create(rel)
+  seen <- new.env()
+  seen$queries <- character(0)
+  io <- local_release_io(rel,
+    acquire = function() data.frame(package = c("ggplot2", "depower"), origin = "cran",
+      url_raw = c("https://github.com/tidyverse/ggplot2", "https://bitbucket.org/bklamer/depower"),
+      bugreports_raw = NA, stringsAsFactors = FALSE),
+    graphql = function(query) {
+      seen$queries <- c(seen$queries, query)
+      f <- if (grepl("followRenames", query)) "resolve_one.json"
+           else if (grepl("history \\{ totalCount", query)) "commits.json" else "gauges_one.json"
+      jsonlite::fromJSON(readLines(file.path("fixtures", f), warn = FALSE), simplifyVector = FALSE)
+    })
+  invisible(capture.output(suppressMessages(run_update(io, out, list(force_full = TRUE)))))
+  pub <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, "vcs-signals-recent.db"))
+  withr::defer(DBI::dbDisconnect(pub))
+  bb <- DBI::dbGetQuery(pub, "SELECT node_id, status FROM repos WHERE host = 'bitbucket'")
+  expect_identical(nrow(bb), 1L)
+  expect_true(is.na(bb$node_id))
+  expect_identical(bb$status, "active")
+  expect_true(length(seen$queries) > 0)
+  expect_false(any(grepl("bklamer|depower", seen$queries)))
+})

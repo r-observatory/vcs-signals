@@ -188,3 +188,54 @@ bb_read_repo <- function(io, repo, st) {
   }
   out("ok", bb_gauge_row(obj, counts), nid, moved)
 }
+
+#' The repo_ids to read today, in order: every repository without a Bitbucket node id, then one
+#' part of the located ones, chosen by the day. A budget that reads `per_run` repositories a day
+#' needs `parts` days to turn over every located repository once. Pure.
+bb_slice <- function(repos, today, budget = BITBUCKET_MAX_REQUESTS) {
+  if (!nrow(repos)) return(character(0))
+  repos <- repos[order(repos$repo_id, method = "radix"), , drop = FALSE]
+  located <- is_bitbucket_node(repos$node_id)
+  ids <- repos$repo_id[located]
+  per_run <- max(1L, floor(budget / BITBUCKET_CALLS_PER_REPO))
+  parts <- max(1L, ceiling(length(ids) / per_run))
+  c(repos$repo_id[!located], ids[(seq_along(ids) - 1L) %% parts == as.integer(today) %% parts])
+}
+
+#' Read today's slice. Stops at `deadline` (the rest is `unreached`), when fewer than
+#' BITBUCKET_CALLS_PER_REPO requests are left or when the run is stopped (the rest is `later`).
+#' `deferred` and `unreached` are node ids of located repositories. `ids` is the frame for
+#' update_repo_node_ids: every repository read whose node id is not the stored one.
+bb_collect <- function(io, repos, st, deadline = Inf, now = function() as.numeric(Sys.time()),
+                       today = Sys.Date(), budget = BITBUCKET_MAX_REQUESTS) {
+  slice <- bb_slice(repos, today, budget)
+  stored <- stats::setNames(repos$node_id, repos$repo_id)
+  rows <- list(); ids <- list()
+  deferred <- unreached <- not_located <- character(0)
+  later <- 0L
+  for (i in seq_along(slice)) {
+    rest <- slice[i:length(slice)]
+    if (now() >= deadline) {
+      unreached <- stored[rest][is_bitbucket_node(stored[rest])]
+      break
+    }
+    if (budget - st$asked < BITBUCKET_CALLS_PER_REPO) { later <- length(rest); break }
+    id <- slice[i]
+    r <- bb_read_repo(io, repos[match(id, repos$repo_id), , drop = FALSE], st)
+    if (r$state == "stopped") { later <- length(rest); break }
+    if (r$state == "ok") {
+      rows[[length(rows) + 1L]] <- r$row
+      if (is.na(stored[[id]]) || !identical(stored[[id]], r$node_id)) {
+        fn <- strsplit(r$row$name_with_owner, "/", fixed = TRUE)[[1]]
+        ids[[length(ids) + 1L]] <- data.frame(repo_id = id, node_id = r$node_id, owner = fn[1], name = fn[2],
+          name_with_owner = r$row$name_with_owner, status = "active", stringsAsFactors = FALSE)
+      }
+    } else if (r$state == "deferred") {
+      if (is_bitbucket_node(stored[[id]])) deferred <- c(deferred, stored[[id]])
+    } else not_located <- c(not_located, id)
+  }
+  list(snapshot = if (length(rows)) do.call(rbind, rows) else NULL, deferred = deferred,
+       unresolvable = character(0), unreached = unname(unreached),
+       ids = if (length(ids)) do.call(rbind, ids) else NULL,
+       not_located = not_located, read = length(rows), later = later)
+}

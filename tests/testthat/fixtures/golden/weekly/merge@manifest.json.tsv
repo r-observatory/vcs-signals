@@ -7,8 +7,8 @@ summary.source_kind	live
 summary.last_checked	<DATE>
 summary.data_through	<DATE>
 summary.years[1]	2026
-summary.packages	11
-summary.repos	11
+summary.packages	12
+summary.repos	12
 summary.previous_summary.asset	vcs-signals-summary-prev.db
 summary.previous_summary.sha256	<MASKED>
 summary.previous_summary.bytes	<MASKED>
@@ -17,9 +17,9 @@ db_bytes	<MASKED>
 db_sha256	<MASKED>
 tables.gitlab_license	2
 tables.pipeline_state	0
-tables.repo_package_links	13
-tables.repo_packages	11
-tables.repos	11
+tables.repo_package_links	14
+tables.repo_packages	12
+tables.repos	12
 tables.series_latest	0
 tables.signals_series	0
 tables.vcs_ai_account_counts	0
@@ -37,5 +37,5 @@ tables.vcs_dev_tooling	0
 tables.vcs_dev_tooling_rules	0
 tables.vcs_repo_name_history	7
 tables.vcs_repo_owner	6
-tables.vcs_signals_summary	11
+tables.vcs_signals_summary	12
 complete	true

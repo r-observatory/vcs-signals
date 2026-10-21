@@ -12,6 +12,12 @@ cb_get	/repos/someone/cbpkg/issues?state=closed&type=issues&limit=1
 cb_get	/repos/someone/cbpkg/issues?state=closed&type=pulls&limit=50&page=1
 cb_get	/repos/someone/cbpkg/releases/latest
 cb_get	/repos/someone/cbpkg/commits?limit=1&stat=false&verification=false&files=false
+bb_get	/repositories/%7B3c1f0a52-7d7e-4b1c-9a55-0e5f1c1d2a10%7D/%7B9b6d4e21-58a3-4f0e-8d37-6a2c7b5e1f44%7D?fields=uuid,full_name,created_on,size,parent.full_name,mainbranch.name,workspace.uuid
+bb_get	/repositories/someone/bbpkg/forks?pagelen=1&fields=size
+bb_get	/repositories/someone/bbpkg/pullrequests?state=OPEN&pagelen=1&fields=size
+bb_get	/repositories/someone/bbpkg/pullrequests?state=MERGED&pagelen=1&fields=size
+bb_get	/repositories/someone/bbpkg/pullrequests?state=DECLINED&pagelen=1&fields=size
+bb_get	/repositories/someone/bbpkg/refs/branches/main?fields=target.date
 release_exists
 download	manifest.json
 download	vcs-signals-recent.db

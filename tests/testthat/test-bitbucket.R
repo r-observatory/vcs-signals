@@ -214,3 +214,100 @@ test_that("a branch call that fails defers, and a stopped run is stopped", {
   r <- bb_read_repo(list(bb_get = bb_fake(list())), bb_repo(), st)
   expect_identical(r$state, "stopped")
 })
+
+# ---- the daily slice ------------------------------------------------------------
+bb_uuid <- function(i) sprintf("{00000000-0000-4000-8000-%012d}", i)
+bb_nid <- function(i, ws = WS) vapply(i, function(k) bb_node_id(ws, bb_uuid(k)), "")
+bb_many <- function(n, located = n) data.frame(
+  repo_id = sprintf("bitbucket.org/o/r%02d", seq_len(n)),
+  node_id = ifelse(seq_len(n) <= located, bb_nid(seq_len(n)), NA_character_),
+  owner = "o", name = sprintf("r%02d", seq_len(n)), stringsAsFactors = FALSE)
+# Routes for repositories r01.. : each object by path and its five answers.
+bb_many_routes <- function(n, ...) {
+  out <- list()
+  for (i in seq_len(n)) {
+    nm <- sprintf("r%02d", i)
+    out[[bb_fields(paste0("/repositories/o/", nm))]] <- bb_answer(200L, bb_obj(rp = bb_uuid(i), full_name = paste0("o/", nm)))
+    out <- c(out, bb_routes(paste0("/repositories/o/", nm)))
+  }
+  modifyList(out, list(...))
+}
+
+test_that("bb_slice reads the unlocated first, then a quarter of the located by day", {
+  repos <- bb_many(32, located = 29)
+  days <- as.Date("2026-10-20") + 0:3
+  slices <- lapply(days, function(d) bb_slice(repos, d, budget = 50L))
+  for (s in slices) expect_identical(s[1:3], repos$repo_id[30:32])
+  located <- unlist(lapply(slices, function(s) s[-(1:3)]))
+  expect_identical(sort(located), repos$repo_id[1:29])
+  expect_length(located, 29L)
+  expect_identical(bb_slice(repos[0, ], days[1]), character(0))
+  # A budget below one repository still reads one a day.
+  expect_length(bb_slice(bb_many(3), days[1], budget = 2L), 1L)
+})
+
+test_that("a 429 on the first request reads nothing, defers nothing and warns once", {
+  e <- new.env(); e$logged <- character(0)
+  st <- bb_test_state(log = function(m) e$logged <- c(e$logged, m))
+  r <- bb_collect(list(bb_get = function(path) bb_answer(429L)), bb_many(3), st, now = function() 0,
+                  today = as.Date("2026-10-21"))
+  expect_identical(r$read, 0L)
+  expect_null(r$snapshot)
+  expect_length(r$deferred, 0L)
+  expect_identical(grep("::warning::", e$logged, value = TRUE), "::warning::Bitbucket: HTTP 429, no more requests this run")
+  expect_identical(st$asked, 1L)
+})
+
+test_that("a repository that cannot be finished within the budget is not started", {
+  st <- bb_test_state(run_budget = 14L)
+  seen <- new.env()
+  r <- bb_collect(list(bb_get = bb_fake(bb_many_routes(3), seen)), bb_many(3, located = 0), st, now = function() 0,
+                  today = as.Date("2026-10-21"), budget = 14L)
+  expect_identical(r$read, 2L)
+  expect_identical(r$later, 1L)
+  expect_identical(st$asked, 12L)
+  expect_identical(nrow(r$snapshot), 2L)
+  expect_identical(r$ids$repo_id, c("bitbucket.org/o/r01", "bitbucket.org/o/r02"))
+  expect_identical(r$ids$owner, c("o", "o"))
+  expect_identical(r$ids$name_with_owner, c("o/r01", "o/r02"))
+  expect_identical(r$ids$status, c("active", "active"))
+  expect_identical(r$ids$node_id, bb_nid(1:2))
+})
+
+test_that("a passed deadline asks nothing and leaves the located slice unreached", {
+  repos <- bb_many(4, located = 2)
+  st <- bb_test_state()
+  r <- bb_collect(list(bb_get = function(path) stop("asked")), repos, st, deadline = 5, now = function() 10,
+                  today = as.Date("2026-10-21"))
+  expect_identical(st$asked, 0L)
+  expect_identical(r$read, 0L)
+  expect_identical(sort(r$unreached), sort(repos$node_id[1:2]))
+  expect_length(r$deferred, 0L)
+})
+
+test_that("a repository whose count fails is deferred and the next is read", {
+  repos <- bb_many(2)
+  routes <- bb_many_routes(2, "/repositories/o/r01/pullrequests?state=MERGED&pagelen=1&fields=size" = bb_answer(500L))
+  r <- bb_collect(list(bb_get = bb_fake(routes)), repos, bb_test_state(), now = function() 0,
+                  today = as.Date("2026-10-21"))
+  expect_identical(r$deferred, repos$node_id[1])
+  expect_identical(r$read, 1L)
+  expect_identical(r$snapshot$node_id, repos$node_id[2])
+  expect_length(r$ids$repo_id, 0L)
+})
+
+test_that("a repository not located is counted, a rewritten node id reaches ids", {
+  ws2 <- "{11111111-2222-3333-4444-555555555555}"
+  repos <- bb_many(2)
+  routes <- bb_many_routes(2)
+  routes[[bb_fields(bb_ids_path(repos$node_id[1]))]] <- bb_answer(200L, bb_obj(ws = ws2, rp = bb_uuid(1), full_name = "o/r01"))
+  routes[[bb_fields("/repositories/o/r02")]] <- bb_answer(404L)
+  routes[[bb_fields(bb_ids_path(repos$node_id[2]))]] <- bb_answer(404L)
+  r <- bb_collect(list(bb_get = bb_fake(routes)), repos, bb_test_state(), now = function() 0,
+                  today = as.Date("2026-10-21"))
+  expect_identical(r$read, 1L)
+  expect_identical(r$not_located, repos$repo_id[2])
+  expect_identical(r$ids$repo_id, repos$repo_id[1])
+  expect_identical(r$ids$node_id, bb_node_id(ws2, bb_uuid(1)))
+  expect_length(r$deferred, 0L)
+})

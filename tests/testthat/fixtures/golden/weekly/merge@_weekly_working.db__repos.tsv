@@ -1,4 +1,5 @@
 repo_id	node_id	host	host_domain	owner	name	name_with_owner	supported	n_packages	first_seen	last_seen	status
+bitbucket.org/someone/bbpkg	bitbucket:3c1f0a52-7d7e-4b1c-9a55-0e5f1c1d2a10:9b6d4e21-58a3-4f0e-8d37-6a2c7b5e1f44	bitbucket	bitbucket.org	someone	bbpkg	someone/bbpkg	1	1	2026-08-20	<DATE>	active
 code.usgs.gov/water/toxics/usgspkg	gitlab:code.usgs.gov:4711	gitlab	code.usgs.gov	water/toxics	usgspkg	water/toxics/usgspkg	1	1	2026-08-20	<DATE>	active
 codeberg.org/someone/cbpkg	codeberg:codeberg.org:4242	codeberg	codeberg.org	someone	cbpkg	someone/cbpkg	1	1	2026-08-20	<DATE>	active
 github.com/acoppock/ri2	\N	github	github.com	acoppock	ri2	acoppock/ri2	1	1	2026-08-20	<DATE>	gone
