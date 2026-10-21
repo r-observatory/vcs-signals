@@ -1,4 +1,5 @@
 repo_id	tool	tier	marker	agnostic	role	rule_key	onset	onset_censored	newest_at
+code.usgs.gov/water/toxics/usgspkg	claude	D	gitignore:.claude	0	authoring	\N	2026-10-04T23:59:59Z	1	\N
 github.com/epiverse-trace/cfr	cursor	B	msg.cursor.made-with	0	authoring	msg.cursor.made-with	2026-03-18T09:27:20Z	0	2026-03-18T09:27:20Z
 github.com/ropensci-review-tools/goodpractice	agents-md	D	AGENT.md	1	authoring	\N	2026-10-04T23:59:59Z	1	\N
 github.com/ropensci-review-tools/goodpractice	claude	D	gitignore:.claude	0	authoring	\N	2026-10-04T23:59:59Z	1	\N
@@ -8,3 +9,6 @@ github.com/tidyverse/forcats	claude	A	A	0	authoring	\N	2025-10-05T05:49:23Z	1	20
 github.com/tidyverse/forcats	claude	B	msg.claude.address	0	authoring	msg.claude.address	2025-10-05T05:49:23Z	0	2025-10-05T05:49:23Z
 github.com/tidyverse/forcats	claude	D	CLAUDE.md	0	authoring	\N	2026-10-04T23:59:59Z	1	\N
 github.com/tidyverse/forcats	codex	PB	pr.codex.branch	0	authoring	pr.codex.branch	2026-03-11T08:43:55Z	0	2026-03-11T08:43:55Z
+gitlab.com/epiverse/outbreaks/linelist	claude	B	msg.claude.address	0	authoring	msg.claude.address	2026-03-05T10:00:00Z	0	2026-03-05T10:00:00Z
+gitlab.com/epiverse/outbreaks/linelist	claude	B	msg.claude.coauthor	0	authoring	msg.claude.coauthor	2026-03-05T10:00:00Z	0	2026-03-05T10:00:00Z
+gitlab.com/epiverse/outbreaks/linelist	claude	D	CLAUDE.md	0	authoring	\N	2026-10-04T23:59:59Z	1	\N

@@ -28,7 +28,8 @@
 .READ_ONLY_MODES <- list(
   "weekly.R"      = c("enumerate", "fetch", "fetch-gitlab"),
   "backfill.R"    = c("enumerate", "fetch"),
-  "ai_backfill.R" = c("enumerate", "cheap", "gate", "gate-incremental", "deep"))
+  "ai_backfill.R" = c("enumerate", "cheap", "gitlab-contents", "gate", "gate-incremental", "deep",
+                      "gitlab-onsets"))
 
 # Publishes whatever else the command says, Octokit's release writes included.
 # Comment lines are dropped before matching, so a job that only mentions a merge
@@ -635,10 +636,14 @@ test_that("every merge job downloads the partials run_merge reads", {
   rerun <- readLines(file.path(wf_dir, "ai-merge-rerun.yml"), warn = FALSE)
   rerun <- rerun[.is_code(rerun)]
   guard <- grep("Refuse an empty parts directory", rerun)
-  expect_true(any(grepl("vcs-ai-cheap-*.db", rerun[guard:min(length(rerun), guard + 14L)], fixed = TRUE)))
+  # The GitLab partial alone is no week of GitHub reads, so the count takes numbered shards only.
+  counted <- grep("^\\s*cheap=\\$\\(find", rerun[guard:min(length(rerun), guard + 14L)], value = TRUE)
+  expect_length(counted, 1L)
+  expect_true(grepl("-name 'vcs-ai-cheap-[0-9]*.db'", counted, fixed = TRUE))
+  expect_false(grepl("vcs-ai-cheap-*.db", counted, fixed = TRUE))
 })
 
-test_that("the weekly merge runs when the GitLab fetch fails, and only that fetch sees the GitLab token", {
+test_that("the weekly merge runs when the GitLab fetch fails, and only the GitLab REST jobs see the GitLab token", {
   wf_dir <- file.path(.repo_root, ".github", "workflows")
   skip_if_not(dir.exists(wf_dir), "workflows not in this checkout")
   weekly <- readLines(file.path(wf_dir, "weekly.yml"), warn = FALSE)
@@ -648,8 +653,89 @@ test_that("the weekly merge runs when the GitLab fetch fails, and only that fetc
   expect_match(cond, "!cancelled()", fixed = TRUE)
   expect_match(cond, "needs.fetch.result == 'success'", fixed = TRUE)
   expect_false(grepl("fetch-gitlab", cond, fixed = TRUE))
-  holders <- names(Filter(function(j) any(grepl("GITLAB_TOKEN_GITLAB_COM", j, fixed = TRUE)), jobs))
-  expect_identical(holders, "fetch-gitlab")
-  for (wf in setdiff(list.files(wf_dir, pattern = "\\.ya?ml$"), "weekly.yml"))
-    expect_false(any(grepl("GITLAB_TOKEN_GITLAB_COM", readLines(file.path(wf_dir, wf), warn = FALSE), fixed = TRUE)), info = wf)
+  # The token is named in these jobs only, and nowhere else in any workflow.
+  holders <- c("weekly.yml" = "fetch-gitlab", "ai-weekly.yml" = "gitlab-onsets")
+  named <- function(x) sum(grepl("GITLAB_TOKEN_GITLAB_COM", x, fixed = TRUE))
+  for (wf in list.files(wf_dir, pattern = "\\.ya?ml$")) {
+    lines <- readLines(file.path(wf_dir, wf), warn = FALSE)
+    jobs <- .workflow_jobs(lines)
+    who <- names(Filter(function(j) named(j) > 0L, jobs))
+    expect_identical(who, if (wf %in% names(holders)) unname(holders[wf]) else character(0), info = wf)
+    expect_identical(named(lines), sum(vapply(jobs, named, 1L)), info = wf)
+  }
+  # Workflow-level env reaches every job, the anonymous GitLab read included.
+  top <- .top_level(readLines(file.path(wf_dir, "ai-weekly.yml"), warn = FALSE))
+  expect_false(any(grepl("TOKEN|secrets\\.", top[.is_code(top)])))
+})
+
+test_that("ai-weekly.yml runs the GitLab read before the gate and the GitLab dating before the merge", {
+  jobs <- .workflow_jobs(readLines(file.path(.repo_root, ".github", "workflows", "ai-weekly.yml")))
+  body <- function(name) paste(jobs[[name]], collapse = "\n")
+  expect_match(body("gitlab-contents"), "ai_backfill.R gitlab-contents", fixed = TRUE)
+  expect_false(grepl("TOKEN", body("gitlab-contents"), fixed = TRUE))
+  expect_match(body("gitlab-contents"), "name: cheap-gitlab", fixed = TRUE)
+  expect_match(body("gitlab-contents"), "name: dev-tooling-gitlab", fixed = TRUE)
+  expect_match(body("gitlab-onsets"), "GITLAB_TOKEN_GITLAB_COM: ${{ secrets.GITLAB_TOKEN_GITLAB_COM }}", fixed = TRUE)
+  expect_false(grepl("VCS_SIGNALS_TOKEN", body("gitlab-onsets"), fixed = TRUE))
+  expect_match(body("gitlab-onsets"), "name: shard-gitlab", fixed = TRUE)
+  expect_match(body("gate"), "needs: [cheap, gitlab-contents]", fixed = TRUE)
+  expect_match(body("gate"), "if: ${{ !cancelled() && needs.cheap.result == 'success' }}", fixed = TRUE)
+  expect_match(body("merge"), "needs: [deep, gitlab-onsets]", fixed = TRUE)
+  expect_match(body("merge"), "if: ${{ !cancelled() && needs.deep.result == 'success' }}", fixed = TRUE)
+  expect_match(body("enumerate"), "out/vcs-ai-roster-gitlab.db", fixed = TRUE)
+})
+
+# The jobs that run when the jobs in `failed` fail, as GitHub decides it for the two conditions these
+# workflows use: none, which wants every job upstream to have succeeded (transitively, not only the
+# needs), and !cancelled() && needs.<job>.result == 'success' terms. Any other condition stops.
+.jobs_that_run <- function(jobs, failed) {
+  own <- lapply(jobs, function(j) { code <- j[.is_code(j)]; code[.indent(code) == min(.indent(code))] })
+  needs <- lapply(own, function(o) {
+    n <- grep("^\\s*needs:", o, value = TRUE)
+    if (!length(n)) return(character(0))
+    # A list on the lines below would read as no needs, so the reader refuses it.
+    if (grepl("^\\s*needs:\\s*$", n[1])) stop("a needs: list on its own lines, which this reader does not read: ", n[1])
+    trimws(strsplit(gsub("^\\s*needs:\\s*\\[?|\\]?\\s*$", "", n[1]), ",")[[1]])
+  })
+  upstream <- function(j) unique(c(needs[[j]], unlist(lapply(needs[[j]], upstream))))
+  result <- character(0)
+  while (length(result) < length(jobs)) {
+    ready <- Filter(function(j) all(needs[[j]] %in% names(result)), setdiff(names(jobs), names(result)))
+    if (!length(ready)) stop("needs that name no job, or a cycle")
+    for (j in ready) {
+      cond <- sub("^\\s*if:\\s*", "", grep("^\\s*if:", own[[j]], value = TRUE))
+      runs <- if (!length(cond)) all(result[upstream(j)] == "success") else {
+        terms <- strsplit(gsub("^\\$\\{\\{\\s*|\\s*\\}\\}$", "", cond), "\\s*&&\\s*")[[1]]
+        on <- sub("^needs\\.([A-Za-z0-9_-]+)\\.result == 'success'$", "\\1", terms[-1])
+        if (terms[1] != "!cancelled()" || any(on == terms[-1])) stop("a condition this reader does not know: ", cond)
+        all(result[on] == "success")
+      }
+      result[j] <- if (!runs) "skipped" else if (j %in% failed) "failure" else "success"
+    }
+  }
+  names(result)[result != "skipped"]
+}
+
+test_that("a GitLab job that fails skips no other job", {
+  # GitHub's default condition reads the whole upstream chain, so a GitHub job two steps below a failed
+  # GitLab job is skipped unless it says otherwise. Each job below a GitLab job has to say so.
+  wf_dir <- file.path(.repo_root, ".github", "workflows")
+  skip_if_not(dir.exists(wf_dir), "workflows not in this checkout")
+  for (wf in c("weekly.yml", "ai-weekly.yml")) {
+    jobs <- .workflow_jobs(readLines(file.path(wf_dir, wf), warn = FALSE))
+    gitlab <- grep("gitlab", names(jobs), value = TRUE)
+    expect_true(length(gitlab) > 0L, info = wf)
+    expect_setequal(.jobs_that_run(jobs, character(0)), names(jobs))
+    for (g in gitlab) expect_setequal(.jobs_that_run(jobs, g), names(jobs))
+  }
+
+  # The reader sees the skip a job two steps down would take without its own condition.
+  wf <- c("jobs:", "  a:", "    runs-on: x", "  gitlab-b:", "    needs: a", "  c:", "    needs: [a, gitlab-b]",
+          "    if: ${{ !cancelled() && needs.a.result == 'success' }}", "  d:", "    needs: c")
+  expect_setequal(.jobs_that_run(.workflow_jobs(wf), "gitlab-b"), c("a", "gitlab-b", "c"))
+  expect_error(.jobs_that_run(.workflow_jobs(sub("!cancelled()", "always()", wf, fixed = TRUE)), character(0)),
+               "does not know")
+  # A needs: list on its own lines stops the reader rather than reading as no needs.
+  multi <- c("jobs:", "  a:", "    runs-on: x", "  b:", "    needs:", "      - a", "    runs-on: x")
+  expect_error(.jobs_that_run(.workflow_jobs(multi), character(0)), "needs: list on its own lines")
 })

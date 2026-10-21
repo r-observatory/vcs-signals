@@ -9,7 +9,7 @@ test_that("no script filters on a literal host any more", {
   expect_false(any(grepl("host = 'github'|host='github'|LIKE 'github\\.com/%'", src)))
 })
 
-test_that("every host filter selects the GitHub hosts, except the daily run's two GitLab stages, the weekly GitLab roster and the GitLab licence", {
+test_that("every host filter selects the GitHub hosts, except the daily run's two GitLab stages, the GitLab roster and the GitLab licence", {
   calls_in <- function(f) {
     src <- readLines(f)
     unlist(regmatches(src, gregexpr("host_predicate\\([^)]*\\)", src)))
@@ -21,7 +21,9 @@ test_that("every host filter selects the GitHub hosts, except the daily run's tw
   gl <- calls[grepl("^host_predicate\\(GITLAB_HOSTS[,)]", calls)]
   expect_length(gl, 4L)
   expect_length(grep("GITLAB_HOSTS", calls_in("../../scripts/update.R")), 2L)
-  expect_length(grep("GITLAB_HOSTS", calls_in("../../scripts/weekly.R")), 1L)
+  # The weekly and the AI GitLab rosters share gitlab_roster_rows().
+  expect_length(grep("GITLAB_HOSTS", calls_in("../../scripts/gitlab.R")), 1L)
+  expect_length(grep("GITLAB_HOSTS", calls_in("../../scripts/weekly.R")), 0L)
   expect_length(grep("GITLAB_HOSTS", calls_in("../../scripts/helpers.R")), 1L)
 })
 

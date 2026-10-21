@@ -1662,3 +1662,58 @@ test_that("the closing tally names the reasons of the items done, not their plac
   expect_match(tally, "re-ask 0", fixed = TRUE)
   expect_match(tally, "never-asked 1", fixed = TRUE)
 })
+
+# ---- GitLab repositories in the gate and the search pass ----------------------------
+test_that("the gate gives a GitLab repository dating items only", {
+  flagged <- data.frame(repo_id = c("github.com/o/r", "gitlab.com/o/p"), owner = "o", name = c("r", "p"),
+                        node_id = c("R_1", "gitlab:gitlab.com:7"), is_fork = 0L, parent = NA, pr_onset_date = NA)
+  work <- data.frame(repo_id = rep(flagged$repo_id, each = 4), tool = "claude",
+                     rule_key = c(NA, "msg.claude.coauthor", "msg.claude.address", "name.aider.suffix"),
+                     reason = c("onset", "count-refresh", "re-ask", "campaign"), priority = c(1L, 4L, 5L, 6L))
+  got <- gitlab_onset_only(work, flagged)
+  expect_identical(got$reason[got$repo_id == "gitlab.com/o/p"], "onset")
+  expect_equal(sum(got$repo_id == "github.com/o/r"), 4L)
+})
+
+test_that("the GitHub deep pass never asks anything about a GitLab repository", {
+  gl <- "gitlab.com/o/p"; gh <- "github.com/o/r"
+  # The GitLab row comes first, so it would take the GitHub repository's place in the shards.
+  flagged <- data.frame(repo_id = c(gl, gh), owner = "o", name = c("p", "r"), node_id = c("gitlab:gitlab.com:7", "R_1"),
+                        is_fork = 0L, parent = NA_character_, pr_onset_date = NA_character_, stringsAsFactors = FALSE)
+  ev <- rbind(cbind(repo_id = gl, .ai_found("claude", "D", "CLAUDE.md")), cbind(repo_id = gh, .ai_found("claude", "D", "CLAUDE.md")))
+  work <- data.frame(repo_id = rep(c(gl, gh), each = 2), tool = "claude", rule_key = c(NA, "msg.claude.coauthor"),
+                     reason = c("onset", "never-asked"), priority = c(1L, 8L), stringsAsFactors = FALSE)
+  # Every question shard i of 2 asks, and the repositories its shard holds.
+  deep <- function(i, rows) {
+    out <- tempfile("deep_"); dir.create(out)
+    path <- file.path(out, "vcs-ai-flagged-roster.db")
+    ids <- flagged$repo_id[rows]
+    write_flagged_partial(path, flagged[rows, , drop = FALSE], ev[ev$repo_id %in% ids, , drop = FALSE],
+                          work = work[work$repo_id %in% ids, , drop = FALSE])
+    seen <- new.env(); seen$calls <- character(0)
+    io <- list(
+      graphql = function(q) {
+        seen$calls <- c(seen$calls, q)
+        list(data = list(repository = list(defaultBranchRef = list(target = list(history = list(
+          pageInfo = list(endCursor = "", hasNextPage = FALSE), nodes = list(list(committedDate = "2026-02-01T00:00:00Z"))))))))
+      },
+      search_hit = function(owner, name, query, delay = 0) {
+        seen$calls <- c(seen$calls, paste("search", owner, name, query))
+        list(date = NA_character_, message = NA_character_, author = NA_character_, total_count = 0L,
+             items = data.frame(date = character(), message = character()), unavailable = FALSE)
+      })
+    suppressMessages(run_deep(io, out, path, i, 2L, marker_delay = 0, search_delay = 0))
+    con <- DBI::dbConnect(RSQLite::SQLite(), file.path(out, sprintf("vcs-ai-shard-%d.db", i)))
+    on.exit(DBI::dbDisconnect(con))
+    list(calls = seen$calls, rows = DBI::dbReadTable(con, "vcs_ai_signals")$repo_id)
+  }
+  both <- lapply(0:1, deep, rows = 1:2)
+  alone <- lapply(0:1, deep, rows = 2L)
+  asked <- unlist(lapply(both, `[[`, "calls"))
+  expect_true(any(grepl('name: "r"', asked, fixed = TRUE)))
+  expect_false(any(grepl('name: "p"', asked, fixed = TRUE)))
+  expect_false(any(startsWith(asked, "search o p ")))
+  for (k in 1:2) expect_identical(both[[k]]$calls, alone[[k]]$calls, info = paste("shard", k - 1L))
+  expect_false(gl %in% unlist(lapply(both, `[[`, "rows")))
+  expect_true(gh %in% unlist(lapply(both, `[[`, "rows")))
+})

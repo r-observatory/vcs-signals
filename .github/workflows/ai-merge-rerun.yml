@@ -98,14 +98,15 @@ jobs:
       # published summary and republish it unchanged, reporting success. That
       # looks identical to a real merge and would be read as "the rerun worked".
       # Artifacts expire, so a stale id is the expected way to get here.
+      # Only the numbered GitHub shards count: the GitLab partial alone is not a week of reads.
       - name: Refuse an empty parts directory
         run: |
           shards=$(find parts -name 'vcs-ai-shard-*.db' 2>/dev/null | wc -l | tr -d ' ')
-          cheap=$(find parts -name 'vcs-ai-cheap-*.db' 2>/dev/null | wc -l | tr -d ' ')
+          cheap=$(find parts -name 'vcs-ai-cheap-[0-9]*.db' 2>/dev/null | wc -l | tr -d ' ')
           tooling=$(find parts -name 'vcs-dev-tooling-*.db' 2>/dev/null | wc -l | tr -d ' ')
-          echo "run ${{ inputs.run_id }}: ${shards} search shard(s), ${cheap} weekly read partial(s), ${tooling} dev-tooling shard(s)"
+          echo "run ${{ inputs.run_id }}: ${shards} search shard(s), ${cheap} GitHub weekly read partial(s), ${tooling} dev-tooling shard(s)"
           if [ "$cheap" -eq 0 ]; then
-            echo "::error::No weekly read partials (vcs-ai-cheap-*.db) came from run ${{ inputs.run_id }}. Either the id is wrong or its artifacts have expired. Refusing to publish a merge that would advance no read state." >&2
+            echo "::error::No GitHub weekly read partials (vcs-ai-cheap-<shard>.db) came from run ${{ inputs.run_id }}. Either the id is wrong or its artifacts have expired. Refusing to publish a merge that would advance no read state." >&2
             exit 1
           fi
 

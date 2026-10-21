@@ -19,6 +19,7 @@ dev_tooling_derive <- function(root_entries, github_entries, flags, repo) {
   out <- c(out, rbi)
   out <- c(out, workflow_columns(github_entries, repo))
   out <- c(out, pages_columns(repo))
+  out <- c(out, gitlab_ci_columns(root_entries, repo))
   site <- pkgdown_site_columns(repo)
   out <- c(out, list(site_generator = site_generator_for(site$site_pkgdown_source, flags,
                                                           .dev_has(repo, "pkgdown_yml"))), site)
@@ -37,7 +38,7 @@ tree_derived_columns <- function(root_entries, flags) {
 
 #' Rule paths with a "/" whose folder is not a subtree the contents query lists there. The query
 #' lists one level of each subtree, so a path deeper inside one can never match either.
-unfetched_rule_paths <- function(paths, location, prefixes = tree_subtree_prefixes()) {
+unfetched_rule_paths <- function(paths, location, prefixes = tree_subtree_prefixes(c(TREE_SUBTREES, gitlab = ".gitlab"))) {
   nested <- paths[grepl("/", paths, fixed = TRUE)]
   allowed <- switch(location, root = prefixes$root, github = prefixes$github,
                     both = c(prefixes$root, prefixes$github))
@@ -136,6 +137,7 @@ rbuildignore_columns <- function(root_entries, repo) {
                      bad_lines = 0L))
   txt <- repo$rbuildignore_text
   ex <- rbuildignore_excluded(txt, root_entries)
+  if ("vignettes" %in% repo$truncated) ex <- structure(NA_character_, bad_lines = attr(ex, "bad_lines"))
   keep <- if (!is.na(txt) && nchar(txt, type = "bytes") <= RBUILDIGNORE_TEXT_MAX_BYTES) txt else NA_character_
   structure(list(rbuildignore_excluded = as.vector(ex), rbuildignore_text = keep),
             bad_lines = attr(ex, "bad_lines"))
@@ -175,10 +177,57 @@ workflow_columns <- function(github_entries, repo) {
        ci_lint = as.integer(any_text(rules$lint, texts[!grepl(rules$lint_skip, texts, fixed = TRUE)])))
 }
 
+#' What .gitlab-ci.yml runs. A repository without a `gitlab_ci` element (every GitHub one), an
+#' unread file and a custom config path read NA; a file absent from the root reads 0. An
+#' `include:` hides what the included files hold, so a rule the text does not match reads NA.
+gitlab_ci_columns <- function(root_entries, repo) {
+  cols <- c("gitlab_ci_include", "gitlab_ci_rcmdcheck", "gitlab_ci_platforms", "gitlab_ci_r_devel",
+            "gitlab_ci_coverage", "gitlab_ci_site_deploy", "gitlab_ci_lint")
+  na <- stats::setNames(as.list(rep(NA, length(cols))), cols)
+  if (!.dev_has(repo, "gitlab_ci")) return(na)
+  ci <- repo$gitlab_ci
+  path <- ci$config_path
+  if (!is.null(path) && !is.na(path) && nzchar(path) && !identical(path, ".gitlab-ci.yml")) return(na)
+  listed <- ".gitlab-ci.yml" %in% root_entries
+  txt <- ci$text
+  if (!listed) {
+    zero <- stats::setNames(as.list(rep(0L, length(cols))), cols)
+    zero$gitlab_ci_platforms <- NA_character_
+    zero$gitlab_ci_r_devel <- NA_integer_
+    return(zero)
+  }
+  if (is.null(txt) || is.na(txt)) return(na)
+  rules <- GITLAB_CI_TEXT_RULES
+  lines <- gsub(rules$comment, "", strsplit(txt, "\r?\n")[[1]], perl = TRUE)
+  body <- paste(lines, collapse = "\n")
+  has <- function(pattern) grepl(pattern, body, perl = TRUE)
+  inc <- has(rules$include)
+  read <- function(hit) if (hit) 1L else if (inc) NA_integer_ else 0L
+  check <- read(has(WORKFLOW_TEXT_RULES$rcmdcheck))
+  platforms <- NA_character_
+  r_devel <- NA_integer_
+  if (identical(check, 1L)) {
+    named <- c(linux = has(rules$image), macos = has(rules$macos), windows = has(rules$windows))
+    if (any(named)) platforms <- as.character(jsonlite::toJSON(names(named)[named]))
+    r_devel <- read(has(rules$r_devel))
+  }
+  list(gitlab_ci_include = as.integer(inc),
+       gitlab_ci_rcmdcheck = check,
+       gitlab_ci_platforms = platforms,
+       gitlab_ci_r_devel = r_devel,
+       gitlab_ci_coverage = read(has(WORKFLOW_TEXT_RULES$coverage)),
+       gitlab_ci_site_deploy = read(has(WORKFLOW_TEXT_RULES$site_deploy) || has(rules$pages)),
+       gitlab_ci_lint = read(has(WORKFLOW_TEXT_RULES$lint)))
+}
+
 #' GitHub Pages: whether a site is deployed, when, and where. environmentUrl goes stale after a
 #' transfer, so a github.io url is rebuilt from the repository's current name.
 pages_columns <- function(repo) {
   none <- list(has_pages = NA_integer_, pages_last_deploy = NA_character_, pages_url = NA_character_)
+  if (.dev_has(repo, "gl_pages_count")) {
+    n <- repo$gl_pages_count
+    return(modifyList(none, list(has_pages = if (is.na(n)) NA_integer_ else as.integer(n > 0))))
+  }
   if (!.dev_has(repo, "pages")) return(none)
   p <- repo$pages
   has <- as.integer("github-pages" %in% p$environments || !is.na(p$last_deploy_at))

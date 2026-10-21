@@ -1,0 +1,255 @@
+{
+  "data": {
+    "projects": {
+      "nodes": [
+        {
+          "id": "gid://gitlab/Project/10513",
+          "fullPath": "bafg-bund/hyd1d",
+          "isForked": false,
+          "forkedFrom": null,
+          "ciConfigPathOrDefault": ".gitlab-ci.yml",
+          "pagesDeployments": {
+            "count": 0
+          },
+          "repository": {
+            "rootRef": "main",
+            "empty": false,
+            "root": {
+              "trees": {
+                "nodes": [
+                  {
+                    "name": "R"
+                  },
+                  {
+                    "name": "data-raw"
+                  },
+                  {
+                    "name": "data"
+                  },
+                  {
+                    "name": "inst"
+                  },
+                  {
+                    "name": "man"
+                  },
+                  {
+                    "name": "pkgdown"
+                  },
+                  {
+                    "name": "presentation"
+                  },
+                  {
+                    "name": "shinyapps"
+                  },
+                  {
+                    "name": "tests"
+                  },
+                  {
+                    "name": "vignettes"
+                  }
+                ]
+              },
+              "blobs": {
+                "nodes": [
+                  {
+                    "name": ".Rbuildignore"
+                  },
+                  {
+                    "name": ".gitattributes"
+                  },
+                  {
+                    "name": ".gitignore"
+                  },
+                  {
+                    "name": "DESCRIPTION"
+                  },
+                  {
+                    "name": "NAMESPACE"
+                  },
+                  {
+                    "name": "NEWS.md"
+                  },
+                  {
+                    "name": "README.Rmd"
+                  },
+                  {
+                    "name": "README.md"
+                  },
+                  {
+                    "name": "_build.R"
+                  },
+                  {
+                    "name": "_install.R"
+                  },
+                  {
+                    "name": "hyd1d.Rproj"
+                  },
+                  {
+                    "name": "makefile"
+                  }
+                ]
+              }
+            },
+            "github": {
+              "trees": {
+                "nodes": []
+              },
+              "blobs": {
+                "nodes": []
+              }
+            },
+            "workflows": {
+              "trees": {
+                "nodes": []
+              },
+              "blobs": {
+                "nodes": []
+              }
+            },
+            "githubAgents": {
+              "trees": {
+                "nodes": []
+              },
+              "blobs": {
+                "nodes": []
+              }
+            },
+            "claude": {
+              "trees": {
+                "nodes": []
+              },
+              "blobs": {
+                "nodes": []
+              }
+            },
+            "agents": {
+              "trees": {
+                "nodes": []
+              },
+              "blobs": {
+                "nodes": []
+              }
+            },
+            "inst": {
+              "trees": {
+                "nodes": []
+              },
+              "blobs": {
+                "nodes": [
+                  {
+                    "name": "CITATION"
+                  },
+                  {
+                    "name": "REFERENCES.bib"
+                  }
+                ]
+              }
+            },
+            "vignettes": {
+              "trees": {
+                "nodes": [
+                  {
+                    "name": "latex"
+                  }
+                ]
+              },
+              "blobs": {
+                "nodes": [
+                  {
+                    "name": "apa_modified.csl"
+                  },
+                  {
+                    "name": "hyd1d.Rmd"
+                  },
+                  {
+                    "name": "microbenchmarking.R"
+                  },
+                  {
+                    "name": "paper_median_slope.R"
+                  },
+                  {
+                    "name": "paper_plot_2.R"
+                  },
+                  {
+                    "name": "paper_plot_3.R"
+                  },
+                  {
+                    "name": "screenshot_waterLevel.png"
+                  },
+                  {
+                    "name": "screenshot_waterLevel.xcf"
+                  },
+                  {
+                    "name": "screenshot_waterLevelPegelonline.png"
+                  },
+                  {
+                    "name": "screenshot_waterLevelPegelonline.xcf"
+                  },
+                  {
+                    "name": "vignette_DE.Rmd"
+                  }
+                ]
+              }
+            },
+            "site": {
+              "trees": {
+                "nodes": []
+              },
+              "blobs": {
+                "nodes": []
+              }
+            },
+            "posit": {
+              "trees": {
+                "nodes": []
+              },
+              "blobs": {
+                "nodes": []
+              }
+            },
+            "positai": {
+              "trees": {
+                "nodes": []
+              },
+              "blobs": {
+                "nodes": []
+              }
+            },
+            "gemini": {
+              "trees": {
+                "nodes": []
+              },
+              "blobs": {
+                "nodes": []
+              }
+            },
+            "gitlab": {
+              "trees": {
+                "nodes": []
+              },
+              "blobs": {
+                "nodes": []
+              }
+            },
+            "blobs": {
+              "nodes": [
+                {
+                  "path": "DESCRIPTION",
+                  "rawTextBlob": "Package: hyd1d\nType: Package\nVersion: 0.5.5\nDate: 2026-08-11\nTitle: 1d Water Level Interpolation along the Rivers Elbe and Rhine\nAuthors@R: c(person(\"Arnd\", \"Weber\", email = \"<email>\",\n                    role = c(\"aut\", \"cre\"), \n                    comment = c(ORCID = \"0000-0002-5973-2770\")),\n             person(\"Marcus\", \"Hatz\", email=\"<email>\",\n                    role = c(\"aut\")),\n             person(\"Wolfgang\", \"Stürmer\", role = c(\"ctb\")),\n             person(\"Wilfried\", \"Wiechmann\", email=\"<email>\",\n                    role = c(\"ctb\")),\n             person(\"Benjamin\", \"Eberhardt\", email=\"<email>\",\n                    role = c(\"ctb\")))\nDescription: An S4 class and several functions which utilize internally stored\n    datasets and gauging data enable 1d water level interpolation. The S4 class\n    (WaterLevelDataFrame) structures the computation and visualisation\n    of 1d water level information along the German federal waterways Elbe and\n    Rhine. 'hyd1d' delivers 1d water level data - extracted from the 'FLYS'\n    database - and validated gauging data - extracted from the hydrological\n    database 'WISKI7' - package-internally. For computations near real time\n    gauging data are queried externally from the 'PEGELONLINE REST API' \n    <https://pegelonline.wsv.de/webservice/dokuRestapi>.\nDepends: R (>= 4.1.0)\nImports: methods, utils, Rdpack, httr2, curl\nSuggests: DBI (>= 0.4-9), RPostgreSQL (>= 0.6-1), testthat, knitr, rmarkdown,\n    stringr, devtools, pak, pkgdown, roxygen2, revealjs, shiny, shiny.i18n,\n    shinyTime, lubridate, usethis, yaml, desc, rsconnect\nRdMacros: Rdpack\nLicense: GPL (>= 2)\nEncoding: UTF-8\nLazyData: true\nCollate:\n    'Class-WaterLevelDataFrame.R'\n    'WaterLevelDataFrame-methods.R'\n    'data.R'\n    'getGaugingDataW.R'\n    'getPegelonlineW.R'\n    'hyd1d-internal.R'\n    'hyd1d.R'\n    'plotShiny.R'\n    'updateGaugingData.R'\n    'waterLevel.R'\n    'waterLevelFlood1.R'\n    'waterLevelFlood2.R'\n    'waterLevelFlys3.R'\n    'waterLevelFlys3InterpolateX.R'\n    'waterLevelFlys3InterpolateY.R'\n    'waterLevelFlys3Seq.R'\n    'waterLevelPegelonline.R'\n    'zzz.R'\nVignetteBuilder: knitr\nBugReports: https://gitlab.opencode.de/bafg-bund/hyd1d/-/work_items\nURL: https://hyd1d.bafg.de, https://gitlab.opencode.de/bafg-bund/hyd1d\nConfig/roxygen2/version: 8.0.0\n"
+                },
+                {
+                  "path": ".gitignore",
+                  "rawTextBlob": "# ignore specific files\n.Rproj.user\n.Rhistory\n.RData\n.Ruserdata\n.Rd2pdf*\n*.aux\n*.bcf\n*.dat\nDB_credentials_*\n*.Rd\n*.lof\n*.log\n*.lot\n*humbs.db\n.Renviron\n.Rprofile\n*.run.xml\n.commit\n\n# ignore directories and files\nbuild\nbuilt\ndata/date_gauging_data.rda\ndata/df.gauging_data_latest.rda\ndata-raw/daily_cron_hpc-service.bafg.de.log\ndata-raw/daily_cron_r.bafg.de.log\ndata-raw/daily_cron_aqualogy.de.log\ndata-raw/gauging_data.csv\ndata-raw/gauging_data.sql.gz\ndata-raw/gauging_data_missing.csv\ndata-raw/gauging_station_data.csv\ndata-raw/pegelonline2gauging_data.err\ndata-raw/pegelonline2gauging_data.out\ndata-raw/postgres.sql.gz\ndoc\n/doc/\ndocs\ninst/doc\nman\n!man/figures\nMeta\n/Meta/\npkgdown/favicon/*\npresentation/Thumbs.db\npresentation/presentation_DE.html\npresentation/presentation_DE_files/*\npresentation/presentation_aow.html\npresentation/presentation_aow_files/*\npresentation/*.mp4\nrsconnect\nshinyapps/waterLevel/rsconnect/\nshinyapps/waterLevel/www\nshinyapps/waterLevelPegelonline/rsconnect/\nvignettes/hyd1d_files/*\nvignettes/hyd1d.html\nvignettes/hyd1d.pdf\nvignettes/hyd1d.R\nvignettes/hyd1d.tex\nvignettes/hyd1d.toc\nvignettes/Thumbs.db\nvignettes/vignette_DE_files/*\nvignettes/vignette_DE.html\nvignettes/vignette_DE.pdf\nvignettes/vignette_DE.R\nvignettes/vignette_DE.tex\nvignettes/vignette_DE.toc\nvignettes/paper_plot_*.pdf\n"
+                },
+                {
+                  "path": ".Rbuildignore",
+                  "rawTextBlob": "^Meta$\n^doc$\n^\\.git/$\n^.*\\.Rproj$\n^\\.Rproj\\.user$\n^_build\\.R$\n^built$\n^\\.commit$\n^data/df\\.gauging_data_latest\\.rda$\n^data-raw$\n^.*\\.dat$\n^db$\n^DB_credentials_flys3$\n^DB_credentials_gauging_data$\n^DB_credentials_oracle$\n^docs$\n^_documentation\\.R$\n^_install\\.R$\n^.*\\.log$\n^makefile$\n^man/figures/Thumbs\\.db$\n^_pkgdown\\.yml$\n^_pkgdown\\.yaml$\n^pkgdown$\n^presentation$\n^README\\.Rmd$\n^README_files$\n^rsconnect$\n^shinyapps$\n^vignettes/latex/Thumbs\\.db$\n^vignettes/microbenchmarking\\.R$\n^vignettes/paper_plot_2\\.pdf$\n^vignettes/paper_plot_2\\.R$\n^vignettes/paper_plot_3\\.pdf$\n^vignettes/paper_plot_3\\.R$\n^vignettes/Thumbs\\.db$\n^vignettes/.*\\.xcf$\n^vignettes/vignette_long_DE\\.sty$\n"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

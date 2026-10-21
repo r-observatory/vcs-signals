@@ -13,10 +13,12 @@ gl_token <- function(domain) {
 }
 
 # Per-run token state: domains whose token was refused, domains already logged as accepted, and
-# the REST pacer whose budget a refusal lowers. The caller makes one per run.
-gl_run_state <- function(pacer = NULL, log = NULL) {
+# the REST pacer whose budget a refusal lowers. The caller makes one per run. An anonymous run
+# never reads a GITLAB_TOKEN_<DOMAIN>.
+gl_run_state <- function(pacer = NULL, log = NULL, anonymous = FALSE) {
   st <- new.env(parent = emptyenv())
   st$dropped <- character(); st$accepted <- character(); st$pacer <- pacer; st$log <- log
+  st$anonymous <- isTRUE(anonymous)
   st
 }
 
@@ -30,7 +32,7 @@ gl_run_state <- function(pacer = NULL, log = NULL) {
 # `status`. A 401 while the token is set drops it, lowers the REST budget and retries once without it.
 .gl_with_token <- function(domain, state, send) {
   if (is.null(state)) state <- gl_run_state()
-  tok <- if (domain %in% state$dropped) NA_character_ else gl_token(domain)
+  tok <- if (isTRUE(state$anonymous) || domain %in% state$dropped) NA_character_ else gl_token(domain)
   r <- send(tok)
   if (!.has_token(tok)) return(r)
   if (identical(r$status, 401L)) {
@@ -64,8 +66,8 @@ gl_rest <- function(domain, path, run = system2, state = NULL) {
 .gl_key <- function(domain) sub("^[a-z]+://([^/:]+).*$", "\\1", gl_api_base(domain))
 
 # One pacer per run, passed to both gl_resolve and gl_collect_gauges so the request cap covers both.
-gl_pacer <- function(now = function() as.numeric(Sys.time()), sleep = Sys.sleep) {
-  host_pacer(min_interval = c(default = GITLAB_MIN_INTERVAL_S), run_budget = c(default = GITLAB_MAX_REQUESTS),
+gl_pacer <- function(now = function() as.numeric(Sys.time()), sleep = Sys.sleep, run_budget = GITLAB_MAX_REQUESTS) {
+  host_pacer(min_interval = c(default = GITLAB_MIN_INTERVAL_S), run_budget = c(default = run_budget),
              breaker_after = GITLAB_BREAKER_AFTER, now = now, sleep = sleep)
 }
 
@@ -272,6 +274,19 @@ gl_resolve <- function(io, repos, pacer, log = NULL, deadline = Inf,
 # ---- daily gauges --------------------------------------------------------------
 .gl_gid <- function(node_ids) paste0("gid://gitlab/Project/", sub("^.*:", "", node_ids))
 .GL_NODE_RE <- "^gitlab:([^:]+):[0-9]+$"
+is_gitlab_node <- function(node_id) !is.na(node_id) & grepl(.GL_NODE_RE, node_id)
+
+#' The active GitLab repositories with a GitLab node id, by repo_id: the domain and project id the
+#' id carries, and the owner and name the summary holds. `con` is the published summary.
+gitlab_roster_rows <- function(con) {
+  rows <- DBI::dbGetQuery(con, sprintf(paste0(
+    "SELECT repo_id, node_id, owner, name FROM repos WHERE %s AND status = 'active' AND node_id IS NOT NULL ",
+    "ORDER BY repo_id"), host_predicate(GITLAB_HOSTS)))
+  rows <- rows[is_gitlab_node(rows$node_id), , drop = FALSE]
+  data.frame(repo_id = rows$repo_id, node_id = rows$node_id, domain = sub(.GL_NODE_RE, "\\1", rows$node_id),
+             project_id = as.integer(sub("^.*:", "", rows$node_id)), owner = rows$owner, name = rows$name,
+             stringsAsFactors = FALSE)
+}
 
 #' Daily gauges for resolved GitLab projects, `GITLAB_BATCH` ids per request, grouped by domain.
 #' `repo_map` has node_id and repo_id; each project's domain is read from its node id. Returns

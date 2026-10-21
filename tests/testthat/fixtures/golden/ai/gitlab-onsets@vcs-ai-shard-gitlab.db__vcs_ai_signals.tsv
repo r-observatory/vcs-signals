@@ -1,0 +1,3 @@
+repo_id	tool	first_seen_date	first_seen_censored	evidence_tiers	markers	authored	authored_commits	assisted_commits	last_confirmed_date	authored_measured_on	assisted_measured_on
+code.usgs.gov/water/toxics/usgspkg	claude	2026-04-14T09:30:00Z	0	D	gitignore:.claude	0	\N	\N	<DATE>	\N	\N
+gitlab.com/epiverse/outbreaks/linelist	claude	2026-02-10T12:00:00Z	0	B,D	CLAUDE.md,msg.claude.address,msg.claude.coauthor	0	\N	\N	<DATE>	\N	\N

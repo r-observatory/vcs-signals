@@ -1164,3 +1164,20 @@ test_that("a week's findings are dated by the oldest match and keep the newest o
   account <- f[f$tool == "copilot", ]
   expect_equal(account$onset_censored, 1L); expect_equal(account$newest_at, "2026-09-01T00:00:00Z")
 })
+
+test_that("GitLab Duo files name GitLab Duo, and its review settings go to the review table", {
+  f <- classify_tree_markers(c(".gitlab/duo/chat-rules.md"), character(0))
+  expect_identical(c(f$tool, f$tier), c("gitlab-duo", "D"))
+  expect_identical(match_review_files(".gitlab/duo/mr-review-instructions.yaml")$tool, "gitlab-duo-review")
+  expect_equal(nrow(scan_ignore_tokens(".gitlab/duo/", character(0))), 0L)
+  expect_true("gitlab-duo" %in% AI_SILENT_CHANNELS_KNOWN$tool[AI_SILENT_CHANNELS_KNOWN$tier == "D"])
+})
+
+test_that("a .gitlab/duo folder counts for any file but a review-only one", {
+  other <- classify_tree_markers(c(".gitlab/duo", ".gitlab/duo/custom.yml"), character(0))
+  expect_identical(other$tool, "gitlab-duo")
+  review <- classify_tree_markers(c(".gitlab/duo", ".gitlab/duo/mr-review-instructions.yaml"), character(0))
+  expect_equal(nrow(review), 0L)
+  both <- classify_tree_markers(c(".gitlab/duo", ".gitlab/duo/chat-rules.md"), character(0))
+  expect_equal(nrow(both), 1L)
+})

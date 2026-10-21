@@ -288,6 +288,18 @@ AI_MARKERS <- list(
   # from the AI signal (ai_deliberate_markers). A marker with no class field defaults to
   # "deliberate". Recording ambient markers as a dev-tooling datum is deferred to the
   # separate dev-tooling signal.
+  # GitLab Duo reads its settings from .gitlab/duo; a line in an ignore file names no Duo file.
+  list(path = ".gitlab/duo/chat-rules.md",   tool = "gitlab-duo", kind = "file", location = "root",
+       agnostic = FALSE, ignore_line = FALSE),
+  list(path = ".gitlab/duo/agent-config.yml", tool = "gitlab-duo", kind = "file", location = "root",
+       agnostic = FALSE, ignore_line = FALSE),
+  list(path = ".gitlab/duo/mcp.json",        tool = "gitlab-duo", kind = "file", location = "root",
+       agnostic = FALSE, ignore_line = FALSE),
+  # Any other file in the folder counts. A folder holding only the files `covered` names is
+  # counted by those entries, or is review settings.
+  list(path = ".gitlab/duo",     tool = "gitlab-duo", kind = "dir",  location = "root",   agnostic = FALSE,
+       ignore_line = FALSE,
+       covered = c("chat-rules.md", "agent-config.yml", "mcp.json", "mr-review-instructions.yaml")),
   list(path = ".positai",        tool = "positron",  kind = "file", location = "root",   agnostic = FALSE, class = "ambient"),
   list(path = ".idx",            tool = "idx",       kind = "dir",  location = "root",   agnostic = FALSE, class = "ambient")
 )
@@ -298,7 +310,8 @@ AI_REVIEW_FILES <- list(
   list(path = ".coderabbit.yaml", tool = "coderabbit",         location = "root"),
   list(path = ".coderabbit.yml",  tool = "coderabbit",         location = "root"),
   list(path = ".gemini",          tool = "gemini-code-assist", location = "root",
-       only = c("config.yaml", "styleguide.md"))
+       only = c("config.yaml", "styleguide.md")),
+  list(path = ".gitlab/duo/mr-review-instructions.yaml", tool = "gitlab-duo-review", location = "root")
 )
 
 # ---- Development-tooling detection (data-only) ----
@@ -389,11 +402,11 @@ DEV_TOOLING_MARKERS <- list(
   list(col = "has_zenodo",           paths = c(".zenodo.json"),      location = "root"),
   list(col = "has_all_contributors", paths = c(".all-contributorsrc"),location = "root"),
   # Governance / community.
-  list(col = "has_issue_template", paths = c("ISSUE_TEMPLATE", "ISSUE_TEMPLATE.md", "issue_template.md"),
+  list(col = "has_issue_template", paths = c("ISSUE_TEMPLATE", "ISSUE_TEMPLATE.md", "issue_template.md", ".gitlab/issue_templates"),
                                                                                  location = "both"),
   list(col = "has_funding",        paths = c("FUNDING.yml"),                        location = "github"),
   list(col = "has_security",       paths = c("SECURITY.md"),                        location = "both"),
-  list(col = "has_codeowners",     paths = c("CODEOWNERS"),                         location = "both"),
+  list(col = "has_codeowners",     paths = c("CODEOWNERS", ".gitlab/CODEOWNERS"),     location = "both"),
   list(col = "has_support",        paths = c("SUPPORT.md"),                         location = "both"),
   list(col = "has_governance",     paths = c("GOVERNANCE.md"),                      location = "root"),
   # Git-structural.
@@ -407,7 +420,8 @@ COC_TREE_PATHS <- c("CODE_OF_CONDUCT.md", "CODE_OF_CONDUCT", "CODE_OF_CONDUCT.Rm
                     "code_of_conduct.md", "Code_of_conduct.md", "CODE-OF-CONDUCT.md", "CONDUCT.md")
 CONTRIBUTING_TREE_PATHS <- c("CONTRIBUTING.md", "CONTRIBUTING", "CONTRIBUTING.Rmd", "CONTRIBUTING.rst",
                              "contributing.md", "Contributing.md", "CONTRIBUTING.MD")
-PR_TEMPLATE_TREE_PATHS <- c("pull_request_template.md", "PULL_REQUEST_TEMPLATE.md", "PULL_REQUEST_TEMPLATE")
+PR_TEMPLATE_TREE_PATHS <- c("pull_request_template.md", "PULL_REQUEST_TEMPLATE.md", "PULL_REQUEST_TEMPLATE",
+                            ".gitlab/merge_request_templates")
 # pkgdown 2.2.0's config paths the scan can list; the pkgdown/ directory stands for the other two.
 PKGDOWN_CONFIG_TREE_PATHS <- c("_pkgdown.yml", "_pkgdown.yaml", "inst/_pkgdown.yml", "inst/_pkgdown.yaml")
 
@@ -434,6 +448,17 @@ WORKFLOW_TEXT_RULES <- list(
                           "quarto publish|quarto-actions/publish"),
   lint           = "lintr::|lint_package|jarl|air format|styler::",
   lint_skip      = "issue_comment")
+
+# GitLab CI rules, matched on the text of .gitlab-ci.yml with comments removed. R CMD check,
+# coverage, lint and site deploy reuse the workflow rules above.
+GITLAB_CI_TEXT_RULES <- list(
+  comment = "(^|[ \t])#.*$",
+  include = "(?m)^include[ \t]*:",
+  image   = "(?m)^[ \t]*image[ \t]*:",
+  windows = "(?i)\\bwindows\\b|saas-windows",
+  macos   = "(?i)\\bmac ?os\\b|saas-macos|\\bosx\\b",
+  r_devel = "(?i)rocker/[a-z0-9._-]+:devel\\b|\\br-devel\\b|R_VERSION[ \t]*:[ \t]*['\"]?devel",
+  pages   = "(?m)^pages[ \t]*:|^[ \t]+pages[ \t]*:[ \t]*true")
 
 # Every vcs_dev_tooling column not in DEV_TOOLING_MARKERS: its SQLite type, where the value
 # comes from (tree, graphql, workflow_text or derived) and the rule vcs_dev_tooling_rules publishes.
@@ -478,7 +503,7 @@ DEV_TOOLING_DERIVED <- list(
   list(col = "ci_lint", type = "INTEGER", source = "workflow_text",
        rule = paste("a workflow text without", WORKFLOW_TEXT_RULES$lint_skip, "matches", WORKFLOW_TEXT_RULES$lint)),
   list(col = "has_pages", type = "INTEGER", source = "graphql",
-       rule = "a github-pages environment or deployment"),
+       rule = "a github-pages environment or deployment; on GitLab, a Pages deployment count above 0"),
   list(col = "pages_last_deploy", type = "TEXT", source = "graphql",
        rule = "createdAt of the newest github-pages deployment"),
   list(col = "pages_url", type = "TEXT", source = "derived",
@@ -506,9 +531,32 @@ DEV_TOOLING_DERIVED <- list(
   list(col = "has_issues_enabled", type = "INTEGER", source = "graphql", rule = "hasIssuesEnabled"),
   list(col = "homepage_url", type = "TEXT", source = "graphql", rule = "homepageUrl, trimmed, when not empty"),
   list(col = "has_discussions", type = "INTEGER", source = "graphql", rule = "hasDiscussionsEnabled"),
-  list(col = "discussions_total", type = "INTEGER", source = "graphql", rule = "discussions totalCount"))
-# v1 first scan 2026-07-18 (d115e2d), v2 00312fe, b903376, f861918 (2026-07-29 to 08-02), v3 this change.
-DEV_TOOLING_RULESET_VERSION <- "v3 (2026-09-26)"
+  list(col = "discussions_total", type = "INTEGER", source = "graphql", rule = "discussions totalCount"),
+  list(col = "gitlab_ci_include", type = "INTEGER", source = "gitlab_ci_text",
+       rule = paste("the .gitlab-ci.yml text, read with comments removed, matches", GITLAB_CI_TEXT_RULES$include,
+                    "; 0 when the file is absent")),
+  list(col = "gitlab_ci_rcmdcheck", type = "INTEGER", source = "gitlab_ci_text",
+       rule = paste("the .gitlab-ci.yml text, read with comments removed, matches", WORKFLOW_TEXT_RULES$rcmdcheck,
+                    "; a rule the text does not match reads NA when the file has include:")),
+  list(col = "gitlab_ci_platforms", type = "TEXT", source = "gitlab_ci_text",
+       rule = paste("with a check, linux when the text matches", GITLAB_CI_TEXT_RULES$image, "then macos as named by",
+                    GITLAB_CI_TEXT_RULES$macos, "and windows as named by", GITLAB_CI_TEXT_RULES$windows,
+                    "; the text is read with comments removed")),
+  list(col = "gitlab_ci_r_devel", type = "INTEGER", source = "gitlab_ci_text",
+       rule = paste("with a check, the .gitlab-ci.yml text, read with comments removed, matches",
+                    GITLAB_CI_TEXT_RULES$r_devel, "; a rule the text does not match reads NA when the file has include:")),
+  list(col = "gitlab_ci_coverage", type = "INTEGER", source = "gitlab_ci_text",
+       rule = paste("the .gitlab-ci.yml text, read with comments removed, matches", WORKFLOW_TEXT_RULES$coverage,
+                    "; a rule the text does not match reads NA when the file has include:")),
+  list(col = "gitlab_ci_site_deploy", type = "INTEGER", source = "gitlab_ci_text",
+       rule = paste("the .gitlab-ci.yml text, read with comments removed, matches", WORKFLOW_TEXT_RULES$site_deploy,
+                    "or", GITLAB_CI_TEXT_RULES$pages, "; a rule the text does not match reads NA when the file has include:")),
+  list(col = "gitlab_ci_lint", type = "INTEGER", source = "gitlab_ci_text",
+       rule = paste("the .gitlab-ci.yml text, read with comments removed, matches", WORKFLOW_TEXT_RULES$lint,
+                    "; a rule the text does not match reads NA when the file has include:")))
+# v1 first scan 2026-07-18 (d115e2d), v2 00312fe, b903376, f861918 (2026-07-29 to 08-02), v3 2026-09-26,
+# v4 adds the gitlab_ci_* columns and the .gitlab paths.
+DEV_TOOLING_RULESET_VERSION <- "v4 (2026-10-20)"
 
 # The ruleset in which every repository's commits began to be read each week. Rules
 # added or revised then carry it as since_ruleset. The day this reached main.
@@ -817,6 +865,35 @@ TREE_SUBTREES <- c(workflowsTree = ".github/workflows", claudeTree = ".claude", 
                    instTree = "inst", vignettesTree = "vignettes", siteTree = "site",
                    githubAgentsTree = ".github/agents", positTree = ".posit",
                    positaiTree = ".positai", geminiTree = ".gemini")
+# The same subtrees by the alias the GitLab contents read gives them, plus .gitlab.
+GITLAB_TREE_ALIASES <- c(github = ".github", workflows = ".github/workflows", githubAgents = ".github/agents",
+                         claude = ".claude", agents = ".agents", inst = "inst", vignettes = "vignettes",
+                         site = "site", posit = ".posit", positai = ".positai", gemini = ".gemini",
+                         gitlab = ".gitlab")
+# Files read by path from a GitLab repository, whose folders are not listed.
+GITLAB_CONTENT_FILES <- c("DESCRIPTION", ".gitignore", ".Rbuildignore", ".gitlab-ci.yml", "docs/pkgdown.yml")
+# GitLab Duo's files, read in a second request only for a project whose .gitlab folder lists duo. In the
+# contents query they put it over GitLab's anonymous complexity limit (201 of 200, measured 2026-10-20).
+GITLAB_DUO_FILES <- c(".gitlab/duo/chat-rules.md", ".gitlab/duo/agent-config.yml", ".gitlab/duo/mcp.json",
+                      ".gitlab/duo/mr-review-instructions.yaml")
+# GitLab commit-message search: projects per first-page request, and pages of 100 matching commits
+# read per project in one run.
+GITLAB_MESSAGE_BATCH    <- 10L
+GITLAB_MESSAGE_PAGE_CAP <- 10L
+# Addresses the windsurf rules credit under any name, which no search phrase holds. GitLab's prefilter
+# only; GitHub's searches keep the rules' own phrases.
+GITLAB_MESSAGE_EXTRA_PHRASES <- c("@windsurf.ai", "@windsurf.com")
+# The weekly GitLab read (ai_backfill.R gitlab-contents): GraphQL requests per host in one run, the
+# contents read and the message search together, and the fewest projects its contents check judges.
+GITLAB_AI_MAX_REQUESTS  <- 100L
+GITLAB_CANARY_MIN_ASKED <- 20L
+# A repository with hundreds of commits crediting Claude (247 on 2026-10-20) on a host with the message
+# search. A search there that finds none stops the run, so a change in GitLab's matching never writes none.
+GITLAB_MESSAGE_CANARY <- "gitlab.com/bart-turczynski/punycoder"
+# The GitLab dating pass (ai_backfill.R gitlab-onsets): its deadline in minutes, and the pages of 100
+# commits read for one path before it gives up on that path's date.
+GITLAB_ONSET_DEADLINE_MIN <- 130
+GITLAB_ONSET_PAGE_CAP     <- 20L
 # The contents query canary: one floor per set, met when any one candidate meets it.
 TREE_QUERY_CANARY <- list(
   own_community = c("tidyverse/forcats", "tidyverse/dplyr", "r-lib/usethis", "easystats/insight"),
@@ -909,6 +986,9 @@ AI_CANARY_MIN_ROSTER <- 200L
 # Windsurf became Devin Desktop on 2026-06-02, rules in .devin/rules: https://docs.devin.ai/desktop/devin-desktop-faq
 # Grok Build reads AGENTS.md, CLAUDE.md and .grok/rules, not GROK.md: https://github.com/xai-org/grok-build/blob/HEAD/crates/codegen/xai-grok-tools/src/types/compat.rs
 # Junie reads AGENTS.md first, .junie/guidelines.md is its legacy format: https://junie.jetbrains.com/docs/guidelines-and-memory.html
+# GitLab Duo reads .gitlab/duo/chat-rules.md and mr-review-instructions.yaml: https://docs.gitlab.com/user/gitlab_duo/customize_duo/ (checked 2026-10-20)
+# GitLab Duo reads .gitlab/duo/mcp.json: https://docs.gitlab.com/user/gitlab_duo/model_context_protocol/mcp_clients/ (checked 2026-10-20)
+# GitLab Duo flows read .gitlab/duo/agent-config.yml: https://docs.gitlab.com/user/duo_agent_platform/flows/execution/ (checked 2026-10-20)
 # The Roo Code extension shut down on 2026-05-15, the day its repository was archived: https://github.com/RooCodeInc/Roo-Code (README)
 AI_SILENT_CHANNELS_KNOWN <- read.csv(text = trimws(r"(
 tier,tool,status,reason,recorded_on
@@ -943,6 +1023,7 @@ B,augment,genuine,"No commit crediting Augment Code (a co-author line at noreply
 B,opencode,genuine,"No commit crediting OpenCode (a co-author line at noreply@opencode.ai) among 373,252 recent commits from 9,193 repositories, checked 2026-09-25. Every repository's new commits are read each week.",2026-09-25
 PR,codex,genuine,"No pull request among each repository's newest 50 was opened by Codex's account (openai-code-agent), checked across 161,444 pull requests on 2026-09-25. Codex's cloud tasks reach a repository as a pull request a maintainer opens, which this page finds by the task link or the Generated with Codex line in its description.",2026-09-25
 PR,kiro,genuine,"No pull request among each repository's newest 50 was opened by Kiro's account (kiro-agent), checked across 161,444 pull requests on 2026-09-25.",2026-09-25
+D,gitlab-duo,genuine,"No GitLab Duo file (.gitlab/duo/chat-rules.md, agent-config.yml or mcp.json) in any of the 214 GitLab repositories read on 2026-10-20: 13 have a .gitlab folder and none holds a duo folder. The files at the top of every GitLab repository are read each week.",2026-10-20
 PB,amazonq,genuine,"No pull request opened by a maintainer from a branch Amazon Q named (Q-DEV-issue-) has been found among the pull requests read in every repository each week. The one such branch found, in ss3sim, was opened by Amazon Q's own account.",2026-09-27
 )"), stringsAsFactors = FALSE)
 
