@@ -350,9 +350,71 @@ skip_golden_parity <- function()
   list(data = list(projects = list(nodes = nodes)), errors = NULL, status = 200L, error = NA_character_)
 }
 
-# As GitLab answers: unknown paths and ids left out, paths matched without case.
-.golden_gitlab <- function(domain, variables, back = 0L) {
-  if (!is.null(variables$ids)) return(.golden_gl_commits(domain, variables$ids))
+.golden_gl_ok <- function(nodes) list(data = list(projects = list(nodes = nodes)), errors = NULL, status = 200L,
+                                      error = NA_character_)
+.golden_gl_schema_error <- function(type, fields) list(data = NULL, status = 200L, error = NA_character_,
+  errors = lapply(fields, function(f) list(message = sprintf("Field '%s' doesn't exist on type '%s'", f, type),
+                                           extensions = list(code = "undefinedField", typeName = type, fieldName = f))))
+
+# The weekly AI read's projects. linelist has CLAUDE.md, issue templates under .gitlab and a CI file that
+# checks on R-devel, measures coverage and deploys Pages. usgspkg ignores .claude and takes its CI from
+# an include:, on a GitLab without forkedFrom, pagesDeployments or the commit-message search.
+.golden_gl_repos <- list(
+  "gitlab.com" = list(id = "gid://gitlab/Project/46520077", fullPath = "epiverse/outbreaks/linelist", pages = 1L,
+    trees = c("R", "tests", "vignettes"), blobs = c(".gitlab-ci.yml", "CLAUDE.md", "DESCRIPTION", "NAMESPACE", "README.md"),
+    gitlab = "issue_templates",
+    files = list(DESCRIPTION = "Package: linelist\nVersion: 1.3.0\n",
+                 ".gitlab-ci.yml" = paste0("image: rocker/r-ver:devel\n\ncheck:\n  script:\n    - R CMD build .\n",
+                                           "    - R CMD check --no-manual linelist_*.tar.gz\n",
+                                           "    - Rscript -e 'covr::package_coverage()'\n\n",
+                                           "pages:\n  script:\n    - Rscript -e 'pkgdown::build_site()'\n",
+                                           "  artifacts:\n    paths:\n      - public\n"))),
+  "code.usgs.gov" = list(id = "gid://gitlab/Project/4711", fullPath = "water/toxics/usgspkg", old = TRUE,
+    trees = "R", blobs = c(".gitignore", ".gitlab-ci.yml", "DESCRIPTION", "NAMESPACE"), gitlab = character(0),
+    files = list(DESCRIPTION = "Package: usgspkg\nVersion: 0.4.2\n", .gitignore = ".Rproj.user\n.claude\n",
+                 ".gitlab-ci.yml" = "include:\n  - project: water/ci-templates\n    file: /r-package.yml\n")))
+
+# The contents of the asked projects, with the fields the query asks; an old host refuses the optional ones.
+.golden_gl_contents <- function(domain, query, variables) {
+  r <- .golden_gl_repos[[domain]]
+  asked <- GITLAB_OPTIONAL_FIELDS[vapply(GITLAB_OPTIONAL_FIELDS, grepl, NA, x = query, fixed = TRUE)]
+  if (isTRUE(r$old) && length(asked)) return(.golden_gl_schema_error("Project", asked))
+  if (is.null(r) || !r$id %in% unlist(variables$ids)) return(.golden_gl_ok(list()))
+  listing <- function(trees = character(0), blobs = character(0))
+    list(trees = list(nodes = lapply(trees, function(n) list(name = n))),
+         blobs = list(nodes = lapply(blobs, function(n) list(name = n))))
+  sub_trees <- lapply(GITLAB_TREE_ALIASES, function(a) listing())
+  sub_trees$gitlab <- listing(r$gitlab)
+  node <- list(id = r$id, fullPath = r$fullPath, isForked = FALSE, forkedFrom = NULL,
+               ciConfigPathOrDefault = ".gitlab-ci.yml", pagesDeployments = list(count = r$pages), issuesEnabled = TRUE,
+               repository = c(list(rootRef = "main", empty = FALSE, root = listing(r$trees, r$blobs)), sub_trees,
+                 list(blobs = list(nodes = lapply(names(r$files), function(f) list(path = f, rawTextBlob = r$files[[f]]))))))
+  .golden_gl_ok(list(node[!names(node) %in% setdiff(GITLAB_OPTIONAL_FIELDS, asked)]))
+}
+
+# One commit in linelist credits Claude; usgspkg's host has no message search.
+.golden_gl_messages <- function(domain, variables) {
+  r <- .golden_gl_repos[[domain]]
+  if (isTRUE(r$old)) return(.golden_gl_schema_error("Repository", "commits"))
+  if (is.null(r) || !r$id %in% unlist(variables$ids)) return(.golden_gl_ok(list()))
+  credit <- list(sha = "5e1f0a7c2b", committedDate = "2026-03-05T11:00:00+01:00",
+                 message = "Check onset dates\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>")
+  .golden_gl_ok(list(list(id = r$id, repository = list(commits = list(
+    pageInfo = list(hasNextPage = FALSE, endCursor = NULL), nodes = list(credit))))))
+}
+
+# No golden project lists .github/workflows, so a workflow read finds no files.
+.golden_gl_workflows <- function(variables)
+  .golden_gl_ok(lapply(unlist(variables$ids), function(i) list(id = i, repository = list(blobs = list(nodes = list())))))
+
+# As GitLab answers each query: unknown paths and ids left out, paths matched without case.
+.golden_gitlab <- function(domain, query, variables, back = 0L) {
+  has <- function(s) grepl(s, query, fixed = TRUE)
+  # The workflow read also asks rawTextBlob, so it is told apart first.
+  if (has("blobs(paths: $paths)")) return(.golden_gl_workflows(variables))
+  if (has("rawTextBlob")) return(.golden_gl_contents(domain, query, variables))
+  if (has("$re")) return(.golden_gl_messages(domain, variables))
+  if (has("commitCount")) return(.golden_gl_commits(domain, variables$ids))
   keys <- tolower(unlist(variables$keys))
   hit <- Filter(function(n) tolower(n$fullPath) %in% keys || tolower(n$id) %in% keys, .golden_gl_projects(domain, back))
   list(data = list(projects = list(nodes = hit)),
@@ -360,17 +422,30 @@ skip_golden_parity <- function()
 }
 
 # The weekly REST answers: the contributor count in x-total, rows that carry a name and an email the
-# job never keeps, and licence keys, usgspkg's one GitLab files as other. Any other project is a 404.
+# job never keeps, and licence keys, usgspkg's one GitLab files as other. The AI dating's answers: a
+# file's commits, newest first, each with an address the job never keeps (linelist's CLAUDE.md, and
+# usgspkg's .gitignore), and .gitignore at a commit, with the .claude line at g2 and without it at g1.
+# Any other project is a 404.
 .golden_gl_rest <- function(domain, path) {
   answer <- function(body, headers = character(), status = 200L)
     list(status = status, headers = headers, error = if (status >= 400L) sprintf("HTTP %d", status) else NA_character_,
          body = as.character(jsonlite::toJSON(body, auto_unbox = TRUE)))
   projects <- list("gitlab.com" = list(id = "46520077", total = "6", top = 210L, license = "mit"),
                    "code.usgs.gov" = list(id = "4711", total = "2", top = 75L, license = "other"))
+  history <- list("46520077 CLAUDE.md" = list(c("c9e1", "2026-06-03T08:00:00Z"), c("c4b2", "2026-02-10T12:00:00Z")),
+                  "4711 .gitignore" = list(c("g2", "2026-04-14T09:30:00Z"), c("g1", "2025-11-20T15:00:00Z")))
   p <- if (domain %in% names(projects)) projects[[domain]]
   if (is.null(p) || !grepl(sprintf("^/projects/%s[/?]", p$id), path)) return(answer(list(message = "404 Project Not Found"), status = 404L))
   row <- function(n) list(list(name = "Maintainer", email = "maintainer@example.org", commits = n, additions = 0L, deletions = 0L))
-  if (grepl("order_by=commits", path, fixed = TRUE)) answer(row(p$top))
+  if (grepl("/repository/commits?path=", path, fixed = TRUE)) {
+    h <- history[[paste(p$id, utils::URLdecode(sub("^.*[?&]path=([^&]*).*$", "\\1", path)))]]
+    answer(lapply(h, function(x) list(id = x[1], committed_date = x[2], author_email = "maintainer@example.org")),
+           c(`x-next-page` = ""))
+  }
+  else if (grepl("/repository/files/.gitignore/raw?ref=", path, fixed = TRUE))
+    list(status = 200L, headers = character(), error = NA_character_,
+         body = if (endsWith(path, "=g2")) ".Rproj.user\n.claude\n" else ".Rproj.user\n")
+  else if (grepl("order_by=commits", path, fixed = TRUE)) answer(row(p$top))
   else if (grepl("/repository/contributors", path, fixed = TRUE)) answer(row(3L), c(`x-total` = p$total))
   else answer(list(id = as.integer(p$id), license = list(key = p$license, name = "Licence")))
 }
@@ -429,7 +504,7 @@ skip_golden_parity <- function()
     graphql = function(query) { note("graphql", query); graphql(query) },
     gl_graphql = function(domain, query, variables) {
       note("gl_graphql", domain, query, as.character(jsonlite::toJSON(variables, auto_unbox = TRUE)))
-      .golden_gitlab(domain, variables, back) },
+      .golden_gitlab(domain, query, variables, back) },
     gl_rest = function(domain, path) { note("gl_rest", domain, path); .golden_gl_rest(domain, path) },
     contributors = function(owner, name) { note("contributors", owner, name); .golden_contributors(owner, name) },
     # delay is pacing, not part of the request.
@@ -508,30 +583,42 @@ skip_golden_parity <- function()
   fn("run_merge")(io, file.path(m, "out"), file.path(m, "parts"))
 }
 
-# ai-weekly.yml: enumerate, cheap jobs on the roster artifact, the gate on the cheap partials,
-# deep jobs on the flagged roster, and a merge on the search, cheap and dev-tooling artifacts.
+# ai-weekly.yml: enumerate, cheap jobs on the roster artifact and gitlab-contents on its GitLab roster,
+# the gate on the cheap partials, deep jobs and gitlab-onsets on the flagged roster, and a merge on the
+# search, cheap and dev-tooling artifacts.
 .golden_ai <- function(fn, io, jobs, root) {
   e <- .golden_job(jobs, "enumerate")
   fn("run_enumerate_ai")(io, file.path(e, "out"))
+  gl <- .golden_job(jobs, "gitlab-contents")
+  .golden_artifact(e, "vcs-ai-roster-gitlab.db", file.path(gl, "roster"))
+  clock <- .golden_gl_clock()
+  fn("run_gitlab_contents")(io, file.path(gl, "out"), file.path(gl, "roster", "vcs-ai-roster-gitlab.db"),
+                            now = clock$now, sleep = clock$sleep)
   for (i in .golden_shards()) {
     c_ <- .golden_job(jobs, sprintf("cheap-%d", i))
     .golden_artifact(e, "vcs-ai-roster.db", file.path(c_, "roster"))
     fn("run_cheap")(io, file.path(c_, "out"), file.path(c_, "roster", "vcs-ai-roster.db"), i, GOLDEN_SHARDS)
   }
+  cheap <- c(file.path(jobs, sprintf("cheap-%d", .golden_shards())), gl)
   g <- .golden_job(jobs, "gate")
-  for (i in .golden_shards())
-    .golden_artifact(file.path(jobs, sprintf("cheap-%d", i)), "vcs-ai-cheap-*.db", file.path(g, "parts"))
+  for (c_ in cheap) .golden_artifact(c_, "vcs-ai-cheap-*.db", file.path(g, "parts"))
   fn("run_gate")(io, file.path(g, "out"), file.path(g, "parts"))
   for (i in .golden_shards()) {
     d <- .golden_job(jobs, sprintf("deep-%d", i))
     .golden_artifact(g, "vcs-ai-flagged-roster.db", file.path(d, "flagged"))
     fn("run_deep")(io, file.path(d, "out"), file.path(d, "flagged", "vcs-ai-flagged-roster.db"), i, GOLDEN_SHARDS)
   }
+  o <- .golden_job(jobs, "gitlab-onsets")
+  .golden_artifact(g, "vcs-ai-flagged-roster.db", file.path(o, "flagged"))
+  clock <- .golden_gl_clock()
+  fn("run_gitlab_onsets")(io, file.path(o, "out"), file.path(o, "flagged", "vcs-ai-flagged-roster.db"),
+                          now = clock$now, sleep = clock$sleep)
   m <- .golden_job(jobs, "merge")
-  for (i in .golden_shards()) {
-    .golden_artifact(file.path(jobs, sprintf("deep-%d", i)), "vcs-ai-shard-*.db", file.path(m, "parts"))
-    .golden_artifact(file.path(jobs, sprintf("cheap-%d", i)), "vcs-ai-cheap-*.db", file.path(m, "parts"))
-    .golden_artifact(file.path(jobs, sprintf("cheap-%d", i)), "vcs-dev-tooling-*.db", file.path(m, "parts"))
+  for (d in c(file.path(jobs, sprintf("deep-%d", .golden_shards())), o))
+    .golden_artifact(d, "vcs-ai-shard-*.db", file.path(m, "parts"))
+  for (c_ in cheap) {
+    .golden_artifact(c_, "vcs-ai-cheap-*.db", file.path(m, "parts"))
+    .golden_artifact(c_, "vcs-dev-tooling-*.db", file.path(m, "parts"))
   }
   fn("run_merge")(io, file.path(m, "out"), file.path(m, "parts"))
 }
