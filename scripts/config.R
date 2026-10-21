@@ -91,6 +91,23 @@ GITLAB_REST_CALLS_PER_REPO <- 3L
 # end and its deadline. update.yml caps the job at 170 minutes; the longest recent job took 136.
 GITLAB_DEADLINE_EXTRA_MIN <- 10
 
+# Codeberg (scripts/codeberg.R): anonymous Forgejo REST, one cb_pacer() per run, no token.
+CODEBERG_HOSTS <- c("codeberg")
+CODEBERG_DOMAIN <- "codeberg.org"
+CODEBERG_API <- "https://codeberg.org/api/v1"
+CODEBERG_USER_AGENT <- "r-observatory/vcs-signals (+https://github.com/r-observatory/vcs-signals)"
+CODEBERG_TIMEOUT_S <- 30
+CODEBERG_MIN_INTERVAL_S <- 1
+CODEBERG_BREAKER_AFTER <- 3L
+# An answer whose ratelimit r falls below this closes Codeberg for the run (2000 per 600 s per address).
+CODEBERG_RATELIMIT_FLOOR <- 400L
+CODEBERG_MAX_REQUESTS <- 900L     # daily run cap
+CODEBERG_PAGE <- 50L              # Forgejo's max_response_items
+CODEBERG_OWNER_PAGES <- 10L
+CODEBERG_PR_PAGES <- 10L
+CODEBERG_TOPICS_MAX <- 20L
+CODEBERG_DEADLINE_EXTRA_MIN <- 15
+
 # Hosts we have an adapter for. This sets repos.supported and routes nothing.
 SUPPORTED_HOSTS <- c("github", "gitlab")
 # Hosts whose repositories go to the GitHub collectors (resolve, gauges, weekly, backfill, AI).
