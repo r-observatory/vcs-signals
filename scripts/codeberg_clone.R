@@ -38,10 +38,13 @@ write_codeberg_roster <- function(path, roster_df) {
 
 #' The real io member: a treeless bare clone of the default branch under the project's User-Agent,
 #' with no credential helper and no redirect followed. `output` is git's stdout and stderr.
-cb_git_clone <- function(url, dir, run = system2) {
+cb_git_clone <- function(url, dir, run = system2) .cb_partial_clone(url, dir, CODEBERG_CLONE_FILTER, run)
+
+# The clone both hosts use; only the filter is a parameter.
+.cb_partial_clone <- function(url, dir, filter, run) {
   args <- c("-c", shQuote(paste0("http.userAgent=", CODEBERG_USER_AGENT)), "-c", "credential.helper=",
             "-c", "protocol.version=2", "-c", "http.followRedirects=false",
-            "clone", "--bare", paste0("--filter=", CODEBERG_CLONE_FILTER), "--single-branch", "--no-tags", "--quiet",
+            "clone", "--bare", paste0("--filter=", filter), "--single-branch", "--no-tags", "--quiet",
             shQuote(url), shQuote(dir))
   .cb_git(run, args, stderr = TRUE, timeout = CODEBERG_CLONE_TIMEOUT_S)
 }
@@ -107,21 +110,25 @@ cb_clone_counts <- function(io, obj, st, scratch) {
     return(.cb_clone_result("failed"))
   }
   st$pacer$after(CODEBERG_DOMAIN, TRUE)
+  got <- .cb_local_counts(dir)
+  if (!is.null(got$why)) {
+    .cb_log(st, sprintf("Codeberg %s: %s", name, got$why))
+    return(.cb_clone_result("failed"))
+  }
+  .cb_clone_result("ok", got$total, got$ids)
+}
+
+# The commit total and identity counts of a cloned directory, list(total, ids), or list(why) naming
+# what failed. The identity lines are counted here and dropped; nothing returned carries them.
+.cb_local_counts <- function(dir) {
   n <- cb_git_local(dir, c("rev-list", "--count", "HEAD"))
   ok <- n$status == 0L && length(n$lines) == 1L && grepl("^[0-9]+$", n$lines)
-  if (!ok) {
-    .cb_log(st, sprintf("Codeberg %s: git rev-list failed (exit %d)", name, n$status))
-    return(.cb_clone_result("failed"))
-  }
+  if (!ok) return(list(why = sprintf("git rev-list failed (exit %d)", n$status)))
   total <- as.integer(n$lines)
-  # The identity lines are counted here and dropped; no log line ever carries them.
   who <- cb_git_local(dir, c("log", shQuote("--format=%an%x1f%ae"), "HEAD"))
-  if (who$status != 0L || length(who$lines) != total) {
-    .cb_log(st, sprintf("Codeberg %s: git log failed (exit %d, %d of %d commits read)",
-                        name, who$status, length(who$lines), total))
-    return(.cb_clone_result("failed"))
-  }
-  .cb_clone_result("ok", total, cb_identity_counts(who$lines))
+  if (who$status != 0L || length(who$lines) != total)
+    return(list(why = sprintf("git log failed (exit %d, %d of %d commits read)", who$status, length(who$lines), total)))
+  list(total = total, ids = cb_identity_counts(who$lines))
 }
 
 # Clones the located repositories in roster order, into acc by roster row, until the deadline (checked

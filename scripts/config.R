@@ -130,6 +130,11 @@ BITBUCKET_CALLS_PER_REPO <- 6L
 # The daily Bitbucket pass runs after Codeberg's, until this many minutes past the later of its end and its deadline.
 BITBUCKET_DEADLINE_EXTRA_MIN <- 5
 BITBUCKET_REPO_FIELDS <- "uuid,full_name,created_on,size,parent.full_name,mainbranch.name,workspace.uuid"
+# The weekly clone pass (scripts/bitbucket_clone.R). Anonymous git requests do not count toward the
+# API's 60 an hour, so the request cap below covers only the not-found fallback asks.
+BITBUCKET_CLONE_FILTER <- "tree:0"
+BITBUCKET_WEEKLY_DEADLINE_MIN <- 100
+BITBUCKET_WEEKLY_MAX_REQUESTS <- 20L
 
 # Hosts we have an adapter for. This sets repos.supported and routes nothing.
 SUPPORTED_HOSTS <- c("github", "gitlab", "codeberg", "bitbucket")
