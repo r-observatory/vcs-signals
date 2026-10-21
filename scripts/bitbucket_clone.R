@@ -82,9 +82,12 @@ bb_clone_counts <- function(io, repo, st, scratch) {
   dir <- tempfile("clone-", tmpdir = scratch)
   on.exit(unlink(dir, recursive = TRUE, force = TRUE), add = TRUE)
   tryCatch({
-    done <- function(c) if (c$kind == "ok") .bb_clone_result("ok", c$total, c$ids) else .bb_clone_result(c$kind)
+    # Every kind maps to a state; a second clone that is still not found is not located.
+    done <- function(c, gone = "not_located") switch(c$kind,
+      ok = .bb_clone_result("ok", c$total, c$ids), gone = .bb_clone_result(gone),
+      stopped = .bb_clone_result("stopped"), .bb_clone_result("failed"))
     c1 <- .bb_clone_once(io, st, label, url, dir)
-    if (c1$kind != "gone") return(done(c1))
+    if (c1$kind != "gone") return(done(c1, "failed"))
     if (!is_bitbucket_node(repo$node_id)) return(.bb_clone_result("not_located"))
     a <- .bb_ask(io, st, paste0(bb_ids_path(repo$node_id), "?fields=full_name,uuid"))
     if (a$state == "stopped")

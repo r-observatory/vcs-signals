@@ -191,3 +191,26 @@ test_that("the real clone member sends the filter, the User-Agent and no redirec
   expect_identical(got$n, 1L)
   expect_true(r$status != 0L)
 })
+
+test_that("a renamed repository whose second clone is also not found is not located, and one that fails is failed", {
+  for (case in c("gone", "fail")) {
+    dir <- withr::local_tempdir()
+    roster <- bbc_roster(dir, "old/name", NODE)
+    seen <- new.env(); seen$urls <- character()
+    io <- list(
+      bb_clone = bbc_clone(seen, function(url, d) if (case == "gone" || grepl("/old/name", url)) bbc_gone(url)
+                                                  else list(status = 128L, output = "fatal: early EOF")),
+      bb_get = bb_fake(setNames(list(bb_answer(200L, list(full_name = "new/name", uuid = RP))), IDS_Q(NODE))))
+    lg <- bbc_logger()
+    bbc_run(io, roster, lg)
+    expect_length(seen$urls, 2L)
+    expect_true(is.na(bbc_snapshot(file.path(dir, "out"))$commits_total))
+    expect_match(lg$lines()[length(lg$lines())], if (case == "gone") "0 read, 0 failed, 1 not located, 0 not reached of 1 repos"
+                                                 else "0 read, 1 failed, 0 not located, 0 not reached of 1 repos", fixed = TRUE)
+  }
+  st <- bb_test_state()
+  io <- list(bb_clone = function(url, d) bbc_gone(url),
+             bb_get = bb_fake(setNames(list(bb_answer(200L, list(full_name = "new/name", uuid = RP))), IDS_Q(NODE))))
+  got <- bb_clone_counts(io, data.frame(owner = "old", name = "name", node_id = NODE), st, withr::local_tempdir())
+  expect_identical(got$state, "not_located")
+})
