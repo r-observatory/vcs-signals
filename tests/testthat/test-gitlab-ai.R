@@ -334,13 +334,12 @@ test_that("the message check is skipped with a warning, not failed, when its rep
 # holding "quote" with an error that quotes an address.
 gla_ci_throws <- function(env = parent.frame()) {
   real <- gitlab_ci_columns
-  assign("gitlab_ci_columns", function(root_entries, repo) {
+  rlang::local_bindings(gitlab_ci_columns = function(root_entries, repo) {
     txt <- repo$gitlab_ci$text %||% ""
     if (grepl("boom", txt, fixed = TRUE)) stop("the CI file could not be read\nat line 2")
     if (grepl("quote", txt, fixed = TRUE)) stop("cannot read 'Maintainer: A B <a.b@example.org>' at a.b@example.org")
     real(root_entries, repo)
-  }, envir = globalenv())
-  withr::defer(assign("gitlab_ci_columns", real, envir = globalenv()), envir = env)
+  }, .env = globalenv(), .frame = env)
 }
 # A contents answer whose .gitlab-ci.yml says `ci[[node]]` for the projects named there, else runs a check;
 # every message search is empty.
@@ -396,6 +395,50 @@ test_that("the contents check counts a repository that could not be processed as
   expect_no_error(run_gitlab_contents(gla_ci_world(boom(nodes[seq_len(n / 2)]))$io, out, roster_path, now = clock$now,
                                       sleep = clock$sleep, log = function(...) NULL))
   expect_length(read_dev_tooling(file.path(out, "vcs-dev-tooling-gitlab.db"))$repo_id, n / 2)
+})
+
+test_that("the GitLab stop messages say to leave the job for next Sunday, not to run it again", {
+  fixed <- "Next Sunday's run reads them again; re-running this job re-runs the whole AI pass"
+  expect_match(gitlab_contents_canary(25L, list()), fixed, fixed = TRUE)
+  expect_no_match(gitlab_contents_canary(25L, list()), "run the job again", fixed = TRUE)
+  none <- gla_canary_run(credits = FALSE)
+  expect_match(none$err, fixed, fixed = TRUE)
+  expect_no_match(none$err, "run the job again", fixed = TRUE)
+})
+
+test_that("the second contents check blames the repositories that failed, not the query", {
+  gla_ci_throws()
+  dir <- withr::local_tempdir(); out <- file.path(dir, "out")
+  n <- GITLAB_CANARY_MIN_ASKED
+  nodes <- sprintf("gitlab:gitlab.com:%d", seq_len(n))
+  roster_path <- gla_roster(dir, sprintf("gitlab.com/o/p%02d", seq_len(n)), nodes)
+  clock <- gla_clock()
+  boom <- stats::setNames(rep("boom", n - 1L), nodes[-1])
+  err <- tryCatch(run_gitlab_contents(gla_ci_world(boom)$io, out, roster_path, now = clock$now,
+                                      sleep = clock$sleep, log = function(...) NULL),
+                  error = function(e) conditionMessage(e))
+  expect_match(err, sprintf("%d failed in processing", n - 1L), fixed = TRUE)
+  expect_no_match(err, "may have changed", fixed = TRUE)
+  expect_match(err, "Next Sunday's run reads them again", fixed = TRUE)
+  expect_match(gitlab_contents_canary(25L, list()), "may have changed", fixed = TRUE)
+})
+
+test_that("an error whose text holds invalid bytes gets a fixed reason and no warning", {
+  e <- simpleError(paste0("bad ", rawToChar(as.raw(c(0x61, 0xff, 0xfe))), " byte"))
+  expect_no_warning(why <- .gl_error_reason(e))
+  expect_identical(why, "error text unreadable")
+  expect_identical(.gl_error_reason(simpleError("")), "error text unreadable")
+  expect_identical(.gl_error_reason(simpleError("plain\nsecond")), "plain")
+})
+
+test_that("a throw in the message check's own matching skips the check with a warning", {
+  roster <- data.frame(repo_id = GITLAB_MESSAGE_CANARY, node_id = "gitlab:gitlab.com:85027327", stringsAsFactors = FALSE)
+  msgs <- list(reads = stats::setNames(list(list(commits = "not a table")), GITLAB_MESSAGE_CANARY),
+               unsupported = character(0))
+  lg <- gla_log()
+  expect_null(gitlab_message_canary(roster, msgs, lg$log))
+  expect_length(grep("^::warning::GitLab message check: .*, skipped$", lg$lines()), 1L)
+  expect_false(any(grepl("not a table", lg$lines(), fixed = TRUE)))
 })
 
 test_that("a missing or empty GitLab roster logs a line and writes nothing", {
