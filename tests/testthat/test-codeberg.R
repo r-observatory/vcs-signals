@@ -1,4 +1,4 @@
-# Codeberg transport, pacing and locating (scripts/codeberg.R), over the fake in helper-codeberg.R.
+# Codeberg transport, pacing, locating and daily gauges (scripts/codeberg.R), over the fake in helper-codeberg.R.
 
 test_that("cb_get sends the User-Agent and JSON accept headers with the Codeberg timeout, and never -L", {
   got <- new.env()
@@ -235,4 +235,181 @@ test_that("codeberg_active_repos lists the active Codeberg rows by repo_id, with
 test_that("the recorded fixtures hold no address", {
   for (f in list.files(file.path("fixtures", "codeberg"), full.names = TRUE))
     expect_false(any(grepl("@", readLines(f, warn = FALSE), fixed = TRUE)), info = f)
+})
+
+test_that("cb_gauge_row maps the recorded zoo object to the gauge columns", {
+  obj <- cb_fixture("repo_zoo.json")
+  row <- cb_gauge_row(obj, utils::modifyList(cb_extras_na(), list(issues_closed = 5L, prs_closed = 1L, prs_merged = 2L)))
+  expect_identical(names(row), names(rows_df_empty_gauges()))
+  expect_identical(vapply(row, class, ""), vapply(rows_df_empty_gauges(), class, ""))
+  expect_identical(c(row$node_id, row$name_with_owner), c("codeberg:codeberg.org:2277662", "zeileis/zoo"))
+  expect_identical(c(row$stars, row$forks, row$watchers, row$issues_open, row$prs_open, row$size_kb), c(1L, 0L, 1L, 0L, 0L, 23708L))
+  expect_identical(c(row$issues_closed, row$prs_closed, row$prs_merged), c(5L, 1L, 2L))
+  expect_true(is.na(row$releases_total))
+  expect_identical(c(row$topics, row$created_at), c("", "2026-07-15T20:11:48Z"))
+  expect_identical(c(row$is_archived, row$is_fork, row$is_mirror), c(0L, 0L, 0L))
+  for (k in c("license", "owner_login", "owner_type", "owner_node_id", "pushed_at")) expect_true(is.na(row[[k]]), info = k)
+})
+
+test_that("cb_repo_extras reads closed issues, the merged split, the newest release and the newest commit date", {
+  obj <- cb_obj(1345721L, "ropensci/nasapower", release_counter = 33L)
+  seen <- new.env()
+  a <- cb_repo_extras(list(cb_get = cb_fake(cb_gauge_routes("ropensci/nasapower", issues_closed = 77L), seen)), obj, cb_test_state())
+  expect_identical(a$state, "ok")
+  row <- cb_gauge_row(obj, a$extras)
+  expect_identical(c(row$issues_closed, row$prs_closed, row$prs_merged, row$releases_total), c(77L, 1L, 1L, 33L))
+  expect_identical(c(row$last_release_tag, row$last_release_at, row$head_committed_at),
+                   c("v4.2.5", "2025-05-31T12:37:42Z", "2026-08-09T23:35:04Z"))
+  expect_length(seen$paths, 4L)
+})
+
+test_that("a disabled unit or an external tracker reads NA and costs no request, and releases off hide a counter above 0", {
+  seen <- new.env()
+  off <- cb_obj(106L, "o/off", has_issues = FALSE, has_pull_requests = FALSE, has_releases = FALSE, release_counter = 7L)
+  a <- cb_repo_extras(list(cb_get = cb_fake(cb_gauge_routes("o/off"), seen)), off, cb_test_state())
+  expect_identical(seen$paths, "/repos/o/off/commits?limit=1&stat=false&verification=false&files=false")
+  row <- cb_gauge_row(off, a$extras)
+  for (k in c("issues_open", "issues_closed", "prs_open", "prs_closed", "prs_merged", "releases_total", "last_release_tag"))
+    expect_true(is.na(row[[k]]), info = k)
+  seen2 <- new.env()
+  ext <- cb_obj(107L, "o/ext", external_tracker = list(external_tracker_url = "https://bugs.example/"))
+  b <- cb_repo_extras(list(cb_get = cb_fake(cb_gauge_routes("o/ext"), seen2)), ext, cb_test_state())
+  expect_false(any(grepl("type=issues", seen2$paths)))
+  expect_true(is.na(cb_gauge_row(ext, b$extras)$issues_open))
+  seen3 <- new.env()
+  cb_repo_extras(list(cb_get = cb_fake(cb_gauge_routes("o/none"), seen3)), cb_obj(109L, "o/none", release_counter = 0L), cb_test_state())
+  expect_false(any(grepl("/releases/", seen3$paths)))
+})
+
+test_that("a repository with only pre-releases keeps its count with no newest release", {
+  obj <- cb_obj(108L, "o/pre", release_counter = 4L)
+  a <- cb_repo_extras(list(cb_get = cb_fake(cb_gauge_routes("o/pre", latest = cb_answer(404L)))), obj, cb_test_state())
+  row <- cb_gauge_row(obj, a$extras)
+  expect_identical(a$state, "ok")
+  expect_identical(row$releases_total, 4L)
+  expect_true(is.na(row$last_release_tag)); expect_true(is.na(row$last_release_at))
+})
+
+test_that("an empty repository asks no commit, and a 409 from the commit list reads NA", {
+  routes <- cb_gauge_routes("o/e", commit = cb_answer(409L, list(message = "Git Repository is empty.")))
+  seen <- new.env()
+  cb_repo_extras(list(cb_get = cb_fake(routes, seen)), cb_obj(105L, "o/e", empty = TRUE), cb_test_state())
+  expect_false(any(grepl("/commits", seen$paths)))
+  b <- cb_repo_extras(list(cb_get = cb_fake(routes)), cb_obj(105L, "o/e"), cb_test_state())
+  expect_identical(b$state, "ok"); expect_true(is.na(b$extras$head_committed_at))
+})
+
+test_that("closed pull requests are split into merged and closed over pages of 50, and past 500 both are NA after one page", {
+  p1 <- c(rep(list(cb_pr(TRUE)), 45), rep(list(cb_pr(FALSE)), 5)); p2 <- c(rep(list(cb_pr(TRUE)), 5), rep(list(cb_pr(FALSE)), 5))
+  a <- cb_repo_extras(list(cb_get = cb_fake(cb_gauge_routes("o/pr", pulls = list(cb_list(p1, total = 60L), cb_list(p2, total = 60L))))),
+                      cb_obj(99L, "o/pr"), cb_test_state())
+  expect_identical(c(a$extras$prs_merged, a$extras$prs_closed), c(50L, 10L))
+  seen <- new.env()
+  big <- cb_gauge_routes("o/big", pulls = list(cb_list(rep(list(cb_pr(TRUE)), 50), total = 501L)))
+  b <- cb_repo_extras(list(cb_get = cb_fake(big, seen)), cb_obj(98L, "o/big"), cb_test_state())
+  expect_identical(c(b$extras$prs_closed, b$extras$prs_merged), c(NA_integer_, NA_integer_))
+  expect_identical(sum(grepl("type=pulls", seen$paths)), 1L)
+})
+
+test_that("a pull request row without a merged flag, or pages that end short of the total, leave both counts NA", {
+  odd <- cb_gauge_routes("o/odd", pulls = list(cb_list(list(cb_pr(TRUE), list(number = 2L, pull_request = list())))))
+  a <- cb_repo_extras(list(cb_get = cb_fake(odd)), cb_obj(97L, "o/odd"), cb_test_state())
+  expect_identical(a$state, "ok")
+  expect_identical(c(a$extras$prs_closed, a$extras$prs_merged), c(NA_integer_, NA_integer_))
+  short <- cb_gauge_routes("o/short", pulls = list(cb_list(rep(list(cb_pr(TRUE)), 50), total = 60L), cb_list(list(), total = 60L)))
+  b <- cb_repo_extras(list(cb_get = cb_fake(short)), cb_obj(96L, "o/short"), cb_test_state())
+  expect_identical(b$state, "ok")
+  expect_identical(c(b$extras$prs_closed, b$extras$prs_merged), c(NA_integer_, NA_integer_))
+})
+
+test_that("a count list without x-total-count, a move or a body of the wrong shape fails the repository with no further call", {
+  bad <- list(
+    "/repos/o/w/issues?state=closed&type=issues&limit=1" = cb_answer(body = list()),
+    "/repos/o/w/issues?state=closed&type=pulls&limit=50&page=1" = cb_answer(body = list(cb_pr(TRUE))),
+    "/repos/o/w/releases/latest" = cb_answer(301L, headers = c(location = "/api/v1/repos/x/w/releases/latest")),
+    "/repos/o/w/commits?limit=1&stat=false&verification=false&files=false" = cb_answer(body = list(message = "x")))
+  for (p in names(bad)) {
+    routes <- cb_gauge_routes("o/w")
+    routes[[p]] <- bad[[p]]
+    seen <- new.env()
+    a <- cb_repo_extras(list(cb_get = cb_fake(routes, seen)), cb_obj(95L, "o/w"), cb_test_state())
+    expect_identical(a$state, "failed", info = p)
+    expect_identical(utils::tail(seen$paths, 1L), p, info = p)
+  }
+})
+
+test_that("a migrated or mirrored repository has no created date, topics stop at 20, and a missing field is NA, never 0", {
+  expect_true(is.na(cb_gauge_row(cb_obj(101L, "o/m", original_url = "https://github.com/o/m"))$created_at))
+  expect_true(is.na(cb_gauge_row(cb_obj(102L, "o/n", mirror = TRUE))$created_at))
+  many <- cb_gauge_row(cb_obj(103L, "o/t", topics = as.list(sprintf("t%02d", 1:25))))
+  expect_identical(many$topics, paste(sprintf("t%02d", 1:20), collapse = ","))
+  gone <- cb_obj(104L, "o/g"); gone$stars_count <- NULL; gone$release_counter <- NULL
+  row <- cb_gauge_row(gone)
+  expect_true(is.na(row$stars)); expect_true(is.na(row$releases_total))
+  expect_identical(cb_na_counts(row)[["stars"]], 1L)
+})
+
+test_that("cb_collect_gauges leaves a repository with any failed call out of the snapshot, and keeps one whose unit answered 404", {
+  routes <- c(cb_gauge_routes("o/a", latest = cb_answer(500L)), cb_gauge_routes("o/b"))
+  routes[["/repos/o/b/issues?state=closed&type=issues&limit=1"]] <- cb_answer(404L)
+  g <- cb_collect_gauges(list(cb_get = cb_fake(routes)), cb_objects(cb_obj(71L, "o/a"), cb_obj(72L, "o/b")), cb_test_state(),
+                         today = as.Date("2026-10-20"))
+  expect_identical(g$snapshot$node_id, "codeberg:codeberg.org:72")
+  expect_true(is.na(g$snapshot$issues_closed))
+  expect_identical(g$deferred, "codeberg:codeberg.org:71")
+  expect_identical(c(g$unreached, g$unresolvable), character(0))
+})
+
+test_that("repositories are visited in rotate_by_day order, and the deadline leaves the rest unreached", {
+  objs <- do.call(cb_objects, lapply(81:84, function(i) cb_obj(i, sprintf("o/r%d", i))))
+  clock <- cb_clock()
+  fake <- cb_fake(do.call(c, lapply(81:84, function(i) cb_gauge_routes(sprintf("o/r%d", i)))))
+  io <- list(cb_get = function(path) { clock$env$t <- clock$env$t + 10; fake(path) })
+  day <- as.Date("2026-10-23")
+  g <- cb_collect_gauges(io, objs, cb_test_state(clock), deadline = clock$now() + 75, now = clock$now, today = day)
+  order <- rotate_by_day(sort(names(objs)), day)
+  expect_identical(g$snapshot$node_id, order[1:2])
+  expect_identical(g$unreached, order[3:4])
+})
+
+test_that("a 429 stops the pass with no further request, and three failures in a row defer Codeberg", {
+  routes <- c(cb_gauge_routes("o/a"), cb_gauge_routes("o/b"))
+  routes[["/repos/o/a/releases/latest"]] <- cb_answer(429L)
+  seen <- new.env(); st <- cb_test_state()
+  objs <- cb_objects(cb_obj(91L, "o/a"), cb_obj(92L, "o/b"))
+  g <- cb_collect_gauges(list(cb_get = cb_fake(routes, seen)), objs, st, today = as.Date("2026-10-20"))
+  expect_identical(utils::tail(seen$paths, 1L), "/repos/o/a/releases/latest")
+  expect_true("codeberg:codeberg.org:91" %in% g$deferred)
+  expect_identical(length(g$deferred) + NROW(g$snapshot), 2L)
+  expect_identical(st$closed, "429")
+  seen2 <- new.env(); seen2$paths <- character(0); st2 <- cb_test_state()
+  objs4 <- do.call(cb_objects, lapply(94:97, function(i) cb_obj(i, sprintf("o/f%d", i))))
+  g2 <- cb_collect_gauges(list(cb_get = function(path) { seen2$paths <- c(seen2$paths, path); cb_answer(502L) }),
+                          objs4, st2, today = as.Date("2026-10-20"))
+  expect_length(seen2$paths, 3L)
+  expect_setequal(g2$deferred, names(objs4))
+  expect_identical(st2$pacer$deferred(), CODEBERG_DOMAIN)
+})
+
+test_that("an r under 400 on the first answer stops the pass after that answer", {
+  # Every path answers r = 350, so the first answer stops the pass whichever repository comes first.
+  seen <- new.env(); seen$paths <- character(0); st <- cb_test_state()
+  io <- list(cb_get = function(path) { seen$paths <- c(seen$paths, path); cb_list(list(), total = 1L, r = 350L) })
+  g <- cb_collect_gauges(io, cb_objects(cb_obj(93L, "o/a"), cb_obj(193L, "o/b")), st, today = as.Date("2026-10-20"))
+  expect_length(seen$paths, 1L)
+  expect_match(seen$paths, "^/repos/o/[ab]/issues[?]state=closed&type=issues&limit=1$")
+  expect_setequal(g$deferred, c("codeberg:codeberg.org:93", "codeberg:codeberg.org:193"))
+  expect_identical(c(st$closed, as.character(st$low_r)), c("ratelimit", "350"))
+})
+
+test_that("no @ in the snapshot or the log", {
+  lines <- new.env(); lines$v <- character(0)
+  zoo <- cb_fixture("repo_zoo.json")
+  zoo$owner$email <- "maintainer@example.org"
+  st <- cb_test_state(log = function(m) lines$v <- c(lines$v, m))
+  routes <- c(cb_gauge_routes("zeileis/zoo"), cb_gauge_routes("o/x", latest = cb_answer(500L, list(message = "x@example.org"))))
+  g <- cb_collect_gauges(list(cb_get = cb_fake(routes)), cb_objects(zoo, cb_obj(5L, "o/x")), st, today = as.Date("2026-10-20"))
+  expect_identical(g$snapshot$name_with_owner, "zeileis/zoo")
+  expect_true(any(grepl("/repos/o/x/releases/latest: HTTP 500", lines$v, fixed = TRUE)))
+  expect_false(any(grepl("@", c(unlist(lapply(g$snapshot, as.character)), lines$v), fixed = TRUE)))
 })

@@ -39,3 +39,17 @@ cb_fake <- function(routes, seen = new.env()) {
   }
 }
 cb_fixture <- function(f) jsonlite::fromJSON(file.path("fixtures", "codeberg", f), simplifyVector = FALSE)
+cb_pr <- function(merged) list(number = 1L, pull_request = list(merged = merged))
+cb_commits <- function(date, total = 168L)
+  cb_list(list(list(sha = "df7e5d2c", commit = list(committer = list(name = "Committer", date = date)))), total = total)
+# The four gauge calls of one repository; `pulls` is one answer per page.
+cb_gauge_routes <- function(full_name, issues_closed = 1L, pulls = list(cb_list(list(cb_pr(TRUE), cb_pr(FALSE)))),
+                            latest = cb_answer(body = list(tag_name = "v4.2.5", published_at = "2025-05-31T14:37:42+02:00")),
+                            commit = cb_commits("2026-08-10T07:35:04+08:00")) {
+  p <- paste0("/repos/", full_name); r <- list()
+  r[[paste0(p, "/issues?state=closed&type=issues&limit=1")]] <- cb_list(list(), total = issues_closed)
+  for (i in seq_along(pulls)) r[[sprintf("%s/issues?state=closed&type=pulls&limit=50&page=%d", p, i)]] <- pulls[[i]]
+  r[[paste0(p, "/releases/latest")]] <- latest
+  r[[paste0(p, "/commits?limit=1&stat=false&verification=false&files=false")]] <- commit
+  r
+}

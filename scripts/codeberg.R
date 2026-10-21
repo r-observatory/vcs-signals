@@ -1,6 +1,7 @@
-# scripts/codeberg.R - Codeberg (Forgejo) collectors: the transport, the pacer and locating repositories.
-# Pure functions behind an injected io: io$cb_get(path) returns an http_request() result for
-# GET CODEBERG_API<path>. Anonymous, no token. Uses .gl_at, .gl_int and .gl_chr (gitlab.R).
+# scripts/codeberg.R - Codeberg (Forgejo) collectors: the transport, the pacer, locating repositories
+# and the daily gauges. Pure functions behind an injected io: io$cb_get(path) returns an
+# http_request() result for GET CODEBERG_API<path>. Anonymous, no token. Uses .gl_at, .gl_int,
+# .gl_chr, .gl_flag and .gl_utc (gitlab.R), rows_df_empty_gauges and rotate_by_day (github.R).
 
 # The real io member. curl runs without -L, so a 301 or 308 comes back as a status with its location.
 cb_get <- function(path, run = system2) {
@@ -25,6 +26,7 @@ cb_run_state <- function(pacer, log = NULL) {
 }
 
 .cb_log <- function(st, msg) if (!is.null(st$log)) st$log(msg)
+.cb_enc <- function(x) utils::URLencode(x, reserved = TRUE)
 
 .cb_header <- function(headers, name) {
   if (!is.character(headers) || !name %in% names(headers)) return(NA_character_)
@@ -112,12 +114,13 @@ cb_api_path <- function(location) {
   out
 }
 
+.cb_id_ok <- function(id) is.numeric(id) && length(id) == 1L && is.finite(id) && id >= 0 && id == round(id)
+
 # A repository object with a whole numeric id and a full name, or NULL.
 cb_repo_object <- function(x) {
   if (!is.list(x)) return(NULL)
-  id <- x[["id"]]; fn <- x[["full_name"]]
-  ok <- is.numeric(id) && length(id) == 1L && is.finite(id) && id >= 0 && id == round(id) &&
-    is.character(fn) && length(fn) == 1L && !is.na(fn) && nzchar(fn)
+  fn <- x[["full_name"]]
+  ok <- .cb_id_ok(x[["id"]]) && is.character(fn) && length(fn) == 1L && !is.na(fn) && nzchar(fn)
   if (ok) x else NULL
 }
 
@@ -143,7 +146,6 @@ codeberg_active_repos <- function(con) {
 #' id) and the repo_ids `not_located` (asked and not found: never marked gone), `deferred` (a failed
 #' answer, or Codeberg stopped for the run) and `unreached` (not asked by `deadline`).
 cb_locate <- function(io, repos, st, deadline = Inf, now = function() as.numeric(Sys.time())) {
-  enc <- function(x) utils::URLencode(x, reserved = TRUE)
   n <- nrow(repos)
   s <- new.env(parent = emptyenv())
   s$got <- rep(NA_character_, n); s$fate <- rep(NA_character_, n); s$objects <- list(); s$halt <- NA_character_
@@ -175,7 +177,7 @@ cb_locate <- function(io, repos, st, deadline = Inf, now = function() as.numeric
     renamed <- FALSE; page <- 1L; pool <- list(); outcome <- "listed"
     repeat {
       if (page > CODEBERG_OWNER_PAGES) break
-      a <- ask(sprintf("/users/%s/repos?limit=%d&page=%d", enc(login), CODEBERG_PAGE, page))
+      a <- ask(sprintf("/users/%s/repos?limit=%d&page=%d", .cb_enc(login), CODEBERG_PAGE, page))
       if (a$state %in% c("halt", "failed")) { outcome <- a$state; break }
       if (a$state == "moved") {
         p <- cb_api_path(a$location)
@@ -217,7 +219,7 @@ cb_locate <- function(io, repos, st, deadline = Inf, now = function() as.numeric
 
   # In the caller's order, so a deadline cut falls where its rotation puts it.
   for (i in sort(by_path)) {
-    a <- ask(sprintf("/repos/%s/%s", enc(repos$owner[i]), enc(repos$name[i])))
+    a <- ask(sprintf("/repos/%s/%s", .cb_enc(repos$owner[i]), .cb_enc(repos$name[i])))
     if (a$state == "halt") break
     if (a$state == "moved") {
       p <- cb_api_path(a$location)
@@ -236,10 +238,7 @@ cb_locate <- function(io, repos, st, deadline = Inf, now = function() as.numeric
   left <- is.na(s$got) & is.na(s$fate)
   if (any(left)) {
     s$fate[left] <- if (is.na(s$halt)) "deferred" else s$halt
-    why <- if (identical(s$halt, "unreached")) "the deadline passed"
-           else if (!is.na(st$closed)) "Codeberg closed for the run"
-           else if (CODEBERG_DOMAIN %in% st$pacer$deferred()) "deferred after repeated failures"
-           else "out of requests for this run"
+    why <- if (identical(s$halt, "unreached")) "the deadline passed" else .cb_stop_why(st)
     .cb_log(st, sprintf("Codeberg: %s, %d repositories left for the next run", why, sum(left)))
   }
   hit <- which(!is.na(s$got))
@@ -255,3 +254,159 @@ cb_locate <- function(io, repos, st, deadline = Inf, now = function() as.numeric
     deferred = repos$repo_id[s$fate %in% "deferred"],
     unreached = repos$repo_id[s$fate %in% "unreached"])
 }
+
+# ---- daily gauges --------------------------------------------------------------
+# "/repos/<owner>/<name>" for a full name, each segment encoded.
+.cb_repo_path <- function(full_name)
+  sprintf("/repos/%s/%s", .cb_enc(sub("/.*$", "", full_name)), .cb_enc(sub("^[^/]*/", "", full_name)))
+.cb_is_array <- function(x) is.list(x) && is.null(names(x))
+
+# Why Codeberg sends nothing more this run, for log lines.
+.cb_stop_why <- function(st) {
+  if (!is.na(st$closed)) "Codeberg closed for the run"
+  else if (CODEBERG_DOMAIN %in% st$pacer$deferred()) "deferred after repeated failures"
+  else "out of requests for this run"
+}
+
+# A unit counts only when the object says it is on; issues also need the internal tracker.
+.cb_issues_on <- function(obj) isTRUE(.gl_at(obj, "has_issues")) && is.null(.gl_at(obj, "external_tracker"))
+.cb_prs_on <- function(obj) isTRUE(.gl_at(obj, "has_pull_requests"))
+.cb_releases_on <- function(obj) isTRUE(.gl_at(obj, "has_releases"))
+
+# The first CODEBERG_TOPICS_MAX topics joined with ",", "" for none, NA unless an array of strings.
+.cb_topics <- function(x) {
+  if (is.list(x)) {
+    if (!is.null(names(x)) || !all(vapply(x, function(t) is.character(t) && length(t) == 1L && !is.na(t), NA)))
+      return(NA_character_)
+    x <- as.character(unlist(x))
+  }
+  if (!is.character(x) || anyNA(x)) return(NA_character_)
+  paste(utils::head(x, CODEBERG_TOPICS_MAX), collapse = ",")
+}
+
+#' What a repository's extra calls fill, all NA until read.
+cb_extras_na <- function()
+  list(issues_closed = NA_integer_, prs_closed = NA_integer_, prs_merged = NA_integer_,
+       last_release_at = NA_character_, last_release_tag = NA_character_, head_committed_at = NA_character_)
+
+#' One gauge row (the columns of rows_df_empty_gauges) from a repository object and its extras.
+#' Pure. A field absent or of the wrong type is NA, and so is every value of a disabled unit.
+cb_gauge_row <- function(obj, extras = cb_extras_na()) {
+  at <- function(k) .gl_at(obj, k)
+  ex <- function(k) .gl_at(extras, k)
+  issues <- .cb_issues_on(obj); prs <- .cb_prs_on(obj)
+  id <- at("id")
+  # A migrated or mirrored repository's created_at is the day it came to Codeberg.
+  url <- .gl_chr(at("original_url"))
+  moved_in <- (!is.na(url) && nzchar(url)) || isTRUE(at("mirror"))
+  data.frame(
+    node_id = if (.cb_id_ok(id)) cb_node_id(id) else NA_character_,
+    name_with_owner = .gl_chr(at("full_name")),
+    owner_login = NA_character_, owner_type = NA_character_, owner_node_id = NA_character_,
+    stars = .gl_int(at("stars_count")), forks = .gl_int(at("forks_count")), watchers = .gl_int(at("watchers_count")),
+    issues_open = if (issues) .gl_int(at("open_issues_count")) else NA_integer_,
+    issues_closed = if (issues) .gl_int(ex("issues_closed")) else NA_integer_,
+    prs_open = if (prs) .gl_int(at("open_pr_counter")) else NA_integer_,
+    prs_closed = if (prs) .gl_int(ex("prs_closed")) else NA_integer_,
+    prs_merged = if (prs) .gl_int(ex("prs_merged")) else NA_integer_,
+    releases_total = if (.cb_releases_on(obj)) .gl_int(at("release_counter")) else NA_integer_,
+    size_kb = .gl_int(at("size")),
+    license = NA_character_,
+    topics = .cb_topics(at("topics")),
+    is_archived = .gl_flag(at("archived")), is_fork = .gl_flag(at("fork")), is_mirror = .gl_flag(at("mirror")),
+    created_at = if (moved_in) NA_character_ else .gl_utc(at("created_at")),
+    pushed_at = NA_character_,
+    last_release_at = .gl_chr(ex("last_release_at")), last_release_tag = .gl_chr(ex("last_release_tag")),
+    head_committed_at = .gl_chr(ex("head_committed_at")),
+    stringsAsFactors = FALSE)
+}
+
+#' A repository's values beyond its object: closed issues, the closed and merged PR split, the
+#' newest release and the newest commit date, each asked only when its unit is on. state is "ok",
+#' or the "failed" or "stopped" of the first call that was, after which nothing more is asked. An
+#' "absent" answer (403, 404, 409, 410) leaves its values NA.
+cb_repo_extras <- function(io, obj, st) {
+  ex <- cb_extras_na()
+  end <- function(a) list(state = a$state, extras = ex)
+  if (is.null(cb_repo_object(obj))) return(end(list(state = "failed")))
+  base <- .cb_repo_path(obj[["full_name"]])
+  # One call. A move, or a 200 of the wrong shape or a list without its count, is a failed answer.
+  ask <- function(path, shape) {
+    a <- .cb_ask(io, st, path)
+    if (a$state == "ok" && !switch(shape,
+          count = .cb_is_array(a$json) && !is.na(cb_total_count(a$headers)),
+          array = .cb_is_array(a$json),
+          object = is.list(a$json) && !is.null(names(a$json))))
+      a$state <- "failed"
+    if (a$state == "moved") a$state <- "failed"
+    if (a$state == "failed")
+      .cb_log(st, sprintf("Codeberg %s: %s, the repository is deferred", path,
+                          if (is.na(a$status)) "no answer" else sprintf("HTTP %d", a$status)))
+    a
+  }
+  halts <- function(a) a$state %in% c("failed", "stopped")
+
+  if (.cb_issues_on(obj)) {
+    a <- ask(paste0(base, "/issues?state=closed&type=issues&limit=1"), "count")
+    if (halts(a)) return(end(a))
+    if (a$state == "ok") ex$issues_closed <- cb_total_count(a$headers)
+  }
+  if (.cb_prs_on(obj)) {
+    merged <- 0L; read <- 0L; total <- NA_integer_
+    for (page in seq_len(CODEBERG_PR_PAGES)) {
+      a <- ask(sprintf("%s/issues?state=closed&type=pulls&limit=%d&page=%d", base, CODEBERG_PAGE, page), "count")
+      if (halts(a)) return(end(a))
+      if (a$state != "ok") { total <- NA_integer_; break }
+      total <- cb_total_count(a$headers)
+      flags <- vapply(a$json, function(r) .gl_flag(.gl_at(r, "pull_request", "merged")), NA_integer_)
+      # Past the page cap, or a row without its merged flag: no split rather than a partial one.
+      if (total > CODEBERG_PAGE * CODEBERG_PR_PAGES || anyNA(flags)) { total <- NA_integer_; break }
+      merged <- merged + sum(flags); read <- read + length(flags)
+      if (read >= total || !length(flags)) break
+    }
+    if (!is.na(total) && read == total) { ex$prs_merged <- merged; ex$prs_closed <- total - merged }
+  }
+  if (.cb_releases_on(obj) && isTRUE(.gl_int(.gl_at(obj, "release_counter")) > 0L)) {
+    a <- ask(paste0(base, "/releases/latest"), "object")
+    if (halts(a)) return(end(a))
+    if (a$state == "ok") {
+      ex$last_release_tag <- .gl_chr(.gl_at(a$json, "tag_name"))
+      ex$last_release_at <- .gl_utc(.gl_at(a$json, "published_at"))
+    }
+  }
+  if (!isTRUE(.gl_at(obj, "empty"))) {
+    a <- ask(paste0(base, "/commits?limit=1&stat=false&verification=false&files=false"), "array")
+    if (halts(a)) return(end(a))
+    if (a$state == "ok") ex$head_committed_at <- .gl_utc(.gl_at(a$json, 1L, "commit", "committer", "date"))
+  }
+  list(state = "ok", extras = ex)
+}
+
+#' Daily gauges for located repositories. `objects` is cb_locate's objects, by node id. Visits them
+#' in rotate_by_day order and checks the deadline before each repository, never inside one.
+#' Returns collect_gauges' list: `snapshot` (the gauge frame, or NULL), `deferred` (a call failed,
+#' or Codeberg stopped for the run: no row, so the repository keeps its last values),
+#' `unresolvable` (always empty: a Codeberg repository is never marked gone) and `unreached`.
+cb_collect_gauges <- function(io, objects, st, deadline = Inf, now = function() as.numeric(Sys.time()),
+                              today = Sys.Date()) {
+  ids <- rotate_by_day(sort(as.character(names(objects)), method = "radix"), today)
+  rows <- list(); deferred <- character(0); unreached <- character(0); held <- 0L
+  for (i in seq_along(ids)) {
+    if (held) { deferred <- c(deferred, ids[i]); held <- held + 1L; next }
+    if (now() >= deadline) { unreached <- ids[i:length(ids)]; break }
+    a <- cb_repo_extras(io, objects[[ids[i]]], st)
+    if (a$state == "ok") { rows[[length(rows) + 1L]] <- cb_gauge_row(objects[[ids[i]]], a$extras); next }
+    deferred <- c(deferred, ids[i])
+    if (a$state == "stopped") held <- 1L
+  }
+  if (held) .cb_log(st, sprintf("Codeberg: %s, %d repositories left for the next run", .cb_stop_why(st), held))
+  if (length(unreached))
+    .cb_log(st, sprintf("Codeberg: the deadline passed, %d repositories left for the next run", length(unreached)))
+  list(snapshot = if (length(rows)) do.call(rbind, rows) else NULL, deferred = deferred,
+       unresolvable = character(0), unreached = unreached)
+}
+
+#' NA count per gauge column, for the log: a renamed Forgejo field shows as a jump in one count.
+cb_na_counts <- function(snapshot)
+  vapply(names(rows_df_empty_gauges()), function(k)
+    if (k %in% names(snapshot)) sum(is.na(snapshot[[k]])) else NROW(snapshot), integer(1))
