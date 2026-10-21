@@ -804,16 +804,18 @@ run_cheap <- function(io, out_dir, roster_path, i, N, batch_size = TIER_D_BATCH)
 #' The contents check: a stop message when at least GITLAB_CANARY_MIN_ASKED projects were asked and
 #' fewer than half came back, or fewer than half of those list DESCRIPTION at the root (measured
 #' 2026-10-20: 214 of 214 came back, 195 list it); NULL otherwise.
-gitlab_contents_canary <- function(asked, trees) {
+gitlab_contents_canary <- function(asked, trees, failed = 0L) {
   if (is.na(asked) || asked < GITLAB_CANARY_MIN_ASKED) return(NULL)
   back <- length(trees)
   desc <- sum(vapply(trees, function(t) "DESCRIPTION" %in% t$root_entries, NA))
   why <- if (back < asked / 2) "fewer than half came back"
          else if (desc < back / 2) sprintf("only %d of them list DESCRIPTION at the root", desc)
   if (is.null(why)) return(NULL)
-  sprintf(paste0("GitLab contents check: %d of %d projects asked came back, %s. GitLab may have changed ",
-                 "what the contents query returns; nothing was written. Read the job's lines for each host, ",
-                 "fix the query or the parser, and run the job again."), back, asked, why)
+  cause <- if (failed > 0L) sprintf("%d failed in processing", failed)
+           else "GitLab may have changed what the contents query returns"
+  sprintf(paste0("GitLab contents check: %d of %d projects asked came back, %s. %s; nothing was written. ",
+                 "Read the job's lines for each host. Next Sunday's run reads them again; re-running this job ",
+                 "re-runs the whole AI pass."), back, asked, why, cause)
 }
 
 #' The message check: a stop message when GITLAB_MESSAGE_CANARY, a repository with many commits crediting
@@ -827,15 +829,19 @@ gitlab_message_canary <- function(roster, msgs, log = NULL, repo_id = GITLAB_MES
     return(skip("is on a host without the message search"))
   rd <- msgs$reads[[repo_id]]
   if (is.null(rd)) return(skip("was not read this run"))
-  hits <- match_commit_findings(rd$commits)
-  n <- length(unique(hits$oid[hits$code == "B" & hits$role == "authoring"]))
+  n <- tryCatch({
+    hits <- match_commit_findings(rd$commits)
+    length(unique(hits$oid[hits$code == "B" & hits$role == "authoring"]))
+  }, error = function(e) NULL)
+  if (is.null(n)) return(skip("could not be matched"))
   if (n > 0L) {
     .gl_log(log, sprintf("GitLab message check: passed, %d commits of %s credit a tool", n, repo_id))
     return(NULL)
   }
   sprintf(paste0("GitLab message check: the search of %s found no commit crediting a tool, where hundreds ",
                  "are known. GitLab may have changed how it matches the search; nothing was written, so no ",
-                 "repository reads none. Check gl_message_regex() against a known commit and run the job again."),
+                 "repository reads none. Check gl_message_regex() against a known commit. Next Sunday's run reads them ",
+                 "again; re-running this job re-runs the whole AI pass."),
           repo_id)
 }
 
@@ -849,9 +855,12 @@ gitlab_rebuilt_repos <- function(log_in) {
 # An error's first line as a failure reason. An error can quote the text it failed on, so quoted text and
 # addresses are taken out.
 .gl_error_reason <- function(e) {
-  why <- strsplit(conditionMessage(e), "\n", fixed = TRUE)[[1]][1]
-  why <- gsub("'[^']*'|\"[^\"]*\"|`[^`]*`", "'...'", why)
-  substr(gsub("[[:alnum:]._%+-]+@[[:alnum:].-]+", "<address>", why), 1L, 200L)
+  why <- tryCatch({
+    why <- strsplit(conditionMessage(e), "\n", fixed = TRUE)[[1]][1]
+    why <- gsub("'[^']*'|\"[^\"]*\"|`[^`]*`", "'...'", why)
+    substr(gsub("[[:alnum:]._%+-]+@[[:alnum:].-]+", "<address>", why), 1L, 200L)
+  }, error = function(e) NA_character_, warning = function(w) NA_character_)
+  if (is.na(why)) "error text unreadable" else why
 }
 
 # One GitLab repository's rows for the cheap and dev-tooling partials, by table name. `rd` is its message
@@ -933,7 +942,8 @@ run_gitlab_contents <- function(io, out_dir, roster_path, now = function() as.nu
   }
   thrown <- .ai_bind_like(.fetch_failed_frame(), thrown)
   # The contents check again, a repository that could not be processed counting as not come back.
-  stop_msg <- gitlab_contents_canary(sum(ok), contents$trees[setdiff(names(contents$trees), thrown$repo_id)])
+  stop_msg <- gitlab_contents_canary(sum(ok), contents$trees[setdiff(names(contents$trees), thrown$repo_id)],
+                                     failed = length(unique(thrown$repo_id)))
   if (!is.null(stop_msg)) stop(stop_msg, call. = FALSE)
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   tables <- lapply(stats::setNames(names(proto), names(proto)), function(nm) .ai_bind_like(proto[[nm]], sink[[nm]]))
