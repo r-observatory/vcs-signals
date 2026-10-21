@@ -966,3 +966,18 @@ test_that("the real daily io reaches Bitbucket through bb_get", {
   src <- paste(readLines(file.path(.repo_root, "scripts", "update.R"), warn = FALSE), collapse = "\n")
   expect_true(grepl("bb_get\\s*=\\s*bb_get", src))
 })
+
+test_that("two package rows for one Bitbucket repository give one value each and no duplicate key", {
+  acquire <- function() data.frame(package = c("ggplot2", "depower", "depower2"), origin = "cran",
+    url_raw = c("https://github.com/tidyverse/ggplot2", "https://bitbucket.org/bklamer/depower",
+                "https://bitbucket.org/bklamer/depower"), bugreports_raw = NA, stringsAsFactors = FALSE)
+  out <- tempfile("out_bb_two"); dir.create(out); rel <- tempfile("rel_bb_two"); dir.create(rel)
+  seen <- new.env()
+  io <- .e2e_bb_io(rel, seen, acquire = acquire)
+  suppressMessages(capture.output(run_update(io, out, list(force_full = TRUE))))
+  expect_true("manifest.json" %in% io$uploaded())
+  expect_equal(.e2e_summary(rel, "depower")$forks, 2L)
+  expect_length(seen$bb, 6L)
+  n <- .e2e_read(rel, "SELECT COUNT(*) n FROM series_latest WHERE repo_id LIKE 'bitbucket.org/%' AND metric = 'forks'")$n
+  expect_identical(n, 1L)
+})

@@ -213,6 +213,7 @@ bb_collect <- function(io, repos, st, deadline = Inf, now = function() as.numeri
   rows <- list(); ids <- list()
   deferred <- unreached <- not_located <- character(0)
   later <- 0L
+  tried <- character(0)  # node ids already read or deferred this run: one read per repository
   for (i in seq_along(slice)) {
     rest <- slice[i:length(slice)]
     if (now() >= deadline) {
@@ -221,17 +222,19 @@ bb_collect <- function(io, repos, st, deadline = Inf, now = function() as.numeri
     }
     if (budget - st$asked < BITBUCKET_CALLS_PER_REPO) { later <- length(rest); break }
     id <- slice[i]
+    if (stored[[id]] %in% tried) next
     r <- bb_read_repo(io, repos[match(id, repos$repo_id), , drop = FALSE], st)
     if (r$state == "stopped") { later <- length(rest); break }
     if (r$state == "ok") {
-      rows[[length(rows) + 1L]] <- r$row
+      if (!r$node_id %in% tried) rows[[length(rows) + 1L]] <- r$row
+      tried <- c(tried, r$node_id)
       if (is.na(stored[[id]]) || !identical(stored[[id]], r$node_id)) {
         fn <- strsplit(r$row$name_with_owner, "/", fixed = TRUE)[[1]]
         ids[[length(ids) + 1L]] <- data.frame(repo_id = id, node_id = r$node_id, owner = fn[1], name = fn[2],
           name_with_owner = r$row$name_with_owner, status = "active", stringsAsFactors = FALSE)
       }
     } else if (r$state == "deferred") {
-      if (is_bitbucket_node(stored[[id]])) deferred <- c(deferred, stored[[id]])
+      if (is_bitbucket_node(stored[[id]])) { deferred <- c(deferred, stored[[id]]); tried <- c(tried, stored[[id]]) }
     } else not_located <- c(not_located, id)
   }
   list(snapshot = if (length(rows)) do.call(rbind, rows) else NULL, deferred = deferred,

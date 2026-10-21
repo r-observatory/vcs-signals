@@ -311,3 +311,27 @@ test_that("a repository not located is counted, a rewritten node id reaches ids"
   expect_identical(r$ids$node_id, bb_node_id(ws2, bb_uuid(1)))
   expect_length(r$deferred, 0L)
 })
+
+test_that("two rows with one node id are read once and give one snapshot row", {
+  repos <- bb_many(2)
+  repos$node_id[2] <- repos$node_id[1]
+  seen <- new.env()
+  routes <- bb_many_routes(2)
+  routes[[bb_fields(bb_ids_path(repos$node_id[1]))]] <- routes[[bb_fields("/repositories/o/r01")]]
+  r <- bb_collect(list(bb_get = bb_fake(routes, seen)), repos, bb_test_state(), now = function() 0,
+                  today = as.Date("2026-10-21"))
+  expect_length(seen$paths, 6L)
+  expect_identical(nrow(r$snapshot), 1L)
+  expect_identical(r$read, 1L)
+})
+
+test_that("two unlocated rows answering one uuid pair give one snapshot row and both ids", {
+  repos <- bb_many(2, located = 0)
+  routes <- bb_many_routes(2)
+  routes[[bb_fields("/repositories/o/r02")]] <- bb_answer(200L, bb_obj(rp = bb_uuid(1), full_name = "o/r01"))
+  r <- bb_collect(list(bb_get = bb_fake(routes)), repos, bb_test_state(), now = function() 0,
+                  today = as.Date("2026-10-21"))
+  expect_identical(nrow(r$snapshot), 1L)
+  expect_identical(r$ids$repo_id, repos$repo_id)
+  expect_identical(r$ids$node_id, rep(bb_nid(1), 2L))
+})
