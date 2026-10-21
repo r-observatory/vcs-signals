@@ -91,9 +91,10 @@ jobs:
     runs-on: ubuntu-latest
     # In minutes: update.R stops the GitHub gauge pass at GAUGE_DEADLINE_MIN
     # (100), GitLab may add GITLAB_DEADLINE_EXTRA_MIN (10) plus one 30 s
-    # request, and setup, tests and the stages through the publish took up to
-    # 36 more (longest recent job 136). That is about 147, so 170 leaves ~23.
-    timeout-minutes: 170
+    # request, Codeberg may add CODEBERG_DEADLINE_EXTRA_MIN (15), and setup,
+    # tests and the stages through the publish took up to 36 more (longest
+    # recent job 136). That is about 161, so 185 leaves ~24.
+    timeout-minutes: 185
     steps:
       - uses: actions/checkout@v7
       - uses: r-lib/actions/setup-r@v2

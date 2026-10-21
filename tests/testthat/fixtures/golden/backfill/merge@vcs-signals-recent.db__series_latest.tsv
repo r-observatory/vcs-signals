@@ -4,7 +4,16 @@ code.usgs.gov/water/toxics/usgspkg	issues_closed	5
 code.usgs.gov/water/toxics/usgspkg	issues_open	2
 code.usgs.gov/water/toxics/usgspkg	releases_total	0
 code.usgs.gov/water/toxics/usgspkg	stars	4
-codeberg.org/someone/cbpkg	stars	2
+codeberg.org/someone/cbpkg	forks	1
+codeberg.org/someone/cbpkg	issues_closed	7
+codeberg.org/someone/cbpkg	issues_open	1
+codeberg.org/someone/cbpkg	prs_closed	1
+codeberg.org/someone/cbpkg	prs_merged	2
+codeberg.org/someone/cbpkg	prs_open	1
+codeberg.org/someone/cbpkg	releases_total	2
+codeberg.org/someone/cbpkg	size_kb	820
+codeberg.org/someone/cbpkg	stars	5
+codeberg.org/someone/cbpkg	watchers	2
 github.com/epiverse-trace/cfr	forks	6
 github.com/epiverse-trace/cfr	issues_closed	20
 github.com/epiverse-trace/cfr	issues_open	2
@@ -73,3 +82,4 @@ gitlab.com/epiverse/outbreaks/linelist	prs_merged	15
 gitlab.com/epiverse/outbreaks/linelist	prs_open	1
 gitlab.com/epiverse/outbreaks/linelist	releases_total	2
 gitlab.com/epiverse/outbreaks/linelist	stars	12
+r-forge.r-project.org/projects/rfpkg	stars	2

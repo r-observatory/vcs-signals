@@ -643,3 +643,227 @@ test_that("GitLab gets its own allowance past GitHub's deadline, and what it doe
   expect_identical(ids2$node_id, c("gitlab:code.usgs.gov:4520", NA))
   expect_identical(ids2$status, c("active", "active"))
 })
+
+# ---- Codeberg after GitLab ---------------------------------------------------------
+.e2e_cb_acquire <- function(extra = character(0)) function() data.frame(
+  package = c("ggplot2", "sandwich", names(extra)), origin = "cran",
+  url_raw = c("https://github.com/tidyverse/ggplot2", "https://codeberg.org/zeileis/sandwich", unname(extra)),
+  bugreports_raw = NA, stringsAsFactors = FALSE)
+.e2e_cb_obj <- function(stars = 1L) cb_obj(2371475L, "zeileis/sandwich", stars_count = stars, forks_count = 1L,
+  watchers_count = 1L, open_issues_count = 2L, open_pr_counter = 2L, has_releases = FALSE, release_counter = 0L,
+  size = 9104L, topics = list(), created_at = "2023-05-04T10:00:00+02:00")
+.e2e_cb_routes <- function(stars = 1L) c(
+  list("/users/zeileis/repos?limit=50&page=1" = cb_list(list(.e2e_cb_obj(stars)))),
+  cb_gauge_routes("zeileis/sandwich", commit = cb_commits("2026-10-12T00:19:58+02:00")))
+# Codeberg as it answers `routes`; each request is kept in seen$cb and seen$all, and moves clock$t on by `cost`.
+.e2e_codeberg <- function(seen, routes = .e2e_cb_routes(), clock = NULL, cost = 0) {
+  inner <- new.env(); fake <- cb_fake(routes, inner); seen$cb <- character(0)
+  function(path) {
+    seen$cb <- c(seen$cb, path); seen$all <- c(seen$all, paste("codeberg", path))
+    if (!is.null(clock)) clock$t <- clock$t + cost
+    fake(path)
+  }
+}
+.e2e_cb_io <- function(rel, seen = new.env(), spent = FALSE, acquire = .e2e_cb_acquire(), ...) {
+  seen$all <- character(0)
+  local_release_io(rel, acquire = acquire, graphql = .e2e_github(seen, spent), cb_get = .e2e_codeberg(seen, ...))
+}
+.e2e_cb_first_run <- function(tag, ...) {
+  out <- tempfile(paste0("out_", tag)); dir.create(out)
+  rel <- tempfile(paste0("rel_", tag)); dir.create(rel)
+  seen <- new.env()
+  log <- capture.output(suppressMessages(run_update(.e2e_cb_io(rel, seen, ...), out, list(force_full = TRUE))))
+  list(out = out, rel = rel, seen = seen, log = log)
+}
+
+test_that("the daily run collects a Codeberg repository after GitHub, with no licence, no owner row, and its watchers and size", {
+  d <- .e2e_cb_first_run("cb")
+  s <- .e2e_summary(d$rel, "sandwich")
+  expect_identical(s$repo_id, "codeberg.org/zeileis/sandwich")
+  expect_identical(c(s$stars, s$forks, s$issues_open, s$prs_open), c(1L, 1L, 2L, 2L))
+  expect_identical(c(s$last_commit_date, s$repo_created_at, s$topics), c("2026-10-11T22:19:58Z", "2023-05-04T08:00:00Z", ""))
+  expect_true(is.na(s$license)); expect_true(is.na(s$releases_total)); expect_true(is.na(s$last_release_date))
+  expect_equal(.e2e_latest(d$rel, "codeberg.org/zeileis/sandwich")[c("watchers", "size_kb", "issues_closed", "prs_merged", "prs_closed")],
+               c(watchers = 1, size_kb = 9104, issues_closed = 1, prs_merged = 1, prs_closed = 1))
+  expect_identical(.e2e_read(d$rel, "SELECT node_id, supported, status FROM repos WHERE host = 'codeberg'"),
+                   data.frame(node_id = "codeberg:codeberg.org:2371475", supported = 1L, status = "active", stringsAsFactors = FALSE))
+  expect_identical(.e2e_read(d$rel, "SELECT repo_id FROM vcs_repo_owner")$repo_id, "github.com/tidyverse/ggplot2")
+  expect_identical(.e2e_summary(d$rel, "ggplot2")$stars, 6959L)
+  expect_gt(min(grep("^codeberg ", d$seen$all)), max(which(d$seen$all == "github gauges")))
+  expect_false(any(grepl("sandwich|zeileis", d$seen$gh)))
+  expect_false(any(grepl("@", d$log, fixed = TRUE)))
+  expect_true(any(grepl("^Codeberg: 1 located, 0 not located, 0 deferred, 0 not reached, 4 requests, lowest r 1990$", d$log)))
+  # Only the fields this repository could have filled: releases are off.
+  expect_identical(grep("^Codeberg NA by field", d$log, value = TRUE),
+                   "Codeberg NA by field: releases_total 1, last_release_at 1, last_release_tag 1")
+  # No address in any table the run published.
+  for (f in c("vcs-signals-recent.db", "vcs-signals-summary.db")) {
+    con <- DBI::dbConnect(RSQLite::SQLite(), file.path(d$rel, f))
+    cells <- unlist(lapply(DBI::dbListTables(con), function(t) as.character(unlist(DBI::dbReadTable(con, t)))))
+    DBI::dbDisconnect(con)
+    expect_false(any(grepl("@", cells, fixed = TRUE)), info = f)
+  }
+})
+
+test_that("a 403 from Codeberg's commit list keeps every last value of the repository, its commit date among them, and is logged", {
+  d <- .e2e_cb_first_run("cb_403")
+  expect_identical(.e2e_summary(d$rel, "sandwich")$last_commit_date, "2026-10-11T22:19:58Z")
+  routes <- .e2e_cb_routes(stars = 9L)
+  routes[["/repos/zeileis/sandwich/commits?limit=1&stat=false&verification=false&files=false"]] <- cb_answer(403L)
+  log <- capture.output(suppressMessages(run_update(.e2e_cb_io(d$rel, routes = routes), d$out, list())))
+  s <- .e2e_summary(d$rel, "sandwich")
+  expect_identical(s$last_commit_date, "2026-10-11T22:19:58Z")
+  expect_identical(s$stars, 1L)
+  expect_true(any(grepl("^Codeberg /repos/zeileis/sandwich/commits[?].*: HTTP 403, the repository is deferred$", log)))
+  expect_true(any(grepl("^Codeberg: 1 located, 0 not located, 1 deferred, 0 not reached", log)))
+})
+
+test_that("a GitHub budget below the reserve skips only GitHub, and Codeberg is still collected", {
+  d <- .e2e_cb_first_run("cb_spent", spent = TRUE)
+  expect_true(any(grepl("^gauges: GitHub skipped", d$log)))
+  expect_false(any(grepl("nodes(ids:", d$seen$gh, fixed = TRUE)))
+  expect_identical(.e2e_summary(d$rel, "sandwich")$stars, 1L)
+})
+
+test_that("a fault in the Codeberg code is logged and leaves GitHub and the publish going, with Codeberg's last values", {
+  d <- .e2e_cb_first_run("cb_fault")
+  old <- cb_collect_gauges
+  assign("cb_collect_gauges", function(...) stop("simulated Codeberg fault"), envir = globalenv())
+  withr::defer(assign("cb_collect_gauges", old, envir = globalenv()))
+  seen <- new.env()
+  io <- .e2e_cb_io(d$rel, seen, routes = .e2e_cb_routes(stars = 9L))
+  log <- capture.output(suppressMessages(run_update(io, d$out, list())))
+  expect_true(any(grepl("simulated Codeberg fault", log, fixed = TRUE)))
+  expect_true(any(grepl("nodes(ids:", seen$gh, fixed = TRUE)))
+  expect_true("manifest.json" %in% io$uploaded())
+  expect_identical(.e2e_summary(d$rel, "sandwich")$stars, 1L)
+  expect_identical(.e2e_summary(d$rel, "ggplot2")$stars, 6959L)
+
+  # A fault while locating keeps them too.
+  old_loc <- cb_locate
+  assign("cb_locate", function(...) stop("simulated locate fault"), envir = globalenv())
+  withr::defer(assign("cb_locate", old_loc, envir = globalenv()))
+  seen2 <- new.env()
+  io2 <- .e2e_cb_io(d$rel, seen2, routes = .e2e_cb_routes(stars = 9L))
+  log2 <- capture.output(suppressMessages(run_update(io2, d$out, list())))
+  expect_true(any(grepl("^Codeberg: locating stopped by a fault.*simulated locate fault", log2)))
+  expect_true(any(grepl("^Codeberg gauges: collected 0 repos, 1 deferred, 0 not reached", log2)))
+  expect_length(seen2$cb, 0L)
+  expect_true("manifest.json" %in% io2$uploaded())
+  expect_identical(.e2e_summary(d$rel, "sandwich")$stars, 1L)
+})
+
+# GitHub, GitLab and Codeberg in one run.
+.e2e_three_io <- function(rel, seen = new.env()) {
+  seen$all <- character(0)
+  acquire <- function() rbind(.e2e_gl_acquire(), .e2e_cb_acquire()()[2, , drop = FALSE])
+  local_release_io(rel, acquire = acquire, graphql = .e2e_github(seen), gl_graphql = .e2e_gitlab(seen),
+                   cb_get = .e2e_codeberg(seen))
+}
+
+test_that("a fault in the Codeberg map query or in its merge into the gauge frame is logged, and GitHub and GitLab still publish", {
+  check <- function(tag, fault) {
+    out <- tempfile(paste0("out_", tag)); dir.create(out)
+    rel <- tempfile(paste0("rel_", tag)); dir.create(rel)
+    io <- .e2e_three_io(rel)
+    log <- capture.output(res <- suppressMessages(run_update(io, out, list(force_full = TRUE))))
+    expect_true(any(grepl(paste0("^Codeberg: stopped by a fault.*", fault), log)), info = tag)
+    expect_true("manifest.json" %in% io$uploaded(), info = tag)
+    expect_identical(.e2e_summary(rel, "ggplot2")$stars, 6959L, info = tag)
+    expect_identical(.e2e_summary(rel, "rurl")$stars, 7L, info = tag)
+    expect_identical(.e2e_summary(rel, "inlpubs")$releases_total, 10L, info = tag)
+    expect_length(.e2e_latest(rel, "codeberg.org/zeileis/sandwich"), 0L)
+  }
+  old_node <- is_codeberg_node
+  assign("is_codeberg_node", function(...) stop("simulated map fault"), envir = globalenv())
+  restored <- FALSE
+  withr::defer(if (!restored) assign("is_codeberg_node", old_node, envir = globalenv()))
+  check("cb_map_fault", "simulated map fault")
+  assign("is_codeberg_node", old_node, envir = globalenv())
+  restored <- TRUE
+
+  # A snapshot whose columns do not match makes the rbind into the gauge frame fail.
+  old_pass <- .codeberg_pass
+  assign(".codeberg_pass", function(io, con, deadline, now, today) list(
+    snapshot = data.frame(node_id = "codeberg:codeberg.org:2371475", stars = 1L), deferred = character(0),
+    unresolvable = character(0), unreached = character(0),
+    map = data.frame(node_id = "codeberg:codeberg.org:2371475", repo_id = "codeberg.org/zeileis/sandwich")),
+    envir = globalenv())
+  withr::defer(assign(".codeberg_pass", old_pass, envir = globalenv()))
+  check("cb_rbind_fault", "columns")
+})
+
+test_that("Codeberg gets 15 minutes past GitLab's deadline, and what it does not reach keeps its values", {
+  expect_identical(CODEBERG_DEADLINE_EXTRA_MIN, 15)
+  routes <- function(stars) c(list("/users/zeileis/repos?limit=50&page=1" = cb_list(list(.e2e_cb_obj(stars),
+      cb_obj(2371476L, "zeileis/zoo", stars_count = stars, has_releases = FALSE)))),
+    cb_gauge_routes("zeileis/sandwich"), cb_gauge_routes("zeileis/zoo"))
+  acquire <- .e2e_cb_acquire(c(zoo = "https://codeberg.org/zeileis/zoo"))
+  d <- .e2e_cb_first_run("cb_slow", acquire = acquire, routes = routes(1L))
+  expect_identical(c(.e2e_summary(d$rel, "sandwich")$stars, .e2e_summary(d$rel, "zoo")$stars), c(1L, 1L))
+  clock <- new.env(); clock$t <- 1e9
+  seen <- new.env()
+  # GitHub's deadline is the start, GitLab has nothing to do, so Codeberg's deadline is 25 minutes in.
+  # Each request takes 400 s: the listing, then one repository's three calls, then the cut, in either order.
+  io <- .e2e_cb_io(d$rel, seen, acquire = acquire, routes = routes(9L), clock = clock, cost = 400)
+  log <- capture.output(suppressMessages(
+    run_update(io, d$out, list(gauge_deadline_min = 0, now = function() clock$t))))
+  expect_length(seen$cb, 4L)
+  expect_true(any(grepl("1 not reached", log, fixed = TRUE)))
+  expect_true("manifest.json" %in% io$uploaded())
+  expect_identical(sort(c(.e2e_summary(d$rel, "sandwich")$stars, .e2e_summary(d$rel, "zoo")$stars)), c(1L, 9L))
+})
+
+test_that("a day with no Codeberg repository asks Codeberg nothing and needs no Codeberg io", {
+  out <- tempfile("out_no_cb"); dir.create(out); rel <- tempfile("rel_no_cb"); dir.create(rel)
+  seen <- new.env(); seen$all <- character(0)
+  io <- local_release_io(rel, acquire = function() .e2e_cb_acquire()()[1, , drop = FALSE], graphql = .e2e_github(seen))
+  log <- capture.output(suppressMessages(run_update(io, out, list(force_full = TRUE))))
+  expect_false(any(grepl("Codeberg: .*fault|apply non-function", log)))
+  expect_false(any(grepl("^Codeberg", log)))
+  expect_true("manifest.json" %in% io$uploaded())
+  # With a Codeberg io present, nothing reaches it either.
+  out2 <- tempfile("out_no_cb2"); dir.create(out2); rel2 <- tempfile("rel_no_cb2"); dir.create(rel2)
+  seen2 <- new.env()
+  io2 <- .e2e_cb_io(rel2, seen2, acquire = function() .e2e_cb_acquire()()[1, , drop = FALSE])
+  suppressMessages(capture.output(run_update(io2, out2, list(force_full = TRUE))))
+  expect_length(seen2$cb, 0L)
+})
+
+test_that("two package URLs for one Codeberg repository share one id and one set of requests", {
+  routes <- .e2e_cb_routes()
+  routes[["/repos/zeileis/sandwich-old"]] <- cb_answer(301L, headers = c(location = "/api/v1/repos/zeileis/sandwich"))
+  routes[["/repos/zeileis/sandwich"]] <- cb_answer(body = .e2e_cb_obj())
+  d <- .e2e_cb_first_run("cb_two", acquire = .e2e_cb_acquire(c(sandwichold = "https://codeberg.org/zeileis/sandwich-old")),
+                         routes = routes)
+  ids <- .e2e_read(d$rel, "SELECT node_id FROM repos WHERE host = 'codeberg' ORDER BY repo_id")$node_id
+  expect_identical(ids, rep("codeberg:codeberg.org:2371475", 2L))
+  expect_identical(sum(grepl("/commits", d$seen$cb)), 1L)
+  expect_identical(c(.e2e_summary(d$rel, "sandwich")$stars, .e2e_summary(d$rel, "sandwichold")$stars), c(1L, 1L))
+})
+
+test_that("a run by code without the Codeberg pass keeps every Codeberg id and value, and the next run collects again", {
+  d <- .e2e_cb_first_run("cb_old")
+  old_pass <- .codeberg_pass; old_hosts <- SUPPORTED_HOSTS
+  assign(".codeberg_pass", function(io, con, deadline, now, today) list(snapshot = NULL, deferred = character(0),
+    unresolvable = character(0), unreached = character(0), map = data.frame(node_id = character(), repo_id = character())),
+    envir = globalenv())
+  assign("SUPPORTED_HOSTS", c("github", "gitlab"), envir = globalenv())
+  restored <- FALSE
+  withr::defer(if (!restored) { assign(".codeberg_pass", old_pass, envir = globalenv()); assign("SUPPORTED_HOSTS", old_hosts, envir = globalenv()) })
+  suppressMessages(capture.output(run_update(.e2e_cb_io(d$rel), d$out, list())))
+  expect_identical(.e2e_summary(d$rel, "sandwich")$stars, 1L)
+  expect_identical(.e2e_read(d$rel, "SELECT node_id, supported FROM repos WHERE host = 'codeberg'"),
+                   data.frame(node_id = "codeberg:codeberg.org:2371475", supported = 0L, stringsAsFactors = FALSE))
+  assign(".codeberg_pass", old_pass, envir = globalenv()); assign("SUPPORTED_HOSTS", old_hosts, envir = globalenv())
+  restored <- TRUE
+  io <- .e2e_cb_io(d$rel, routes = .e2e_cb_routes(stars = 4L))
+  suppressMessages(capture.output(run_update(io, d$out, list())))
+  expect_true("manifest.json" %in% io$uploaded())
+  expect_identical(.e2e_summary(d$rel, "sandwich")$stars, 4L)
+})
+
+test_that("the real daily io reaches Codeberg through cb_get", {
+  src <- paste(readLines(file.path(.repo_root, "scripts", "update.R"), warn = FALSE), collapse = "\n")
+  expect_true(grepl("cb_get\\s*=\\s*cb_get", src))
+})
