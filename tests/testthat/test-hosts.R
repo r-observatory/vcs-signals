@@ -9,14 +9,14 @@ test_that("no script filters on a literal host any more", {
   expect_false(any(grepl("host = 'github'|host='github'|LIKE 'github\\.com/%'", src)))
 })
 
-test_that("every host filter selects the GitHub hosts, except the daily run's two GitLab stages, the GitLab roster, the GitLab licence and the Codeberg roster", {
+test_that("every host filter selects the GitHub hosts, except the daily run's two GitLab stages, the GitLab roster, the GitLab licence the Codeberg roster and the Bitbucket roster", {
   calls_in <- function(f) {
     src <- readLines(f)
     unlist(regmatches(src, gregexpr("host_predicate\\([^)]*\\)", src)))
   }
   files <- list.files("../../scripts", "\\.R$", full.names = TRUE)
   calls <- unlist(lapply(files, calls_in))
-  expect_length(calls, 11L)
+  expect_length(calls, 12L)
   expect_equal(sum(grepl("^host_predicate\\(GITHUB_HOSTS[,)]", calls)), 6L)
   gl <- calls[grepl("^host_predicate\\(GITLAB_HOSTS[,)]", calls)]
   expect_length(gl, 4L)
@@ -27,6 +27,8 @@ test_that("every host filter selects the GitHub hosts, except the daily run's tw
   expect_length(grep("GITLAB_HOSTS", calls_in("../../scripts/helpers.R")), 1L)
   expect_equal(sum(grepl("^host_predicate\\(CODEBERG_HOSTS[,)]", calls)), 1L)
   expect_length(grep("CODEBERG_HOSTS", calls_in("../../scripts/codeberg.R")), 1L)
+  expect_equal(sum(grepl("^host_predicate\\(BITBUCKET_HOSTS[,)]", calls)), 1L)
+  expect_length(grep("BITBUCKET_HOSTS", calls_in("../../scripts/bitbucket.R")), 1L)
 })
 
 test_that("a gitlab repository never reaches the GitHub collectors, even when gitlab is a supported host", {

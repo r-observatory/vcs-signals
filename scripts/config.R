@@ -118,8 +118,21 @@ CODEBERG_LOCAL_GIT_TIMEOUT_S <- 120
 CODEBERG_WEEKLY_DEADLINE_MIN <- 100
 CODEBERG_WEEKLY_MAX_REQUESTS <- 900L  # weekly run cap, clone slots included
 
+# Bitbucket (scripts/bitbucket.R): anonymous REST 2.0, one bb_pacer() per run, no token and no rate-limit header.
+BITBUCKET_HOSTS <- c("bitbucket")
+BITBUCKET_DOMAIN <- "bitbucket.org"
+BITBUCKET_API <- "https://api.bitbucket.org/2.0"
+BITBUCKET_TIMEOUT_S <- 30
+BITBUCKET_MIN_INTERVAL_S <- 1
+BITBUCKET_BREAKER_AFTER <- 3L
+BITBUCKET_MAX_REQUESTS <- 50L     # daily run cap
+BITBUCKET_CALLS_PER_REPO <- 6L
+# The daily Bitbucket pass runs after Codeberg's, until this many minutes past the later of its end and its deadline.
+BITBUCKET_DEADLINE_EXTRA_MIN <- 5
+BITBUCKET_REPO_FIELDS <- "uuid,full_name,created_on,size,parent.full_name,mainbranch.name,workspace.uuid"
+
 # Hosts we have an adapter for. This sets repos.supported and routes nothing.
-SUPPORTED_HOSTS <- c("github", "gitlab", "codeberg")
+SUPPORTED_HOSTS <- c("github", "gitlab", "codeberg", "bitbucket")
 # Hosts whose repositories go to the GitHub collectors (resolve, gauges, weekly, backfill, AI).
 GITHUB_HOSTS <- c("github")
 
