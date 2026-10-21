@@ -140,6 +140,9 @@ jobs:
   fetch-codeberg:
     needs: enumerate
     runs-on: ubuntu-latest
+    # git runs against third-party remotes here, and the job writes nothing back, so its token only reads.
+    permissions:
+      contents: read
     # The pass stops itself at CODEBERG_WEEKLY_DEADLINE_MIN (100), so the shard is written inside this cap.
     timeout-minutes: 120
     steps:

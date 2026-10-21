@@ -185,14 +185,16 @@ run_fetch_codeberg <- function(io, out_dir, roster_path, now = function() as.num
   acc$state <- rep(NA_character_, n)
   acc$commits <- acc$contributors <- acc$top <- rep(NA_integer_, n)
   loc <- tryCatch(cb_locate(io, roster, st, deadline = deadline, now = now), error = function(e) {
-    log(sprintf("Codeberg: locating stopped by a fault, no repository is read this run: %s", .gl_redact(conditionMessage(e))))
+    log(sprintf("::warning::Codeberg: locating stopped by a fault, no repository is read this run: %s",
+                .gl_redact(conditionMessage(e))))
     NULL
   })
   if (!is.null(loc))
     tryCatch(.cb_clone_all(io, roster, loc$objects, loc$found$node_id[match(roster$repo_id, loc$found$repo_id)],
                            st, scratch, deadline, now, acc),
-             error = function(e) log(sprintf("Codeberg: cloning stopped by a fault, the repositories not read keep their last values: %s",
-                                             .gl_redact(conditionMessage(e)))))
+             error = function(e) log(sprintf(
+               "::warning::Codeberg: cloning stopped by a fault, the repositories not read keep their last values: %s",
+               .gl_redact(conditionMessage(e)))))
 
   rows <- data.frame(repo_id = roster$repo_id, commits_total = acc$commits, contributors_total = acc$contributors,
                      top_contributor_commits = acc$top, top_contributor_bot = rep(NA_integer_, n), stringsAsFactors = FALSE)

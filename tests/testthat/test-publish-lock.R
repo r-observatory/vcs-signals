@@ -673,11 +673,19 @@ test_that("the weekly merge runs when the GitLab or Codeberg fetch fails, and on
   expect_false(any(grepl("TOKEN|secrets\\.", top[.is_code(top)])))
 })
 
-test_that("weekly.yml runs fetch-codeberg on enumerate's Codeberg roster, and the merge downloads its shard", {
+test_that("weekly.yml runs fetch-codeberg read-only on enumerate's Codeberg roster, and the merge downloads its shard", {
   wf_dir <- file.path(.repo_root, ".github", "workflows")
   skip_if_not(dir.exists(wf_dir), "workflows not in this checkout")
   jobs <- lapply(.workflow_jobs(readLines(file.path(wf_dir, "weekly.yml"), warn = FALSE)), function(j) j[.is_code(j)])
   body <- function(name) paste(jobs[[name]], collapse = "\n")
+  # The job's token can read the repository and nothing more: one job-level block, contents: read alone.
+  cb <- jobs[["fetch-codeberg"]]
+  at <- grep("^\\s*permissions:\\s*$", cb)
+  expect_length(at, 1L)
+  expect_identical(.indent(cb[at]), min(.indent(cb)))
+  block <- cb[seq_along(cb) > at & cumsum(seq_along(cb) > at & .indent(cb) <= .indent(cb[at])) == 0L]
+  expect_identical(trimws(block), "contents: read")
+  expect_false(any(grepl("write", cb, fixed = TRUE)))
   expect_match(body("enumerate"), "out/vcs-signals-roster-codeberg.db", fixed = TRUE)
   expect_match(body("fetch-codeberg"), "needs: enumerate", fixed = TRUE)
   expect_match(body("fetch-codeberg"), "name: roster", fixed = TRUE)

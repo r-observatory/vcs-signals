@@ -250,6 +250,36 @@ test_that("a Codeberg roster that cannot be written is logged, and the GitHub an
   expect_identical(load_roster(file.path(out, "vcs-signals-roster-gitlab.db"))$repo_id, "gitlab.com/g/p")
 })
 
+test_that("a Codeberg roster that fails partway is removed, so fetch-codeberg finds no roster", {
+  src <- withr::local_tempfile(fileext = ".db")
+  con <- DBI::dbConnect(RSQLite::SQLite(), src)
+  # Without its primary key, repos holds zoo twice, and the roster's key refuses the second row.
+  DBI::dbExecute(con, "CREATE TABLE repos (repo_id TEXT, node_id TEXT, host TEXT NOT NULL, host_domain TEXT NOT NULL,
+    owner TEXT NOT NULL, name TEXT NOT NULL, name_with_owner TEXT NOT NULL, supported INTEGER NOT NULL,
+    n_packages INTEGER NOT NULL, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active')")
+  DBI::dbDisconnect(con)
+  zoo <- cbw_repo("codeberg.org/zeileis/zoo", "codeberg:codeberg.org:2277662", "codeberg")
+  cbw_summary(src, c(cbw_repo("github.com/rdatatable/data.table", "R_dt", "github"), zoo, zoo))
+  out <- withr::local_tempdir()
+  msgs <- testthat::capture_messages(run_weekly_enumerate(cbw_download(src), out))
+  expect_true(any(grepl("enumerate: no codeberg roster", msgs, fixed = TRUE)))
+  expect_false(file.exists(file.path(out, CODEBERG_ROSTER_DB)))
+  expect_identical(load_roster(file.path(out, "vcs-signals-roster.db"))$repo_id, "github.com/rdatatable/data.table")
+})
+
+test_that("a missing roster is a workflow warning and an empty shard, and no file appears where the roster belongs", {
+  dir <- withr::local_tempdir()
+  roster <- file.path(dir, CODEBERG_ROSTER_DB); scratch <- file.path(dir, "scratch")
+  lg <- cbw_logger()
+  p <- run_fetch_codeberg(list(), file.path(dir, "out"), roster, now = cb_clock()$now, sleep = function(s) NULL,
+                          scratch = scratch, log = lg$log)
+  expect_identical(p, file.path(dir, "out", CODEBERG_SHARD_DB))
+  expect_identical(nrow(cbw_snapshot(file.path(dir, "out"))), 0L)
+  expect_true(any(startsWith(lg$lines(), "::warning::Codeberg: the roster could not be read")))
+  expect_false(file.exists(roster))
+  expect_false(dir.exists(scratch))
+})
+
 test_that("the weekly job reads each located repository and leaves NA where a clone failed or nothing was found", {
   dir <- withr::local_tempdir(); scratch <- file.path(dir, "scratch")
   roster <- cbw_roster(dir, c("o/good", "o/bad", "o/lost"), sprintf("codeberg:codeberg.org:%d", c(1L, 3L, 5L)))
@@ -281,7 +311,7 @@ test_that("a failing clone or a fault outside any answer still writes the shard,
   s <- cbw_snapshot(file.path(b, "out"))
   expect_identical(s$repo_id, c("codeberg.org/o/good", "codeberg.org/p/x"))
   expect_true(all(is.na(s$commits_total)))
-  expect_true(any(grepl("locating stopped by a fault", lg$lines(), fixed = TRUE)))
+  expect_true(any(startsWith(lg$lines(), "::warning::Codeberg: locating stopped by a fault")))
   expect_false(dir.exists(scratch))
 
   # The pause before o/next's clone throws; o/good and o/zed are still read.
@@ -297,6 +327,21 @@ test_that("a failing clone or a fault outside any answer still writes the shard,
                      now = clock$now, sleep = sleep, log = lg$log)
   expect_identical(cbw_snapshot(file.path(d, "out"))$commits_total, c(6L, NA, 6L))
   expect_true(any(grepl("o/next", lg$lines(), fixed = TRUE) & grepl("fault", lg$lines(), fixed = TRUE)))
+})
+
+test_that("a fault in the clone stage outside any one repository is a workflow warning, and the shard is still written", {
+  dir <- withr::local_tempdir()
+  clock <- cb_clock(); arm <- new.env(); arm$on <- FALSE
+  # The listing arms a clock that throws once: at the deadline check before the first clone.
+  listing <- cb_list(list(cb_obj(1L, "o/good")))
+  io <- list(cb_get = function(path) { arm$on <- TRUE; listing }, cb_clone = cb_local_clone(cb_fixture_repo()))
+  now <- function() { if (arm$on) { arm$on <- FALSE; stop("simulated clock fault") }; clock$now() }
+  lg <- cbw_logger()
+  run_fetch_codeberg(io, file.path(dir, "out"), cbw_roster(dir, "o/good", "codeberg:codeberg.org:1"),
+                     now = now, sleep = clock$sleep, log = lg$log)
+  expect_identical(cbw_snapshot(file.path(dir, "out"))$repo_id, "codeberg.org/o/good")
+  expect_true(is.na(cbw_snapshot(file.path(dir, "out"))$commits_total))
+  expect_true(any(startsWith(lg$lines(), "::warning::Codeberg: cloning stopped by a fault")))
 })
 
 test_that("past the deadline no clone starts, and those repositories read NA", {
@@ -379,8 +424,11 @@ test_that("main runs fetch-codeberg on the Codeberg roster in VCS_ROSTER, and th
   cbw_roster(dir, "o/good", "codeberg:codeberg.org:1")
   withr::local_envvar(VCS_ROSTER = dir)
   out <- file.path(dir, "out")
+  # weekly.R's own main, whichever script last defined a global one.
+  weekly <- new.env(parent = globalenv())
+  withr::with_dir(.repo_root, sys.source(file.path("scripts", "weekly.R"), envir = weekly))
   # The listing fails, so nothing more is asked and no pause is taken.
-  suppressMessages(main("fetch-codeberg", out, io = list(cb_get = function(path) stop("offline"))))
+  suppressMessages(weekly$main("fetch-codeberg", out, io = list(cb_get = function(path) stop("offline"))))
   expect_identical(cbw_snapshot(out)$repo_id, "codeberg.org/o/good")
-  expect_error(main("no-such-mode", out, io = list()), "fetch-codeberg", fixed = TRUE)
+  expect_error(weekly$main("no-such-mode", out, io = list()), "fetch-codeberg", fixed = TRUE)
 })

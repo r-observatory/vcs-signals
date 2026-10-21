@@ -472,10 +472,11 @@ skip_golden_parity <- function()
     cb_answer(404L, list(message = "The target couldn't be found.")))
 }
 
-# A clone of someone/cbpkg is the fixture repository of helper-codeberg-git.R; any other is not found.
+# A clone of someone/cbpkg is the fixture repository of helper-codeberg-git.R; any other is not found,
+# in git's own words.
 .golden_cb_clone <- function(url, dir) {
   if (identical(url, "https://codeberg.org/someone/cbpkg.git")) return(cb_local_clone(cb_fixture_repo())(url, dir))
-  list(status = 128L, output = "fatal: repository not found")
+  list(status = 128L, output = sprintf("fatal: repository '%s' not found", url))
 }
 
 # The weekly documents' and the contents check's own repositories get the answers the canary tests use.
