@@ -15,6 +15,8 @@
 #                licences, read in turn under each host's REST budget - one job
 #   fetch-codeberg -> the Codeberg roster's commit totals and commit identities,
 #                from a treeless clone of each repository - one job
+#   fetch-bitbucket -> the Bitbucket roster's commit totals and commit identities,
+#                from a partial clone of each repository's default branch - one job
 #   merge     -> fold every shard's snapshot into the published series as a
 #                change-only weekly point dated today, rebuild the summary,
 #                and republish - one job
@@ -32,6 +34,7 @@ if (!exists("build_gauge_query"))    source("scripts/github.R")
 if (!exists("gl_collect_gauges"))    source("scripts/gitlab.R")
 if (!exists("run_fetch_gitlab"))     source("scripts/gitlab_weekly.R")
 if (!exists("run_fetch_codeberg"))   source("scripts/codeberg_clone.R")
+if (!exists("run_fetch_bitbucket"))  source("scripts/bitbucket_clone.R")
 if (!exists("gh_release_exists"))    source("scripts/update.R")  # default_io, gh_release_*, seed_working_db
 if (!exists("run_enumerate"))        source("scripts/backfill.R") # run_enumerate, write_roster, load_roster
 suppressPackageStartupMessages({ library(DBI); library(RSQLite) })
@@ -169,7 +172,17 @@ enumerate_codeberg <- function(summary_path, path) {
   write_codeberg_roster(path, roster)
 }
 
-#' weekly.yml's enumerate: the GitHub roster, then the GitLab and Codeberg ones. A GitLab or Codeberg
+#' The Bitbucket roster, the same way: every active Bitbucket repository with a Bitbucket node id.
+enumerate_bitbucket <- function(summary_path, path) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), summary_path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  roster <- bitbucket_active_repos(con)
+  roster <- roster[is_bitbucket_node(roster$node_id), , drop = FALSE]
+  message(sprintf("enumerate: %d bitbucket repos", nrow(roster)))
+  write_bitbucket_roster(path, roster)
+}
+
+#' weekly.yml's enumerate: the GitHub roster, then the GitLab, Codeberg and Bitbucket ones. A host
 #' roster that cannot be written leaves that host's job without one and touches nothing else.
 run_weekly_enumerate <- function(io, out_dir) {
   res <- run_enumerate(io, out_dir)
@@ -180,6 +193,11 @@ run_weekly_enumerate <- function(io, out_dir) {
   tryCatch(enumerate_codeberg(summary_path, cb), error = function(e) {
     if (file.exists(cb) && !dir.exists(cb)) unlink(cb)
     message("enumerate: no codeberg roster: ", conditionMessage(e))
+  })
+  bb <- file.path(out_dir, BITBUCKET_ROSTER_DB)
+  tryCatch(enumerate_bitbucket(summary_path, bb), error = function(e) {
+    if (file.exists(bb) && !dir.exists(bb)) unlink(bb)
+    message("enumerate: no bitbucket roster: ", conditionMessage(e))
   })
   invisible(res)
 }
@@ -198,8 +216,8 @@ run_weekly_enumerate <- function(io, out_dir) {
 #' likewise built from WEEKLY_METRICS alone. A repo unchanged since the last
 #' weekly run contributes no new signals_series row for that metric. The GitLab
 #' shard's licence readings go into gitlab_license, which every summary build
-#' reads for GitLab rows. A GitLab or Codeberg shard that cannot be read is
-#' skipped. The GitLab cursor state in parts_dir, when fetch-gitlab supplied
+#' reads for GitLab rows. A GitLab, Codeberg or Bitbucket shard that cannot be
+#' read is skipped. The GitLab cursor state in parts_dir, when fetch-gitlab supplied
 #' it, is uploaded after the publish.
 run_merge <- function(io, out_dir, parts_dir) {
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
@@ -242,9 +260,9 @@ run_merge <- function(io, out_dir, parts_dir) {
     list(snapshot = if (DBI::dbExistsTable(pcon, SNAPSHOT_TABLE)) DBI::dbReadTable(pcon, SNAPSHOT_TABLE) else empty_snapshot,
          license = if (DBI::dbExistsTable(pcon, "license")) DBI::dbReadTable(pcon, "license"))
   }
-  # A fault in the GitLab or Codeberg shard skips that file, so the GitHub shards still merge and publish.
-  # Each of the two is named in the log, folded in or skipped.
-  host_shards <- c(GitLab = GITLAB_SHARD_DB, Codeberg = CODEBERG_SHARD_DB)
+  # A fault in a GitLab, Codeberg or Bitbucket shard skips that file, so the GitHub shards still merge and publish.
+  # Each of the three is named in the log, folded in or skipped.
+  host_shards <- c(GitLab = GITLAB_SHARD_DB, Codeberg = CODEBERG_SHARD_DB, Bitbucket = BITBUCKET_SHARD_DB)
   read_part_guarded <- function(p) {
     host <- names(host_shards)[match(basename(p), host_shards)]
     if (is.na(host)) return(read_part(p))
@@ -360,6 +378,8 @@ main <- function(mode, out_dir, io = NULL) {
       gl_rest        = function(domain, path) gl_rest(domain, path, state = gl_state),
       cb_get         = cb_get,
       cb_clone       = cb_git_clone,
+      bb_get         = bb_get,
+      bb_clone       = bb_git_clone,
       release_exists = function() gh_release_exists(RELEASE_REPO),
       generation     = function() gh_release_generation(RELEASE_REPO),
       download       = function(pattern, dir) gh_release_download(RELEASE_REPO, pattern, dir),
@@ -381,13 +401,15 @@ main <- function(mode, out_dir, io = NULL) {
                      rest_pacer = gl_rest_p)
   } else if (mode == "fetch-codeberg") {
     run_fetch_codeberg(io, out_dir, file.path(Sys.getenv("VCS_ROSTER", out_dir), CODEBERG_ROSTER_DB))
+  } else if (mode == "fetch-bitbucket") {
+    run_fetch_bitbucket(io, out_dir, file.path(Sys.getenv("VCS_ROSTER", out_dir), BITBUCKET_ROSTER_DB))
   } else if (mode == "merge") {
     # If another publisher replaced the release between this merge's seed and its
     # publish (the AI merge shares this Sunday cron), the merge waits for that
     # publisher to finish, seeds again from what it left, and rebuilds.
     retry_on_publish_conflict(io, function() run_merge(io, out_dir, Sys.getenv("VCS_PARTS", "parts")))
   } else {
-    stop("usage: weekly.R [enumerate|fetch|fetch-gitlab|fetch-codeberg|merge]")
+    stop("usage: weekly.R [enumerate|fetch|fetch-gitlab|fetch-codeberg|fetch-bitbucket|merge]")
   }
 }
 

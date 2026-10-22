@@ -7,9 +7,12 @@ bitbucket.org/someone/bbpkg	2026-08-20	size_kb	2400
 bitbucket.org/someone/bbpkg	2026-09-10	forks	5
 bitbucket.org/someone/bbpkg	2026-09-10	prs_merged	5
 bitbucket.org/someone/bbpkg	2026-09-10	prs_open	2
+bitbucket.org/someone/bbpkg	<DATE>	commits_total	6
+bitbucket.org/someone/bbpkg	<DATE>	contributors_total	4
 bitbucket.org/someone/bbpkg	<DATE>	forks	3
 bitbucket.org/someone/bbpkg	<DATE>	prs_merged	6
 bitbucket.org/someone/bbpkg	<DATE>	prs_open	1
+bitbucket.org/someone/bbpkg	<DATE>	top_contributor_commits	3
 code.usgs.gov/water/toxics/usgspkg	<DATE>	contributors_total	2
 code.usgs.gov/water/toxics/usgspkg	<DATE>	forks	1
 code.usgs.gov/water/toxics/usgspkg	<DATE>	issues_closed	5

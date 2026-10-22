@@ -26,7 +26,7 @@
 # GitLab state upload call io$upload. A new mode or a new script counts as publishing until it is listed
 # here, which is the moment to check that it never uploads.
 .READ_ONLY_MODES <- list(
-  "weekly.R"      = c("enumerate", "fetch", "fetch-gitlab", "fetch-codeberg"),
+  "weekly.R"      = c("enumerate", "fetch", "fetch-gitlab", "fetch-codeberg", "fetch-bitbucket"),
   "backfill.R"    = c("enumerate", "fetch"),
   "ai_backfill.R" = c("enumerate", "cheap", "gitlab-contents", "gate", "gate-incremental", "deep",
                       "gitlab-onsets"))
@@ -654,10 +654,12 @@ test_that("the weekly merge runs when the GitLab or Codeberg fetch fails, and on
   expect_match(cond, "needs.fetch.result == 'success'", fixed = TRUE)
   expect_false(grepl("fetch-gitlab", cond, fixed = TRUE))
   expect_false(grepl("fetch-codeberg", cond, fixed = TRUE))
-  expect_true(any(grepl("needs: [fetch, fetch-gitlab, fetch-codeberg]", jobs[["merge"]], fixed = TRUE)))
+  expect_false(grepl("fetch-bitbucket", cond, fixed = TRUE))
+  expect_true(any(grepl("needs: [fetch, fetch-gitlab, fetch-codeberg, fetch-bitbucket]", jobs[["merge"]], fixed = TRUE)))
   # The Codeberg job is anonymous: no token and no secret of any kind.
   expect_false(any(grepl("TOKEN", jobs[["fetch-codeberg"]], fixed = TRUE)))
   expect_false(any(grepl("secrets.", jobs[["fetch-codeberg"]], fixed = TRUE)))
+  expect_false(any(grepl("TOKEN|secrets.", jobs[["fetch-bitbucket"]])))
   # The token is named in these jobs only, and nowhere else in any workflow.
   holders <- c("weekly.yml" = "fetch-gitlab", "ai-weekly.yml" = "gitlab-onsets")
   named <- function(x) sum(grepl("GITLAB_TOKEN_GITLAB_COM", x, fixed = TRUE))
@@ -693,6 +695,29 @@ test_that("weekly.yml runs fetch-codeberg read-only on enumerate's Codeberg rost
   expect_match(body("fetch-codeberg"), "Rscript scripts/weekly.R fetch-codeberg", fixed = TRUE)
   expect_match(body("fetch-codeberg"), "name: shard-codeberg", fixed = TRUE)
   expect_match(body("fetch-codeberg"), "path: out/vcs-signals-shard-codeberg.db", fixed = TRUE)
+  expect_match(body("merge"), "pattern: shard-*", fixed = TRUE)
+})
+
+test_that("weekly.yml runs fetch-bitbucket read-only on enumerate's Bitbucket roster, and the merge downloads its shard", {
+  wf_dir <- file.path(.repo_root, ".github", "workflows")
+  skip_if_not(dir.exists(wf_dir), "workflows not in this checkout")
+  jobs <- lapply(.workflow_jobs(readLines(file.path(wf_dir, "weekly.yml"), warn = FALSE)), function(j) j[.is_code(j)])
+  body <- function(name) paste(jobs[[name]], collapse = "\n")
+  # The job's token can read the repository and nothing more: one job-level block, contents: read alone.
+  bb <- jobs[["fetch-bitbucket"]]
+  at <- grep("^\\s*permissions:\\s*$", bb)
+  expect_length(at, 1L)
+  expect_identical(.indent(bb[at]), min(.indent(bb)))
+  block <- bb[seq_along(bb) > at & cumsum(seq_along(bb) > at & .indent(bb) <= .indent(bb[at])) == 0L]
+  expect_identical(trimws(block), "contents: read")
+  expect_false(any(grepl("write", bb, fixed = TRUE)))
+  expect_match(body("enumerate"), "out/vcs-signals-roster-bitbucket.db", fixed = TRUE)
+  expect_match(body("fetch-bitbucket"), "needs: enumerate", fixed = TRUE)
+  expect_match(body("fetch-bitbucket"), "name: roster", fixed = TRUE)
+  expect_match(body("fetch-bitbucket"), "VCS_ROSTER: roster", fixed = TRUE)
+  expect_match(body("fetch-bitbucket"), "Rscript scripts/weekly.R fetch-bitbucket", fixed = TRUE)
+  expect_match(body("fetch-bitbucket"), "name: shard-bitbucket", fixed = TRUE)
+  expect_match(body("fetch-bitbucket"), "path: out/vcs-signals-shard-bitbucket.db", fixed = TRUE)
   expect_match(body("merge"), "pattern: shard-*", fixed = TRUE)
 })
 
@@ -751,9 +776,9 @@ test_that("a GitLab or Codeberg job that fails skips no other job", {
   skip_if_not(dir.exists(wf_dir), "workflows not in this checkout")
   for (wf in c("weekly.yml", "ai-weekly.yml")) {
     jobs <- .workflow_jobs(readLines(file.path(wf_dir, wf), warn = FALSE))
-    hosts <- grep("gitlab|codeberg", names(jobs), value = TRUE)
+    hosts <- grep("gitlab|codeberg|bitbucket", names(jobs), value = TRUE)
     expect_true(any(grepl("gitlab", hosts, fixed = TRUE)), info = wf)
-    if (wf == "weekly.yml") expect_true("fetch-codeberg" %in% hosts)
+    if (wf == "weekly.yml") expect_true(all(c("fetch-codeberg", "fetch-bitbucket") %in% hosts))
     expect_setequal(.jobs_that_run(jobs, character(0)), names(jobs))
     for (g in hosts) expect_setequal(.jobs_that_run(jobs, g), names(jobs))
   }
