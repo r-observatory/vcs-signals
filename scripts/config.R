@@ -118,14 +118,17 @@ CODEBERG_LOCAL_GIT_TIMEOUT_S <- 120
 CODEBERG_WEEKLY_DEADLINE_MIN <- 100
 CODEBERG_WEEKLY_MAX_REQUESTS <- 900L  # weekly run cap, clone slots included
 
-# Bitbucket (scripts/bitbucket.R): anonymous REST 2.0, one bb_pacer() per run, no token and no rate-limit header.
+# Bitbucket (scripts/bitbucket.R): anonymous REST 2.0, one bb_pacer() per run, no token. Its rate-limit headers
+# disagree from one answer to the next, so none is read.
 BITBUCKET_HOSTS <- c("bitbucket")
 BITBUCKET_DOMAIN <- "bitbucket.org"
 BITBUCKET_API <- "https://api.bitbucket.org/2.0"
 BITBUCKET_TIMEOUT_S <- 30
 BITBUCKET_MIN_INTERVAL_S <- 1
 BITBUCKET_BREAKER_AFTER <- 3L
-BITBUCKET_MAX_REQUESTS <- 50L     # daily run cap
+# Daily run cap. A burst of 35 to 40 anonymous requests meets a 429 (measured 2026-10-22), after which
+# about one a minute is allowed, so 30 reads 5 repositories with room to spare.
+BITBUCKET_MAX_REQUESTS <- 30L
 BITBUCKET_CALLS_PER_REPO <- 6L
 # The daily Bitbucket pass runs after Codeberg's, until this many minutes past the later of its end and its deadline.
 BITBUCKET_DEADLINE_EXTRA_MIN <- 5
