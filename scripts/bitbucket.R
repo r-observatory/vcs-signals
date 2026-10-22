@@ -1,10 +1,10 @@
 # scripts/bitbucket.R - Bitbucket Cloud collectors: the transport, the pacer, the ask and the
 # repository identity. Pure functions behind an injected io: io$bb_get(path) returns an
-# http_request() result for GET BITBUCKET_API<path>. Anonymous, no token. Bitbucket sends no
-# rate-limit header, so only a 429 closes it for the run. Uses .gl_at, .gl_int, .gl_chr, .gl_utc
-# (gitlab.R), cb_run_state, .cb_log, .cb_status, .cb_enc (codeberg.R), http_request (http.R),
-# host_pacer (pacing.R), host_predicate (hosts.R), rows_df_empty_gauges and update_repo_node_ids
-# (helpers.R).
+# http_request() result for GET BITBUCKET_API<path>. Anonymous, no token. Bitbucket's
+# rate-limit headers disagree from one answer to the next, so only a 429 closes it for the run.
+# Uses .gl_at, .gl_int, .gl_chr, .gl_utc (gitlab.R), cb_run_state, .cb_log, .cb_status, .cb_enc
+# (codeberg.R), http_request (http.R), host_pacer (pacing.R), host_predicate (hosts.R),
+# rows_df_empty_gauges and update_repo_node_ids (helpers.R).
 
 # The real io member. curl runs without -L, so a redirect comes back as a status.
 bb_get <- function(path, run = system2) {
