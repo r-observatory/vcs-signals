@@ -1028,6 +1028,17 @@ github.com/dstanley4/apatables,claude,,Opus,4.6,,2026-10-07,"The default branch 
 github.com/themains/virustotal,claude,,Opus,5,,2026-10-07,"No commit from July 2026 remains on the default branch. The commits of 2026-08-20 credit Opus 5 with a 1M context window, which is a different row."
 )"), stringsAsFactors = FALSE, colClasses = "character", na.strings = "")
 
+# Model rows the parser once read from a commit's body instead of its trailer,
+# each checked on the repository by hand. A weekly read keeps the models it does
+# not name, so the merge drops these rows and the publish gate lets them go. The
+# model the trailer credits is not counted for that commit until the repository
+# is read again from its first commit.
+AI_MODEL_ROWS_MISREAD <- read.csv(text = trimws(r"(
+repo_id,tool,provider,family,version,context_window,checked_on,reason
+github.com/cornball-ai/corteza,claude,,Code,2.1,,2026-10-25,"Commit 3d3f9c8 (#62, 2026-05-08) names the coding tool's version 2.1 in its body, and its trailers credit Opus 4.6 with a 1M context window."
+github.com/xability/r-maidr,claude,,Code,2.1,,2026-10-25,"Commit 51faf06 (#302, 2026-09-11) names the coding tool's version 2.1.268 in its body, and its trailer credits Opus 5."
+)"), stringsAsFactors = FALSE, colClasses = "character", na.strings = "")
+
 AI_CANARY_MIN_ROSTER <- 200L
 
 # Vendor facts in these reasons, each checked on 2026-09-26 at the page named.

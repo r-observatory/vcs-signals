@@ -893,11 +893,20 @@ ai_silent_channel_table <- function(signals, known = AI_SILENT_CHANNELS_KNOWN, o
   list(provider = NA_character_, family = NA_character_,
        version = NA_character_, context_window = NA_character_)
 
+#' The Co-authored-by lines of a message whose name starts with `who`, the key in
+#' any case as git reads it. The model is stated there and only there: a body
+#' that names a coding tool and its version names the tool, not the model.
+.ai_trailer_lines <- function(message, who) {
+  lines <- strsplit(message, "\n", fixed = TRUE)[[1]]
+  lines[grepl(paste0("^\\s*co-authored-by:\\s*", who, "\\b"), lines, ignore.case = TRUE, perl = TRUE)]
+}
+
 #' The model a single commit message states, for the tool that wrote the trailer.
 #'
 #' Returns the four fields with NA where the trailer was silent. Absent family,
 #' version and context are three separate silences, none of them a value: a
-#' trailer saying only "Claude" is not Opus, not old, and not standard.
+#' trailer saying only "Claude" is not Opus, not old, and not standard. The first
+#' trailer that states a model is the one read.
 extract_ai_model <- function(tool, message) {
   out <- .ai_no_model()
   if (is.null(message) || length(message) != 1 || is.na(message)) return(out)
@@ -905,14 +914,14 @@ extract_ai_model <- function(tool, message) {
   if (identical(tool, "claude")) {
     # Claude <family> <version> [(<ctx> context)] -- family is any capitalised
     # word, so a family we have never seen still lands in the column.
-    m <- regmatches(message,
-      regexpr("Claude\\s+([A-Z][A-Za-z]*)\\s+([0-9]+(?:\\.[0-9]+)?)", message, perl = TRUE))
-    if (length(m) && nzchar(m)) {
-      g <- regmatches(m, regexec("Claude\\s+([A-Z][A-Za-z]*)\\s+([0-9]+(?:\\.[0-9]+)?)", m))[[1]]
+    for (line in .ai_trailer_lines(message, "Claude")) {
+      g <- regmatches(line, regexec("Claude\\s+([A-Z][A-Za-z]*)\\s+([0-9]+(?:\\.[0-9]+)?)", line))[[1]]
+      if (length(g) != 3) next
       out$family <- g[2]; out$version <- g[3]
+      ctx <- regmatches(line, regexec("\\(([0-9]+[KM])\\s+context\\)", line))[[1]]
+      if (length(ctx) == 2) out$context_window <- ctx[2]
+      break
     }
-    ctx <- regmatches(message, regexec("\\(([0-9]+[KM])\\s+context\\)", message))[[1]]
-    if (length(ctx) == 2) out$context_window <- ctx[2]
     return(out)
   }
 
@@ -920,19 +929,24 @@ extract_ai_model <- function(tool, message) {
     # aider (<provider>/<model>) -- split on the FIRST slash only. The model id
     # belongs to the provider and splitting it further would invent structure we
     # do not control.
-    g <- regmatches(message, regexec("aider\\s*\\(([^)]+)\\)", message))[[1]]
-    if (length(g) == 2 && grepl("/", g[2], fixed = TRUE)) {
+    for (line in .ai_trailer_lines(message, "aider")) {
+      g <- regmatches(line, regexec("aider\\s*\\(([^)]+)\\)", line))[[1]]
+      if (length(g) != 2 || !grepl("/", g[2], fixed = TRUE)) next
       out$provider <- sub("/.*$", "", g[2])
       out$family   <- sub("^[^/]*/", "", g[2])
+      break
     }
     return(out)
   }
 
   if (identical(tool, "gemini")) {
     # Gemini <version> <variant>
-    g <- regmatches(message,
-      regexec("Gemini\\s+([0-9]+(?:\\.[0-9]+)?)\\s+([A-Za-z][A-Za-z0-9-]*)", message))[[1]]
-    if (length(g) == 3) { out$version <- g[2]; out$family <- g[3] }
+    for (line in .ai_trailer_lines(message, "Gemini")) {
+      g <- regmatches(line, regexec("Gemini\\s+([0-9]+(?:\\.[0-9]+)?)\\s+([A-Za-z][A-Za-z0-9-]*)", line))[[1]]
+      if (length(g) != 3) next
+      out$version <- g[2]; out$family <- g[3]
+      break
+    }
     return(out)
   }
 
@@ -1207,8 +1221,9 @@ fold_outside_prs <- function(prior, incoming) {
 
 #' Model tallies after this run, one row per model. A week asks only some of a repository's rules, so a search shard's
 #' tally raises a model's stored count to its own and keeps the models it does not name. A read to the first commit in
-#' rebuilt_repos replaces a repository's rows, and a weekly read adds its new commits only on the stored watermark. Pure.
-fold_models <- function(prior, deep, cheap, rebuilt_repos = NULL, reads = NULL) {
+#' rebuilt_repos replaces a repository's rows, and a weekly read adds its new commits only on the stored watermark.
+#' A row `misread` names (AI_MODEL_ROWS_MISREAD) is dropped wherever it came from. Pure.
+fold_models <- function(prior, deep, cheap, rebuilt_repos = NULL, reads = NULL, misread = NULL) {
   proto <- .ai_empty_models()
   key <- c("repo_id", "tool", "provider", "family", "version", "context_window")
   # Tables written with one tally per rule hold a model more than once.
@@ -1241,6 +1256,7 @@ fold_models <- function(prior, deep, cheap, rebuilt_repos = NULL, reads = NULL) 
       out$last_seen[k] <- .ai_latest_chr(c(out$last_seen[k], add$last_seen[i]))
     }
   }
+  if (!is.null(misread) && nrow(misread)) out <- out[!(.gate_key(out, key) %in% .gate_key(misread, key)), , drop = FALSE]
   rownames(out) <- NULL
   out
 }
