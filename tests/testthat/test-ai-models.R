@@ -45,6 +45,47 @@ test_that("an unfamiliar family is kept verbatim rather than dropped", {
   expect_equal(invented$version, "9.1")
 })
 
+test_that("a model the message body names is not the model the trailer credits", {
+  # cornball-ai/corteza #62, 2026-05-08: the body names the coding tool and its
+  # version, 2.1, and the trailers credit Opus 4.6. Read anywhere in the message,
+  # the body's tool and version came first and were stored as a model.
+  msg <- paste0("fix: MCP stdio transport compatibility with Claude Code (#62)\n\n",
+                "   Claude Code 2.1+ requires \"2025-11-25\". Now echoes back the\n\n",
+                "Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>")
+  got <- extract_ai_model("claude", msg)
+  expect_equal(got$family, "Opus")
+  expect_equal(got$version, "4.6")
+  expect_equal(got$context_window, "1M")
+})
+
+test_that("the trailer key is read in any case, as git reads it", {
+  # xability/r-maidr #302, 2026-09-11, whose body names the coding tool.
+  got <- extract_ai_model("claude",
+    "ci: stop setting the env scrub that keeps Claude Code from starting (#302)\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>")
+  expect_equal(got$family, "Opus")
+  expect_equal(got$version, "5")
+})
+
+test_that("a model only the body names, beside a trailer that names none, is no statement", {
+  got <- extract_ai_model("claude",
+    "feat: support Claude Sonnet 4.5 in the chat helper\n\nCo-Authored-By: Claude <noreply@anthropic.com>")
+  expect_true(is.na(got$family))
+  expect_true(is.na(got$version))
+  expect_true(is.na(got$context_window))
+})
+
+test_that("Gemini and Aider are read from their trailers too, not from the body", {
+  g <- extract_ai_model("gemini",
+    "docs: compare Gemini 2.5 Pro with others\n\nCo-Authored-By: Gemini 2.5 Flash <noreply@google.com>")
+  expect_equal(g$family, "Flash")
+  expect_equal(g$version, "2.5")
+  quiet <- extract_ai_model("gemini", "docs: Gemini 2.5 Pro notes\n\nCo-Authored-By: Gemini <gemini@google.com>")
+  expect_true(is.na(quiet$family))
+  a <- extract_ai_model("aider", "chore: try aider (openai/gpt-4o) locally\n\nCo-authored-by: aider (ollama/gemma3:e4b-mlx) <aider@aider.chat>")
+  expect_equal(a$provider, "ollama")
+  expect_equal(a$family, "gemma3:e4b-mlx")
+})
+
 test_that("Aider names the provider it routed through, including a local one", {
   # The one fact on the site that says whether a maintainer ran a hosted model
   # or their own machine.
@@ -232,6 +273,24 @@ test_that("a weekly read adds its new model commits to the stored tally", {
   expect_error(fold_models(m(10L, "2025-01-01", "2026-09-01"), .ai_empty_models(),
                            m(2L, "2026-10-02", "2026-10-03", "add", through), rebuilt_repos = character(0)),
                "reads is NULL")
+})
+
+test_that("a row an earlier parser misread is dropped, and only that row", {
+  # A weekly read keeps the models it does not name, so a misread row would stay for good.
+  m <- function(repo, family, version) data.frame(repo_id = repo, tool = "claude", provider = NA_character_, family = family,
+    version = version, context_window = NA_character_, commits = 1L, first_seen = "2026-05-08", last_seen = "2026-05-08",
+    window_complete = 1L, stringsAsFactors = FALSE)
+  misread <- data.frame(repo_id = "r1", tool = "claude", provider = NA_character_, family = "Code", version = "2.1",
+    context_window = NA_character_, checked_on = "2026-10-25", reason = "read from the body, not the trailer",
+    stringsAsFactors = FALSE)
+  prior <- rbind(m("r1", "Code", "2.1"), m("r1", "Opus", "4.6"), m("r2", "Code", "2.1"))
+  got <- fold_models(prior, .ai_empty_models(), NULL, misread = misread)
+  expect_equal(sort(paste(got$repo_id, got$family)), c("r1 Opus", "r2 Code"))
+  # A deep tally from before the fix cannot bring it back either.
+  again <- fold_models(m("r1", "Opus", "4.6"), m("r1", "Code", "2.1"), NULL, misread = misread)
+  expect_equal(paste(again$repo_id, again$family), "r1 Opus")
+  # With no record, the fold is as it was.
+  expect_equal(nrow(fold_models(prior, .ai_empty_models(), NULL)), 3L)
 })
 
 test_that("a read to the first commit that names no model clears the older tallies", {

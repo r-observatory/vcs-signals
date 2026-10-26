@@ -2146,6 +2146,13 @@ build_release_notes <- function(summary, changed_shards, tag) {
     message(sprintf("publish gate: %d model row(s) gone at the source and recorded in AI_MODEL_ROWS_GONE_AT_SOURCE: %s",
                     sum(excused), .gate_show(unique(paste(prev$repo_id[excused], prev$tool[excused], sep = "/")))))
   held <- held & !excused
+  # So is a row the parser once read from a commit's body, once checked and recorded: the merge drops it.
+  misread <- if (exists("AI_MODEL_ROWS_MISREAD")) AI_MODEL_ROWS_MISREAD
+  fixed <- held & .gate_key(prev, key) %in% .gate_key(misread, key)
+  if (any(fixed))
+    message(sprintf("publish gate: %d model row(s) read from a commit's body and recorded in AI_MODEL_ROWS_MISREAD: %s",
+                    sum(fixed), .gate_show(unique(paste(prev$repo_id[fixed], prev$tool[fixed], sep = "/")))))
+  held <- held & !fixed
   # A GitLab tally comes from GitLab's experimental message search, and refusing it would hold back the
   # GitHub data too, so a GitLab row that vanished is reported and let go.
   gitlab <- held & prev$repo_id %in% tryCatch(gitlab_repo_ids(nc), error = function(e) character(0))

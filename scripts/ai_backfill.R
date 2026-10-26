@@ -1432,7 +1432,8 @@ run_merge <- function(io, out_dir, parts_dir) {
 
   models <- fold_models(have("vcs_ai_models", .ai_empty_models()), from(deep, "vcs_ai_models", .ai_empty_models()),
                         from(cheap, "models", cbind(.ai_empty_models(), mode = character(), read_after = character())),
-                        rebuilt_repos = rebuilt, reads = reads_prior)
+                        rebuilt_repos = rebuilt, reads = reads_prior,
+                        misread = if (exists("AI_MODEL_ROWS_MISREAD")) AI_MODEL_ROWS_MISREAD)
   put("vcs_ai_models", models)
   message(sprintf("ai merge: %d model row(s) across %d repo(s)", nrow(models), length(unique(models$repo_id))))
 

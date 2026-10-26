@@ -646,6 +646,44 @@ test_that("the two rewrites found on 2026-10-07 publish", {
   expect_equal(suppressMessages(summary_regressions(prev, nxt)), character(0))
 })
 
+.with_rows_misread <- function(rows, env = parent.frame()) {
+  had <- exists("AI_MODEL_ROWS_MISREAD", envir = globalenv())
+  old <- if (had) get("AI_MODEL_ROWS_MISREAD", envir = globalenv())
+  withr::defer(if (had) assign("AI_MODEL_ROWS_MISREAD", old, envir = globalenv())
+               else if (exists("AI_MODEL_ROWS_MISREAD", envir = globalenv()))
+                 rm("AI_MODEL_ROWS_MISREAD", envir = globalenv()), envir = env)
+  assign("AI_MODEL_ROWS_MISREAD", rows, envir = globalenv())
+}
+
+test_that("a row an earlier parser misread is refused until it is recorded, then published", {
+  one <- function(fam, ver) {
+    m <- .mk_models("github.com/cornball-ai/corteza", 1L)
+    m$family <- fam; m$version <- ver
+    m
+  }
+  prev <- .mk_extra(tempfile(fileext = ".db"), models = rbind(one("Code", "2.1"), one("Opus", "4.5")))
+  nxt  <- .mk_extra(tempfile(fileext = ".db"), models = one("Opus", "4.5"))
+  .with_rows_misread(.gone_row("github.com/o/none", "Code", version = "2.1")[0, ])
+  expect_match(paste(suppressMessages(summary_regressions(prev, nxt)), collapse = " "),
+               "1 model row(s) are gone from 1 repository/tool pair(s)", fixed = TRUE)
+  .with_rows_misread(.gone_row("github.com/cornball-ai/corteza", "Code", version = "2.1"))
+  expect_message(r <- summary_regressions(prev, nxt), "AI_MODEL_ROWS_MISREAD")
+  expect_equal(r, character(0))
+})
+
+test_that("every misread row says which model, when it was checked and why", {
+  g <- AI_MODEL_ROWS_MISREAD
+  key <- c("repo_id", "tool", "provider", "family", "version", "context_window")
+  expect_true(all(c(key, "checked_on", "reason") %in% names(g)))
+  expect_true(nrow(g) >= 1)
+  expect_true(all(nzchar(g$repo_id) & nzchar(g$tool) & !is.na(g$family)))
+  expect_false(anyNA(as.Date(g$checked_on, format = "%Y-%m-%d")))
+  expect_true(all(nchar(g$reason) > 20))
+  expect_equal(anyDuplicated(g[, key]), 0L)
+  # A row is either misread or gone at the source, never both.
+  expect_false(any(do.call(paste, g[, key]) %in% do.call(paste, AI_MODEL_ROWS_GONE_AT_SOURCE[, key])))
+})
+
 test_that("model rows disappearing for whole repositories is still refused", {
   # Coverage, the other half. Every repository that carried model rows must
   # still carry them: the table has shipped empty before, and a seed step that
