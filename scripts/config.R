@@ -1035,7 +1035,7 @@ github.com/themains/virustotal,claude,,Opus,5,,2026-10-07,"No commit from July 2
 # is read again from its first commit.
 AI_MODEL_ROWS_MISREAD <- read.csv(text = trimws(r"(
 repo_id,tool,provider,family,version,context_window,checked_on,reason
-github.com/cornball-ai/corteza,claude,,Code,2.1,,2026-10-25,"Commit 3d3f9c8 (#62, 2026-05-08) names the coding tool's version 2.1 in its body, and its trailers credit Opus 4.6 with a 1M context window."
+github.com/cornball-ai/corteza,claude,,Code,2.1,1M,2026-11-04,"Commit 3d3f9c8 (#62, 2026-05-08) names the coding tool's version 2.1 in its body, and its trailers credit Opus 4.6 with a 1M context window, which the misread row carries too."
 github.com/xability/r-maidr,claude,,Code,2.1,,2026-10-25,"Commit 51faf06 (#302, 2026-09-11) names the coding tool's version 2.1.268 in its body, and its trailer credits Opus 5."
 )"), stringsAsFactors = FALSE, colClasses = "character", na.strings = "")
 
