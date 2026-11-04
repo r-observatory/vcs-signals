@@ -293,6 +293,17 @@ test_that("a row an earlier parser misread is dropped, and only that row", {
   expect_equal(nrow(fold_models(prior, .ai_empty_models(), NULL)), 3L)
 })
 
+test_that("each recorded misread row matches the row the repository's table holds", {
+  # The match takes the context window too, so a record without the window the row
+  # carries drops nothing.
+  stored <- data.frame(repo_id = c("github.com/cornball-ai/corteza", "github.com/xability/r-maidr"),
+    tool = "claude", provider = NA_character_, family = "Code", version = "2.1",
+    context_window = c("1M", NA_character_), commits = 1L, first_seen = c("2026-05-08", "2026-09-11"),
+    last_seen = c("2026-05-08", "2026-09-11"), window_complete = 1L, stringsAsFactors = FALSE)
+  got <- fold_models(stored, .ai_empty_models(), NULL, misread = AI_MODEL_ROWS_MISREAD)
+  expect_equal(nrow(got), 0L)
+})
+
 test_that("a read to the first commit that names no model clears the older tallies", {
   m <- function(repo, family) data.frame(repo_id = repo, tool = "claude", provider = NA_character_, family = family,
                                          version = "4.8", context_window = NA_character_, commits = 10L,
